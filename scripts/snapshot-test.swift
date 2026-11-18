@@ -83,5 +83,7 @@ let status = stream(
   environment: ["TEST_RUNNER_SNAPSHOT_TESTING_RECORD": records ? "all" : "missing"])
 if records {
   print("Each recorded snapshot shows as a failure. Look at the new images before committing.")
+} else if status != 0 {
+  print("A test with no snapshot yet records one and fails. Look at it, commit it, and run again.")
 }
 exit(status)
