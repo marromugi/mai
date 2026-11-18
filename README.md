@@ -4,7 +4,7 @@
 
 ## 開く
 
-Xcode プロジェクトは `project.yml` から生成する。生成物はコミットしない。
+Xcode プロジェクトは `project.yml` から生成する(XcodeGen 2.44 以上)。生成物はコミットしない。
 
 ```sh
 brew install xcodegen

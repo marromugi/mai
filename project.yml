@@ -1,5 +1,6 @@
 name: Mai
 options:
+  minimumXcodeGenVersion: 2.44.0
   bundleIdPrefix: com.marromugi
   deploymentTarget:
     iOS: "26.0"
@@ -16,8 +17,7 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: App
-        type: syncedFolder
+      - App
     dependencies:
       - package: Modules
         product: Features
