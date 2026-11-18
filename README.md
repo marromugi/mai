@@ -16,14 +16,14 @@ open Mai.xcodeproj
 
 ## スナップショットテスト
 
-見た目のテストは、この Mac の iPhone 17 Pro(iOS 27.2)のシミュレータで撮った画像と比べる。OS が違うと文字の描かれ方が変わるので、CI ではテストを組み立てるだけで走らせない。
+見た目のテストは、決まった 1 台のシミュレータで撮った画像と比べる(機種と iOS は `scripts/snapshot-test.swift` に書いてある)。OS が違うと文字の描かれ方が変わるので、CI ではテストを組み立てるだけで走らせない。
 
 ```sh
-./scripts/snapshot-test.sh
+swift scripts/snapshot-test.swift
 ```
 
-シミュレータ `mai-snapshots` が無ければ作る。見た目を変えたときは撮り直して、差分の画像を確かめてからコミットする。
+そのシミュレータが無ければ作る。見た目を変えたときは撮り直す。撮り直した回は、撮った分だけテストが失敗と表示される。差分の画像を確かめてからコミットする。
 
 ```sh
-SNAPSHOT_TESTING_RECORD=all ./scripts/snapshot-test.sh
+swift scripts/snapshot-test.swift --record
 ```

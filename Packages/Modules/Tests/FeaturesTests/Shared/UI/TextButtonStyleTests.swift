@@ -9,6 +9,10 @@ struct TextButtonStyleTests {
     assertLooks(textButton(ButtonLabel("EXPORT")))
   }
 
+  @Test func shortTitleKeepsMinimumWidth() {
+    assertLooks(textButton(ButtonLabel("OK")))
+  }
+
   @Test func leadingIcon() {
     assertLooks(textButton(ButtonLabel("BACK", leadingIcon: Image(systemName: "chevron.left"))))
   }
@@ -67,7 +71,7 @@ private func assertLooks(
   assertSnapshot(
     of: view.fixedSize().padding(16).background(Color(.systemBackground))
       .environment(\.colorScheme, colorScheme),
-    as: .image(precision: 0.99, perceptualPrecision: 0.98, layout: .sizeThatFits),
+    as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
     fileID: fileID,
     file: file,
     testName: testName,

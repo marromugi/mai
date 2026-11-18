@@ -13,7 +13,7 @@ jobs:
       - name: Lint
         run: >
           swift format lint --strict --recursive
-          App Packages/Modules/Package.swift Packages/Modules/Sources
+          App scripts Packages/Modules/Package.swift Packages/Modules/Sources
       - name: Install XcodeGen
         run: |
           curl -fsSL -o xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
