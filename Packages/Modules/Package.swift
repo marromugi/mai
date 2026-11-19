@@ -10,7 +10,17 @@ let package = Package(
   products: [
     .library(name: "Features", targets: ["Features"])
   ],
+  dependencies: [
+    .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", exact: "1.19.7")
+  ],
   targets: [
-    .target(name: "Features", swiftSettings: mainActor)
+    .target(name: "Features", swiftSettings: mainActor),
+    .testTarget(
+      name: "FeaturesTests",
+      dependencies: [
+        "Features",
+        .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
+      ],
+      swiftSettings: mainActor),
   ]
 )

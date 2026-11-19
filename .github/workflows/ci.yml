@@ -11,7 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Lint
-        run: swift format lint --strict --recursive App Packages
+        run: >
+          swift format lint --strict --recursive
+          App scripts Packages/Modules/Package.swift Packages/Modules/Sources
       - name: Install XcodeGen
         run: |
           curl -fsSL -o xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
@@ -24,6 +26,13 @@ jobs:
           xcodebuild build
           -project Mai.xcodeproj
           -scheme Mai
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Build the tests
+        working-directory: Packages/Modules
+        run: >
+          xcodebuild build-for-testing
+          -scheme Modules
           -destination 'generic/platform=iOS Simulator'
           CODE_SIGNING_ALLOWED=NO
       - name: Check the asset catalog is in the Resources phase
