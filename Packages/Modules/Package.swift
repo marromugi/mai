@@ -14,7 +14,7 @@ let package = Package(
     .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", exact: "1.19.7")
   ],
   targets: [
-    .target(name: "Features", swiftSettings: mainActor),
+    .target(name: "Features", resources: [.copy("Resources/Fonts")], swiftSettings: mainActor),
     .testTarget(
       name: "FeaturesTests",
       dependencies: [
