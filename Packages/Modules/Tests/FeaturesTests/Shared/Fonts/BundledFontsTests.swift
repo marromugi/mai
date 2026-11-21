@@ -5,7 +5,7 @@ import UIKit
 @testable import Features
 
 struct BundledFontsTests {
-  @Test(arguments: BundledFonts.postScriptNames)
+  @Test(arguments: ["SourceHanSansJP-Regular", "SourceHanSansJP-Bold"])
   func availableByPostScriptName(_ name: String) {
     BundledFonts.register()
     #expect(UIFont(name: name, size: 16) != nil)
@@ -25,7 +25,9 @@ struct BundledFontsTests {
       contentsOf: BundledFonts.folder.appending(path: "LICENSE.txt"), encoding: .utf8)
 
     #expect(license.contains("SIL OPEN FONT LICENSE Version 1.1"))
-    #expect(years(in: license) == years(in: fontCopyright))
+    let copyrightLine = String(license.prefix { $0 != "\n" })
+    #expect(copyrightLine.hasPrefix("Copyright "))
+    #expect(years(in: copyrightLine) == years(in: fontCopyright))
   }
 
   private func years(in text: String) -> String? {
