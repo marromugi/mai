@@ -152,7 +152,8 @@ struct WritingPage: View {
 }
 
 /// The bar at the top once the title scrolls off: 「閉じる」 on the margin and the title on one
-/// line, centred when it fits, over a fade the body passes under.
+/// line, stepped down the size series to fit and centred when it does, over a fade the body passes
+/// under.
 struct WritingHeader: View {
   let title: String
   let width: CGFloat
@@ -161,27 +162,18 @@ struct WritingHeader: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      let closeButton = Button(action: close) {
-        Text("閉じる").foregroundStyle(.secondary).fixedSize()
-      }
-      .buttonStyle(.text)
-      let titleText = Text(verbatim: title)
-        .textStyle(.title)
-        .lineLimit(1)
-        .accessibilityAddTraits(.isHeader)
       ViewThatFits(in: .horizontal) {
-        // Centred on the screen while the whole title fits between 「閉じる」 and its twin.
+        // The title's own size, then the series' next steps down to the caption's: the first at
+        // which the whole title fits, centred.
+        centred(at: .title)
+        centred(at: .meta)
+        centred(at: .caption)
+        // Otherwise, at the smallest step, the title takes the rest of the line, cut short at its
+        // end.
         HStack(spacing: scale.space(.s)) {
           closeButton
-          Spacer(minLength: 0)
-          titleText.fixedSize()
-          Spacer(minLength: 0)
-          closeButton.hidden()
-        }
-        // Otherwise the title takes the rest of the line, cut short at its end.
-        HStack(spacing: scale.space(.s)) {
-          closeButton
-          titleText.frame(maxWidth: .infinity, alignment: .leading)
+          titleText(at: .caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
       }
       .padding(.horizontal, scale.typeArea(width: width).margin)
@@ -193,6 +185,31 @@ struct WritingHeader: View {
       .frame(height: scale.space(.l))
       .allowsHitTesting(false)
     }
+  }
+
+  /// 「閉じる」, the title at `step`'s size whole, and 「閉じる」's hidden twin, which keeps the
+  /// title centred on the screen.
+  private func centred(at step: TextRole) -> some View {
+    HStack(spacing: scale.space(.s)) {
+      closeButton
+      titleText(at: step).fixedSize().frame(maxWidth: .infinity)
+      closeButton.hidden()
+    }
+  }
+
+  private var closeButton: some View {
+    Button(action: close) {
+      Text("閉じる").foregroundStyle(.secondary).fixedSize()
+    }
+    .buttonStyle(.text)
+  }
+
+  /// The title on one line in the title's bold, at `step`'s size.
+  private func titleText(at step: TextRole) -> some View {
+    Text(verbatim: title)
+      .font(Font(scale.font(.title).withSize(scale.size(step))))
+      .lineLimit(1)
+      .accessibilityAddTraits(.isHeader)
   }
 }
 
