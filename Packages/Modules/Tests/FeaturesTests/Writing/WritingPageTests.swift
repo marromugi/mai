@@ -45,7 +45,12 @@ struct WritingPageTests {
     assertHeader("夜の机に向かう", .dark)
   }
 
-  /// A title too long for the space between 「閉じる」 and its twin ends in an ellipsis.
+  /// 「閉じる」 and its twin grow with Dynamic Type and leave the title less room.
+  @Test func headerAtTheLargestSize() {
+    assertHeader("夜の机に向かう", .light, .accessibility5)
+  }
+
+  /// A title too long to centre takes the rest of the line and ends in an ellipsis.
   @Test func headerWithALongTitle() {
     assertHeader("ものすごく長すぎて入りきらない名前ですよものすごく長すぎて", .light)
   }
@@ -70,6 +75,7 @@ private func pageHeight(title: String, size: DynamicTypeSize) -> CGFloat {
 private func assertHeader(
   _ title: String,
   _ colorScheme: ColorScheme,
+  _ size: DynamicTypeSize = .large,
   fileID: StaticString = #fileID,
   file: StaticString = #filePath,
   testName: String = #function,
@@ -87,6 +93,7 @@ private func assertHeader(
     .frame(width: 402, height: 200, alignment: .top)
     .clipped()
     .background(Color(.systemBackground))
+    .dynamicTypeSize(size)
     .environment(\.colorScheme, colorScheme),
     as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
     fileID: fileID,

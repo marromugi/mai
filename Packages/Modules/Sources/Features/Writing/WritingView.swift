@@ -38,6 +38,9 @@ struct WritingScreen: View {
         if titleCutOff > 0 {
           WritingHeader(title: writing.title, width: proxy.size.width, close: { dismiss() })
             .opacity(titleCutOff)
+            // Taken in only once whole, so a faint bar neither closes the page nor holds a drag.
+            .allowsHitTesting(titleCutOff == 1)
+            .accessibilityHidden(titleCutOff < 1)
         }
       }
       .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -132,6 +135,7 @@ struct WritingPage: View {
           .textStyle(.heading)
           .onGeometryChange(for: CGFloat.self) {
             let frame = $0.frame(in: .scrollView)
+            guard frame.height > 0 else { return 0 }
             return min(max(-frame.minY / frame.height, 0), 1)
           } action: {
             titleCutOff($0)
@@ -147,8 +151,8 @@ struct WritingPage: View {
   }
 }
 
-/// The bar at the top once the title scrolls off: 「閉じる」 on the margin and the title centred on
-/// one line, over a fade the body passes under.
+/// The bar at the top once the title scrolls off: 「閉じる」 on the margin and the title on one
+/// line, centred when it fits, over a fade the body passes under.
 struct WritingHeader: View {
   let title: String
   let width: CGFloat
@@ -157,18 +161,28 @@ struct WritingHeader: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: scale.space(.s)) {
-        let closeButton = Button(action: close) {
-          Text("閉じる").foregroundStyle(.secondary)
+      let closeButton = Button(action: close) {
+        Text("閉じる").foregroundStyle(.secondary).fixedSize()
+      }
+      .buttonStyle(.text)
+      let titleText = Text(verbatim: title)
+        .textStyle(.title)
+        .lineLimit(1)
+        .accessibilityAddTraits(.isHeader)
+      ViewThatFits(in: .horizontal) {
+        // Centred on the screen while the whole title fits between 「閉じる」 and its twin.
+        HStack(spacing: scale.space(.s)) {
+          closeButton
+          Spacer(minLength: 0)
+          titleText.fixedSize()
+          Spacer(minLength: 0)
+          closeButton.hidden()
         }
-        .buttonStyle(.text)
-        closeButton
-        Text(verbatim: title)
-          .textStyle(.title)
-          .lineLimit(1)
-          .frame(maxWidth: .infinity)
-        // Its twin on the trailing side keeps the title centred on the screen.
-        closeButton.hidden()
+        // Otherwise the title takes the rest of the line, cut short at its end.
+        HStack(spacing: scale.space(.s)) {
+          closeButton
+          titleText.frame(maxWidth: .infinity, alignment: .leading)
+        }
       }
       .padding(.horizontal, scale.typeArea(width: width).margin)
       .background(Color(.systemBackground), ignoresSafeAreaEdges: .top)

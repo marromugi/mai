@@ -51,6 +51,7 @@ struct WritingModeTests {
       let end =
         scrollView.contentSize.height + scrollView.adjustedContentInset.bottom
         - scrollView.bounds.height
+      try #require(end > 0)
       scrollView.setContentOffset(CGPoint(x: 0, y: end), animated: false)
       page.settle()
     }
