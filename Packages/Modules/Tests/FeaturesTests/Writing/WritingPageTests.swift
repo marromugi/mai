@@ -50,9 +50,14 @@ struct WritingPageTests {
     assertHeader("夜の机に向かう", .light, .accessibility5)
   }
 
-  /// A title a step too long is set at the next size down, still centred.
+  /// A title a step too long is set at the meta's size, still centred.
   @Test func headerWithATitleOneStepDown() {
-    assertHeader("週末に読み返すための、とりとめのない", .light)
+    assertHeader("週末に読み返すための、とりとめのない覚え", .light)
+  }
+
+  /// A title two steps too long is set at the caption's size, still centred.
+  @Test func headerWithATitleTwoStepsDown() {
+    assertHeader("週末に読み返すための、とりとめのない覚え書きを", .light)
   }
 
   /// A title too long even at the caption's size ends in an ellipsis, still centred.

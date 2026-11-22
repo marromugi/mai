@@ -163,12 +163,10 @@ struct WritingHeader: View {
     VStack(spacing: 0) {
       ViewThatFits(in: .horizontal) {
         // The title's own size, then the series' next steps down to the caption's: the first at
-        // which the whole title fits, centred.
+        // which the whole title fits, or the last, cut short at its end.
         centred(at: .title)
         centred(at: .meta)
         centred(at: .caption)
-        // Otherwise the title at the caption's size, cut short at its end.
-        centred(at: .caption, whole: false)
       }
       // The chevron centred on the margin line, as the page's back mark is, unless that would push
       // it past the screen's edge.
@@ -186,12 +184,12 @@ struct WritingHeader: View {
     }
   }
 
-  /// The close button, the title at `step`'s size, whole or cut short, and the button's hidden
-  /// twin, which gives the trailing side the same space and keeps the title centred.
-  private func centred(at step: TextRole, whole: Bool = true) -> some View {
+  /// The close button, the title at `step`'s size, and the button's hidden twin, which gives the
+  /// trailing side the same space and keeps the title centred.
+  private func centred(at step: TextRole) -> some View {
     HStack(spacing: scale.space(.s)) {
       closeButton
-      titleText(at: step).fixedSize(horizontal: whole, vertical: false).frame(maxWidth: .infinity)
+      titleText(at: step).frame(maxWidth: .infinity)
       closeButton.hidden()
     }
   }
