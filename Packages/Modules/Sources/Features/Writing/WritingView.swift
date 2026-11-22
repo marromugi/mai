@@ -14,21 +14,35 @@ struct WritingView: View {
   }
 }
 
-/// The writing's page in or out of the typesetting mode. In the mode the page shrinks to a sheet
-/// on the desk and stops scrolling, the typesetting gestures over it step `setting`, and a tap
-/// leaves the mode.
+/// The writing's page in or out of the typesetting mode. As the title scrolls off the top, the
+/// header fades in to stand in for it. In the mode the page shrinks to a sheet on the desk and stops
+/// scrolling, the typesetting gestures over it step `setting`, and a tap leaves the mode.
 struct WritingScreen: View {
   let writing: Writing
   @Binding var setting: BodySetting
   @Binding var typesetting: Bool
+  @State private var titleCutOff: CGFloat = 0
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     GeometryReader { proxy in
       ScrollView {
-        WritingPage(writing: writing, width: proxy.size.width, back: { dismiss() })
+        WritingPage(
+          writing: writing, width: proxy.size.width, back: { dismiss() },
+          titleCutOff: { titleCutOff = $0 })
       }
       .scrollDisabled(typesetting)
+      .overlay(alignment: .top) {
+        // Faded by the scroll, not animated: an animation running as the mode starts moves the
+        // page.
+        if titleCutOff > 0 {
+          WritingHeader(title: writing.title, width: proxy.size.width, close: { dismiss() })
+            .opacity(titleCutOff)
+            // Taken in only once whole, so a faint bar neither closes the page nor holds a drag.
+            .allowsHitTesting(titleCutOff == 1)
+            .accessibilityHidden(titleCutOff < 1)
+        }
+      }
       .safeAreaInset(edge: .bottom, spacing: 0) {
         // Hidden, not removed: the inset keeps its height so the scroll offset isn't clamped.
         let button = AdjustTypesettingButton(width: proxy.size.width) {
@@ -91,11 +105,13 @@ private struct AdjustTypesettingButton: View {
 }
 
 /// The page laid out across a screen `width` wide: the back mark, then the title and body on the
-/// type area.
+/// type area. `titleCutOff` hears how much of the title has scrolled above the scroll view's top,
+/// from 0 to 1.
 struct WritingPage: View {
   let writing: Writing
   let width: CGFloat
   let back: () -> Void
+  let titleCutOff: (CGFloat) -> Void
   @EnvironmentTypeScale private var scale
 
   var body: some View {
@@ -117,6 +133,13 @@ struct WritingPage: View {
         // An untitled writing keeps its line: an ideographic space is one heading line box tall.
         Text(verbatim: writing.title.isEmpty ? "\u{3000}" : writing.title)
           .textStyle(.heading)
+          .onGeometryChange(for: CGFloat.self) {
+            let frame = $0.frame(in: .scrollView)
+            guard frame.height > 0 else { return 0 }
+            return min(max(-frame.minY / frame.height, 0), 1)
+          } action: {
+            titleCutOff($0)
+          }
           .padding(.bottom, scale.space(.m))
         Text(body: writing.body)
           .textStyle(.body)
@@ -125,6 +148,68 @@ struct WritingPage: View {
       .padding(.horizontal, area.margin)
       .padding(.bottom, scale.space(.xl))
     }
+  }
+}
+
+/// The bar at the top once the title scrolls off: a close chevron on the margin and the title
+/// centred on one line, stepped down the size series to fit, over a fade the body passes under.
+struct WritingHeader: View {
+  let title: String
+  let width: CGFloat
+  let close: () -> Void
+  @EnvironmentTypeScale private var scale
+
+  var body: some View {
+    VStack(spacing: 0) {
+      ViewThatFits(in: .horizontal) {
+        // The title's own size, then the series' next steps down to the caption's: the first at
+        // which the whole title fits, or the last, cut short at its end.
+        centred(at: .title)
+        centred(at: .meta)
+        centred(at: .caption)
+      }
+      // The chevron centred on the margin line, as the page's back mark is, unless that would push
+      // it past the screen's edge.
+      .padding(
+        .horizontal,
+        max(0, scale.typeArea(width: width).margin - TextButtonStyle.minimumSide / 2)
+      )
+      .background(Color(.systemBackground), ignoresSafeAreaEdges: .top)
+      LinearGradient(
+        colors: [Color(.systemBackground), Color(.systemBackground).opacity(0)],
+        startPoint: .top, endPoint: .bottom
+      )
+      .frame(height: scale.space(.l))
+      .allowsHitTesting(false)
+    }
+  }
+
+  /// The close button, the title at `step`'s size, and the button's hidden twin, which gives the
+  /// trailing side the same space and keeps the title centred.
+  private func centred(at step: TextRole) -> some View {
+    HStack(spacing: scale.space(.s)) {
+      closeButton
+      titleText(at: step).frame(maxWidth: .infinity)
+      closeButton.hidden()
+    }
+  }
+
+  private var closeButton: some View {
+    Button(action: close) {
+      Image(systemName: "chevron.left")
+        .fontWeight(.semibold)
+        .foregroundStyle(.secondary)
+    }
+    .buttonStyle(.text)
+    .accessibilityLabel("閉じる")
+  }
+
+  /// The title on one line in the title's bold, at `step`'s size.
+  private func titleText(at step: TextRole) -> some View {
+    Text(verbatim: title)
+      .font(Font(scale.font(.title).withSize(scale.size(step))))
+      .lineLimit(1)
+      .accessibilityAddTraits(.isHeader)
   }
 }
 

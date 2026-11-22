@@ -53,10 +53,16 @@ struct WritingListPage: View {
   }
 }
 
+/// A dotted rule, a step fainter in dark mode, where light on black stands out more.
 private struct DottedRule: View {
+  @Environment(\.colorScheme) private var colorScheme
+
   var body: some View {
     Line()
-      .stroke(.tertiary, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+      .stroke(
+        colorScheme == .dark ? HierarchicalShapeStyle.quaternary : .tertiary,
+        style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+      )
       .frame(height: 1)
   }
 
