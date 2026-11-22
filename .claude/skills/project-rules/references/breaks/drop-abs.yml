@@ -1,0 +1,5 @@
+id: drop-abs
+language: Swift
+rule:
+  pattern: abs($X)
+fix: $X

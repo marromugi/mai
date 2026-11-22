@@ -1,0 +1,5 @@
+id: is-finite-to-true
+language: Swift
+rule:
+  pattern: $X.isFinite
+fix: "true"

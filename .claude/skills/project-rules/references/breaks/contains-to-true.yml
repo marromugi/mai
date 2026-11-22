@@ -1,0 +1,5 @@
+id: contains-to-true
+language: Swift
+rule:
+  pattern: $R.contains($V)
+fix: "true"

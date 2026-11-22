@@ -1,0 +1,6 @@
+id: drop-negation
+language: Swift
+rule:
+  pattern: -$X
+  kind: prefix_expression
+fix: $X

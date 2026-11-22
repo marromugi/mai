@@ -1,0 +1,5 @@
+id: swap-if-branches
+language: Swift
+rule:
+  pattern: "if $C { $$$A } else { $$$B }"
+fix: "if $C { $$$B } else { $$$A }"

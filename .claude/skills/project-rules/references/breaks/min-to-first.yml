@@ -1,0 +1,5 @@
+id: min-to-first
+language: Swift
+rule:
+  pattern: min($A, $B)
+fix: $A

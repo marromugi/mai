@@ -1,0 +1,5 @@
+id: toward-zero-to-down
+language: Swift
+rule:
+  pattern: $X.rounded(.towardZero)
+fix: $X.rounded(.down)

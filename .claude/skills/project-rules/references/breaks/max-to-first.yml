@@ -1,0 +1,5 @@
+id: max-to-first
+language: Swift
+rule:
+  pattern: max($A, $B)
+fix: $A

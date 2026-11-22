@@ -1,0 +1,5 @@
+id: scale-to-factor
+language: Swift
+rule:
+  pattern: $A * scale
+fix: $A * factor

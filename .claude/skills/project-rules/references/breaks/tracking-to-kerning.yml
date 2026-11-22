@@ -1,0 +1,5 @@
+id: tracking-to-kerning
+language: Swift
+rule:
+  pattern: $X.tracking($AMOUNT)
+fix: $X.kerning($AMOUNT)

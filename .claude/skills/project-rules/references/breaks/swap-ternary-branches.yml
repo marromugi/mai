@@ -1,0 +1,5 @@
+id: swap-ternary-branches
+language: Swift
+rule:
+  pattern: "$C ? $A : $B"
+fix: "$C ? $B : $A"

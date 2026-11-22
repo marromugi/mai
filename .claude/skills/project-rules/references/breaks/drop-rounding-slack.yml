@@ -1,0 +1,5 @@
+id: drop-rounding-slack
+language: Swift
+rule:
+  pattern: $X + 1e-9
+fix: $X

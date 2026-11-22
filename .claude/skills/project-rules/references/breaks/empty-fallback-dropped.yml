@@ -1,0 +1,5 @@
+id: empty-fallback-dropped
+language: Swift
+rule:
+  pattern: "$S.isEmpty ? $A : $S"
+fix: $S

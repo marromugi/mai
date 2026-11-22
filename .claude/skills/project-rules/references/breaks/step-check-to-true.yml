@@ -1,0 +1,7 @@
+id: step-check-to-true
+language: Swift
+# Swift's parser reads `a % Self.b` as a member access, so `$V % $STEP == 0` matches nothing.
+rule:
+  pattern: $A == 0
+  regex: "%"
+fix: "true"

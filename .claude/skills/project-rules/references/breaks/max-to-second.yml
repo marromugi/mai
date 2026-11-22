@@ -1,0 +1,5 @@
+id: max-to-second
+language: Swift
+rule:
+  pattern: max($A, $B)
+fix: $B

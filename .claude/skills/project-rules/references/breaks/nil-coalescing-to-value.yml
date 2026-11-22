@@ -1,0 +1,5 @@
+id: nil-coalescing-to-value
+language: Swift
+rule:
+  pattern: $A ?? $B
+fix: $B

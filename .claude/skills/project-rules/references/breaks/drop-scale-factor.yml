@@ -1,0 +1,5 @@
+id: drop-scale-factor
+language: Swift
+rule:
+  pattern: $A * scale
+fix: $A

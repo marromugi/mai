@@ -1,0 +1,5 @@
+id: rounded-up-to-down
+language: Swift
+rule:
+  pattern: $X.rounded(.up)
+fix: $X.rounded(.down)

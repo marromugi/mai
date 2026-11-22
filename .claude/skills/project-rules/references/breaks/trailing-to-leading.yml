@@ -1,0 +1,7 @@
+id: trailing-to-leading
+language: Swift
+rule:
+  pattern:
+    context: "f(alignment: .trailing)"
+    selector: value_argument
+fix: "alignment: .leading"
