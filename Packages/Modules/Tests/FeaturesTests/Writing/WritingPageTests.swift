@@ -37,6 +37,19 @@ struct WritingPageTests {
     assertPage(.large, .dark, typesetting: true)
   }
 
+  @Test func header() {
+    assertHeader("夜の机に向かう", .light)
+  }
+
+  @Test func headerInDarkMode() {
+    assertHeader("夜の机に向かう", .dark)
+  }
+
+  /// A title too long for the space between 「閉じる」 and its twin ends in an ellipsis.
+  @Test func headerWithALongTitle() {
+    assertHeader("ものすごく長すぎて入りきらない名前ですよものすごく長すぎて", .light)
+  }
+
   /// The shrunk page set from the writing's body setting.
   @Test func typesettingModeWithABodySetting() throws {
     let setting = try #require(BodySetting(base: 20, lineHeight: 40, tracking: 50))
@@ -45,10 +58,42 @@ struct WritingPageTests {
 }
 
 private func pageHeight(title: String, size: DynamicTypeSize) -> CGFloat {
-  let page = WritingPage(writing: Writing(title: title, body: "本文"), width: 402, back: {})
-    .dynamicTypeSize(size)
+  let page = WritingPage(
+    writing: Writing(title: title, body: "本文"), width: 402, back: {}, titleCutOff: { _ in }
+  )
+  .dynamicTypeSize(size)
   return UIHostingController(rootView: page)
     .sizeThatFits(in: CGSize(width: 402, height: 8000)).height
+}
+
+/// The header over the body it fades, at the top of a 402-wide screen.
+private func assertHeader(
+  _ title: String,
+  _ colorScheme: ColorScheme,
+  fileID: StaticString = #fileID,
+  file: StaticString = #filePath,
+  testName: String = #function,
+  line: UInt = #line,
+  column: UInt = #column
+) {
+  let margin = TypeScale.standard.typeArea(width: 402).margin
+  assertSnapshot(
+    of: ZStack(alignment: .top) {
+      Text(body: Writing.sampleBody)
+        .textStyle(.body)
+        .padding(.horizontal, margin)
+      WritingHeader(title: title, width: 402, close: {})
+    }
+    .frame(width: 402, height: 200, alignment: .top)
+    .clipped()
+    .background(Color(.systemBackground))
+    .environment(\.colorScheme, colorScheme),
+    as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
+    fileID: fileID,
+    file: file,
+    testName: testName,
+    line: line,
+    column: column)
 }
 
 /// The page with its button on a 402 × 874 screen, as the mock shows it, or shrunk to a sheet in
