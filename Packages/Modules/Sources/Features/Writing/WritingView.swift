@@ -151,9 +151,8 @@ struct WritingPage: View {
   }
 }
 
-/// The bar at the top once the title scrolls off: 「閉じる」 on the margin and the title on one
-/// line, stepped down the size series to fit and centred when it does, over a fade the body passes
-/// under.
+/// The bar at the top once the title scrolls off: a close chevron on the margin and the title
+/// centred on one line, stepped down the size series to fit, over a fade the body passes under.
 struct WritingHeader: View {
   let title: String
   let width: CGFloat
@@ -168,15 +167,15 @@ struct WritingHeader: View {
         centred(at: .title)
         centred(at: .meta)
         centred(at: .caption)
-        // Otherwise, at the smallest step, the title takes the rest of the line, cut short at its
-        // end.
-        HStack(spacing: scale.space(.s)) {
-          closeButton
-          titleText(at: .caption)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        // Otherwise the title at the caption's size, cut short at its end.
+        centred(at: .caption, whole: false)
       }
-      .padding(.horizontal, scale.typeArea(width: width).margin)
+      // The chevron centred on the margin line, as the page's back mark is, unless that would push
+      // it past the screen's edge.
+      .padding(
+        .horizontal,
+        max(0, scale.typeArea(width: width).margin - TextButtonStyle.minimumSide / 2)
+      )
       .background(Color(.systemBackground), ignoresSafeAreaEdges: .top)
       LinearGradient(
         colors: [Color(.systemBackground), Color(.systemBackground).opacity(0)],
@@ -187,21 +186,24 @@ struct WritingHeader: View {
     }
   }
 
-  /// 「閉じる」, the title at `step`'s size whole, and 「閉じる」's hidden twin, which keeps the
-  /// title centred on the screen.
-  private func centred(at step: TextRole) -> some View {
+  /// The close button, the title at `step`'s size, whole or cut short, and the button's hidden
+  /// twin, which gives the trailing side the same space and keeps the title centred.
+  private func centred(at step: TextRole, whole: Bool = true) -> some View {
     HStack(spacing: scale.space(.s)) {
       closeButton
-      titleText(at: step).fixedSize().frame(maxWidth: .infinity)
+      titleText(at: step).fixedSize(horizontal: whole, vertical: false).frame(maxWidth: .infinity)
       closeButton.hidden()
     }
   }
 
   private var closeButton: some View {
     Button(action: close) {
-      Text("閉じる").foregroundStyle(.secondary).fixedSize()
+      Image(systemName: "chevron.left")
+        .fontWeight(.semibold)
+        .foregroundStyle(.secondary)
     }
     .buttonStyle(.text)
+    .accessibilityLabel("閉じる")
   }
 
   /// The title on one line in the title's bold, at `step`'s size.

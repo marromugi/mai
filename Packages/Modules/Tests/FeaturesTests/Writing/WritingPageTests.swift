@@ -45,7 +45,7 @@ struct WritingPageTests {
     assertHeader("夜の机に向かう", .dark)
   }
 
-  /// 「閉じる」 and its twin grow with Dynamic Type and leave the title less room.
+  /// The chevron and its twin grow with Dynamic Type and leave the title less room.
   @Test func headerAtTheLargestSize() {
     assertHeader("夜の机に向かう", .light, .accessibility5)
   }
@@ -55,8 +55,7 @@ struct WritingPageTests {
     assertHeader("週末に読み返すための、とりとめのない", .light)
   }
 
-  /// A title too long even at the caption's size takes the rest of the line and ends in an
-  /// ellipsis.
+  /// A title too long even at the caption's size ends in an ellipsis, still centred.
   @Test func headerWithALongTitle() {
     assertHeader("ものすごく長すぎて入りきらない名前ですよものすごく長すぎて", .light)
   }
