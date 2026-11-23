@@ -3,6 +3,7 @@ import SwiftUI
 public struct RootView: View {
   @State private var path: [WritingRow] = []
   @State private var settings = WritingBodySettings()
+  @State private var photos = WritingPhotos()
   @State private var opened = Date.now
 
   public init() {}
@@ -18,7 +19,9 @@ public struct RootView: View {
       .navigationDestination(for: WritingRow.self) { row in
         WritingView(
           writing: .sample(titled: row.title),
-          setting: $settings[row.id])
+          setting: $settings[row.id],
+          camera: .device,
+          photoTaken: { photos[row.id].append($0) })
       }
     }
   }
