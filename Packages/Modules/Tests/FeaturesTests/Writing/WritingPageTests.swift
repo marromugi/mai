@@ -45,7 +45,8 @@ struct WritingPageTests {
     assertHeader("夜の机に向かう", .dark)
   }
 
-  /// The chevron and its twin grow with Dynamic Type and leave the title less room.
+  /// The chevron and its twin grow with Dynamic Type and leave the title less room; the title
+  /// stays at its size at the standard scale.
   @Test func headerAtTheLargestSize() {
     assertHeader("夜の机に向かう", .light, .accessibility5)
   }
