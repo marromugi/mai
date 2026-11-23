@@ -246,6 +246,14 @@ NeverWrapForUnsignedKey ==
 NoCopyForRevokedKey ==
     \A c \in copies : c.key \notin revoked
 
+\* The mode is on only before its expiry.
+ModeEndsOnTime ==
+    mode.on => now < mode.until
+
+\* A device's clock never runs ahead of the server's.
+ClockNeverAhead ==
+    \A d \in Devices : clock[d] <= now
+
 \* An agent's copy is of the writing's current version only.
 CopyIsOfCurrentVersion ==
     \A c \in copies : c.version = version[c.writing]
