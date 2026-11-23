@@ -52,9 +52,19 @@ type Statement = { sql: string; args?: Record<string, InValue> };
 
 const day = 24 * 60 * 60 * 1000;
 
-/** Uses up a challenge, inserting it only when no request used it before; see `#claiming`. */
+/**
+ * Uses up a challenge, inserting it only when no request used it before and it hasn't expired by
+ * the time of the write; see `#claiming`.
+ */
 const claimStatement = `INSERT INTO used_challenges (value, expires, claim)
-  VALUES (:challenge, :expires, :claim) ON CONFLICT (value) DO NOTHING`;
+  SELECT :challenge, :expires, :claim WHERE :expires > :now
+  ON CONFLICT (value) DO NOTHING`;
+
+/**
+ * A used challenge is swept this long after it expires, so a request that claims one just before
+ * it expires still finds it there, however late its batch reaches the database.
+ */
+export const usedChallengeMargin = 60 * 60 * 1000;
 const claimed = `EXISTS (SELECT 1 FROM used_challenges WHERE value = :challenge AND claim = :claim)`;
 
 export class Store {
@@ -186,6 +196,7 @@ export class Store {
     now: number,
   ): Promise<Made> {
     const results = await this.#claiming(
+      now,
       challenge,
       [
         `INSERT INTO accounts (id, apple_sub, apple_refresh_token, tier, created)
@@ -219,6 +230,7 @@ export class Store {
     now: number,
   ): Promise<SignedIn> {
     const results = await this.#claiming(
+      now,
       challenge,
       [
         `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
@@ -281,7 +293,10 @@ export class Store {
           args: { expired: now - sessionLifetime },
         },
         { sql: "DELETE FROM usage WHERE day < :today", args: { today: Math.floor(now / day) } },
-        { sql: "DELETE FROM used_challenges WHERE expires <= :now", args: { now } },
+        {
+          sql: "DELETE FROM used_challenges WHERE expires <= :swept",
+          args: { swept: now - usedChallengeMargin },
+        },
       ],
       "write",
     );
@@ -289,16 +304,19 @@ export class Store {
 
   /**
    * Uses up `challenge` and runs `statements` in one batch. The statements hold `claimed` in
-   * their WHERE, so they do nothing when another request used the challenge first; then this
+   * their WHERE, so they do nothing when another request used the challenge first, or it expired
+   * by `now`; then this
    * answers undefined, and otherwise the statements' results.
    */
   async #claiming(
+    now: number,
     challenge: Challenge,
     statements: string[],
     values: Record<string, InValue>,
   ): Promise<ResultSet[] | undefined> {
     const all = {
       ...values,
+      now,
       challenge: challenge.value,
       expires: challenge.expires,
       claim: crypto.randomUUID(),

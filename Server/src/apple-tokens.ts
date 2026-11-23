@@ -43,24 +43,31 @@ export class AppleTokens {
       code,
       grant_type: "authorization_code",
     });
-    let response: Response;
+    let response: Response | undefined;
     let body: unknown;
     try {
       response = await this.post(appleTokenUrl, { method: "POST", body: form });
       body = await response.json();
     } catch (error) {
       if (error instanceof TypeError || error instanceof SyntaxError) {
-        return { ok: false, failure: "unavailable" };
+        body = undefined;
+      } else {
+        throw error;
       }
-      throw error;
+    }
+    if (response === undefined) {
+      return { ok: false, failure: "unavailable" };
     }
     const answer = isJson(body) ? body : {};
-    if (response.status === 400 && answer["error"] === "invalid_grant") {
+    const clientError = response.status >= 400 && response.status < 500;
+    if (clientError && answer["error"] === "invalid_grant") {
       return { ok: false, failure: "refused" };
     }
-    if (response.status === 400) {
+    if (clientError) {
       // Every other error Apple lists is about the Worker's own request or its APPLE_ secrets.
-      throw new Error(`Apple's token endpoint refused the Worker: ${String(answer["error"])}`);
+      throw new Error(
+        `Apple's token endpoint answered ${response.status} to the Worker: ${String(answer["error"])}`,
+      );
     }
     const refreshToken = text(answer["refresh_token"]);
     const idToken = readCompactJws(text(answer["id_token"]) ?? "");

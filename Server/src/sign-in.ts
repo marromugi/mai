@@ -68,7 +68,7 @@ export async function makeAccount(
     },
     user.challenge,
     caller,
-    now,
+    Date.now(),
   );
   if (made === "made") {
     return Response.json({ token }, { status: 201 });
@@ -89,7 +89,7 @@ export async function startSession(
     return user.response;
   }
   const { token, caller } = await newSessionToken();
-  const signedIn = await signIn.store.signIn(user.sub, user.challenge, caller, now);
+  const signedIn = await signIn.store.signIn(user.sub, user.challenge, caller, Date.now());
   if (!signedIn.signedIn) {
     return signedIn.reason === "challenge-used"
       ? problem(401, challengeUsed)
@@ -98,7 +98,7 @@ export async function startSession(
   return Response.json({ account: signedIn.account, token });
 }
 
-const challengeUsed = "the challenge was used already; ask for another";
+const challengeUsed = "the challenge was used already, or expired; ask for another";
 
 const signInFailures: Record<SignInFailure, { status: number; reason: string }> = {
   malformed: { status: 401, reason: "the ID token isn't a JWS" },

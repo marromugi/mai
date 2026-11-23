@@ -30,7 +30,7 @@
 | `POST /account`    | `{"account", "challenge", "identityToken", "authorizationCode"}`。`account` はアプリが作った UUID で、購入の `appAccountToken` と同じもの。201 と `{"token"}`(セッションのトークン)。その Apple の利用者かその ID のアカウントがもうあれば 409 で、何も作らない(サインインは `POST /sessions`) |
 | `POST /sessions`   | `{"challenge", "identityToken"}`。200 と `{"account", "token"}`。その Apple の利用者のアカウントがなければ 404                                                                                                                                                                                 |
 
-ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・`aud`(`APPLE_CLIENT_ID`)・`exp` と、nonce がチャレンジの SHA-256 であることを確かめる。チャレンジは `CHALLENGE_KEY` の HMAC で、サーバーは出すときには何も書かず、使ったものを期限まで `used_challenges` に置く。使ったもの、このサーバーが出していないもの、期限の切れたもの、ID トークンが別のチャレンジに作られたものは 401。チャレンジは通ればその場で使ったことになり、409 や 404 で終わっても使い直せない。
+ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・`aud`(`APPLE_CLIENT_ID`)・`exp` と、nonce がチャレンジの SHA-256 であることを確かめる。チャレンジは `CHALLENGE_KEY` の HMAC で、サーバーは出すときには何も書かず、使ったものを期限の 1 時間あとまで `used_challenges` に置く。使ったもの、このサーバーが出していないもの、期限の切れたもの(Apple を待つ間に切れたものも)、ID トークンが別のチャレンジに作られたものは 401。チャレンジは通ればその場で使ったことになり、409 や 404 で終わっても使い直せない。
 
 `POST /account` は認可コードを Apple の `/auth/token` で refresh トークンに替え(`src/apple-tokens.ts`)、`REFRESH_TOKEN_KEY` の AES-256-GCM でアカウント ID を付けて封じて `accounts.apple_refresh_token` に置く(`src/refresh-tokens.ts`)。封じる前の値はどこにも置かない。Apple がコードを断るか、コードが別の利用者のものなら 401、Apple が答えなければ 502。購入を確かめてプランを決めるのは #22 の S4 で、それまではどのアカウントも `basic` で作る。
 
@@ -61,7 +61,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 ### 期限の掃除
 
-Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` と、期限の切れた `used_challenges` を消す(`Store.sweep`)。#26 の写しと読み取りモードの期限もここに足す。
+Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` と、期限から 1 時間たった `used_challenges` を消す(`Store.sweep`)。#26 の写しと読み取りモードの期限もここに足す。
 
 ## Apple の署名
 

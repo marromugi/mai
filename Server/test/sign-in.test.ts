@@ -6,9 +6,11 @@ import { appleIssuer, appleKeysUrl } from "../src/apple-sign-in";
 import { appleTokenUrl } from "../src/apple-tokens";
 import { Challenges, challengeLifetime } from "../src/challenges";
 import { serve, signInOf } from "../src/index";
+import { newSessionToken } from "../src/sessions";
 import { readCompactJws } from "../src/jws";
 import { RefreshTokens } from "../src/refresh-tokens";
 import type { SignIn } from "../src/sign-in";
+import { usedChallengeMargin } from "../src/store";
 import { store } from "./accounts";
 import { jwks, makeSignInKey, signIdentityToken, type SignInKey } from "./apple-fakes";
 
@@ -47,10 +49,10 @@ type Grant = { sub: string; refreshToken: string };
 
 /**
  * Apple's JWKS and token endpoints, answering from the test. `codes` are the authorization codes
- * Apple would take, each once; `down` makes the token endpoint fail; `key` is the Worker's
- * `APPLE_SIGN_IN_KEY`, the .p8 as Apple gives it when left out.
+ * Apple would take, each once; `answer`, when given, is what the token endpoint answers instead;
+ * `key` is the Worker's `APPLE_SIGN_IN_KEY`, the .p8 as Apple gives it when left out.
  */
-function fakeApple(options: { down?: boolean; key?: string } = {}) {
+function fakeApple(options: { answer?: () => Response; key?: string } = {}) {
   const codes = new Map<string, Grant>();
   const asked: { url: string; form?: URLSearchParams }[] = [];
   const send = async (url: string, init?: RequestInit): Promise<Response> => {
@@ -63,8 +65,8 @@ function fakeApple(options: { down?: boolean; key?: string } = {}) {
     }
     const form = init.body;
     asked.push({ url, form });
-    if (options.down === true) {
-      return new Response("<html>busy</html>", { status: 503 });
+    if (options.answer !== undefined) {
+      return options.answer();
     }
     if (!(await clientSecretHolds(form.get("client_secret") ?? ""))) {
       return Response.json({ error: "invalid_client" }, { status: 400 });
@@ -297,11 +299,34 @@ describe("making an account", () => {
     expect((await makeAccount(apple)).answer.status).toBe(201);
   });
 
-  it("answers 502 when Apple's token endpoint fails, and makes nothing", async () => {
-    const apple = fakeApple({ down: true });
-    const { account, answer } = await makeAccount(apple);
-    expect(answer.status).toBe(502);
-    expect(await accountRow(account)).toBeUndefined();
+  it.each([
+    ["a 503 page", () => new Response("<html>busy</html>", { status: 503 })],
+    ["a 200 that isn't JSON", () => new Response("<html>ok</html>")],
+    ["a 200 with no ID token", () => Response.json({ refresh_token: "refresh" })],
+  ])("answers 502 when Apple's token endpoint gives %s, and makes nothing", async (_, answer) => {
+    const apple = fakeApple({ answer });
+    const made = await makeAccount(apple);
+    expect(made.answer.status).toBe(502);
+    expect(await accountRow(made.account)).toBeUndefined();
+  });
+
+  it.each([
+    ["401 invalid_grant", () => Response.json({ error: "invalid_grant" }, { status: 401 })],
+  ])("takes %s as Apple refusing the code", async (_, answer) => {
+    const made = await makeAccount(fakeApple({ answer }));
+    expect(made.answer.status).toBe(401);
+  });
+
+  it.each([
+    ["400 invalid_client", () => Response.json({ error: "invalid_client" }, { status: 400 })],
+    ["401 invalid_client", () => Response.json({ error: "invalid_client" }, { status: 401 })],
+    [
+      "400 unauthorized_client",
+      () => Response.json({ error: "unauthorized_client" }, { status: 400 }),
+    ],
+    ["a 400 page that isn't JSON", () => new Response("<html>bad</html>", { status: 400 })],
+  ])("stops on %s from Apple, the Worker's own fault", async (_, answer) => {
+    await expect(makeAccount(fakeApple({ answer }))).rejects.toThrow(/token endpoint answered 4/);
   });
 
   it.each([
@@ -396,7 +421,24 @@ describe("a challenge", () => {
     expect(answer.status).toBe(401);
   });
 
-  it("is kept as used until it expires, and then swept", async () => {
+  it("is refused when only its MAC's spare bits differ", async () => {
+    const apple = fakeApple();
+    const { sub } = await makeAccount(apple);
+    const value = await challenge(apple.signIn);
+    const last = value.at(-1) ?? "";
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const index = alphabet.indexOf(last);
+    // The last character holds 4 bits of the MAC and 2 spare ones.
+    const twin = `${value.slice(0, -1)}${alphabet[index ^ 1] ?? ""}`;
+    expect(twin).not.toBe(value);
+    const answer = await call(apple.signIn, "/sessions", {
+      challenge: twin,
+      identityToken: await identityToken(sub, twin),
+    });
+    expect(answer.status).toBe(401);
+  });
+
+  it("is kept as used for an hour past its expiry, and then swept", async () => {
     const apple = fakeApple();
     const { sub } = await makeAccount(apple);
     const fresh = await challenge(apple.signIn);
@@ -411,12 +453,52 @@ describe("a challenge", () => {
           args: [fresh],
         })
       ).rows[0]?.["n"];
-    const expires = Number(fresh.split(".")[0]);
+    const swept = Number(fresh.split(".")[0]) + usedChallengeMargin;
 
-    await store.sweep(expires - 1);
+    await store.sweep(swept - 1);
     expect(await kept()).toBe(1);
-    await store.sweep(expires);
+    await store.sweep(swept);
     expect(await kept()).toBe(0);
+  });
+
+  it("checked in time but used after a sweep past its expiry is still refused", async () => {
+    const apple = fakeApple();
+    const { sub } = await makeAccount(apple);
+    const signIn = await apple.signIn;
+    const issued = Date.now();
+    const checked = await signIn.challenges.check(await signIn.challenges.issue(issued), issued);
+    if (checked === undefined) {
+      throw new Error("a challenge just given out passes its check");
+    }
+    const first = await store.signIn(sub, checked, (await newSessionToken()).caller, issued);
+    expect(first.signedIn).toBe(true);
+
+    await store.sweep(checked.expires);
+    const late = await store.signIn(
+      sub,
+      checked,
+      (await newSessionToken()).caller,
+      checked.expires,
+    );
+    expect(late).toEqual({ signedIn: false, reason: "challenge-used" });
+  });
+
+  it("checked in time but first used after it expired is refused", async () => {
+    const apple = fakeApple();
+    const { sub } = await makeAccount(apple);
+    const signIn = await apple.signIn;
+    const issued = Date.now();
+    const checked = await signIn.challenges.check(await signIn.challenges.issue(issued), issued);
+    if (checked === undefined) {
+      throw new Error("a challenge just given out passes its check");
+    }
+    const late = await store.signIn(
+      sub,
+      checked,
+      (await newSessionToken()).caller,
+      checked.expires,
+    );
+    expect(late).toEqual({ signedIn: false, reason: "challenge-used" });
   });
 });
 

@@ -36,7 +36,14 @@ export class Challenges {
     const match = pattern.exec(value);
     const expires = Number(match?.[1]);
     const mac = base64urlBytes(match?.[3] ?? "");
-    if (match === null || mac === undefined || !Number.isSafeInteger(expires) || expires <= now) {
+    if (
+      match === null ||
+      mac === undefined ||
+      // 43 base64url characters carry 2 bits more than the 32 bytes; only the one spelling counts.
+      base64url(mac) !== match[3] ||
+      !Number.isSafeInteger(expires) ||
+      expires <= now
+    ) {
       return undefined;
     }
     const signed = value.slice(0, value.lastIndexOf("."));
