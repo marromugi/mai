@@ -17,6 +17,11 @@ extension UIImage {
     scene(CGSize(width: 400, height: 300), sky: .systemOrange)
   }
 
+  /// A new photo 1 wide by 4 tall, taller than any screen's shape.
+  static var tall: UIImage {
+    scene(CGSize(width: 100, height: 400), sky: .systemPink)
+  }
+
   private static func scene(_ size: CGSize, sky: UIColor) -> UIImage {
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1

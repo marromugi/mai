@@ -33,6 +33,21 @@ struct PhotoViewerTests {
       of: page.image(), as: .image(precision: 1, perceptualPrecision: 0.995))
   }
 
+  /// A swipe stops on a page, not part way between two.
+  @Test func itPages() throws {
+    let photos: [UIImage] = [.portrait, .dusk]
+    let page = HostedPage(viewer(photos, shown: photos[1]))
+    #expect(try #require(page.scrollViews.first).isPagingEnabled)
+  }
+
+  /// A photo taller than the screen's shape fits the screen's height.
+  @Test func aTallPhotoFillsTheHeight() {
+    let photo = UIImage.tall
+    let page = HostedPage(viewer([photo], shown: photo))
+    assertSnapshot(
+      of: page.image(), as: .image(precision: 1, perceptualPrecision: 0.995))
+  }
+
   @Test func voiceOverReadsWhichPhoto() {
     #expect(PhotoViewer.label(index: 0, count: 1) == "写真")
     #expect(PhotoViewer.label(index: 1, count: 3) == "写真 2/3")

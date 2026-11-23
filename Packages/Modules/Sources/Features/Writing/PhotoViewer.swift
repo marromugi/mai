@@ -15,7 +15,7 @@ struct PhotoViewer: View {
           Image(uiImage: photo)
             .resizable()
             .scaledToFit()
-            .containerRelativeFrame([.horizontal, .vertical])
+            .containerRelativeFrame(.horizontal)
             .accessibilityLabel(Self.label(index: index, count: photos.count))
         }
       }
