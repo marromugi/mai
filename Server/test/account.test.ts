@@ -87,16 +87,41 @@ describe("GET /account", () => {
       ).status,
     ).toBe(200);
     expect((await call("/writings", token)).status).toBe(200);
+    expect((await call("/writings", token)).status).toBe(200);
     expect(await readAccount(token)).toMatchObject({
       usage: {
         writingsBytes: { used: 128 },
         writings: { used: 1 },
-        requests: { used: 2 },
-        lists: { used: 1 },
+        requests: { used: 3 },
+        lists: { used: 2 },
         saves: { used: 1 },
       },
     });
-    expect(await readAccount(token)).toMatchObject({ usage: { requests: { used: 3 } } });
+    expect(await readAccount(token)).toMatchObject({
+      usage: { requests: { used: 4 }, lists: { used: 2 }, saves: { used: 1 } },
+    });
+  });
+
+  it("doesn't answer another day's counts", async () => {
+    const { account, token } = await newAccount();
+    await database.execute({
+      sql: "INSERT INTO usage (account_id, day, requests, lists, saves) VALUES (?, ?, 9, 9, 9)",
+      args: [account, Math.floor(Date.now() / day) - 1],
+    });
+    expect(await readAccount(token)).toMatchObject({
+      usage: { requests: { used: 0 }, lists: { used: 0 }, saves: { used: 0 } },
+    });
+  });
+
+  it("is read once the day's lists and saves are used up", async () => {
+    const { account, token } = await newAccount("test-daily");
+    await database.execute({
+      sql: "INSERT INTO usage (account_id, day, requests, lists, saves) VALUES (?, ?, 2, 2, 2)",
+      args: [account, Math.floor(Date.now() / day)],
+    });
+    expect(await readAccount(token)).toMatchObject({
+      usage: { lists: { used: 2, limit: 2 }, saves: { used: 2, limit: 2 } },
+    });
   });
 
   it("is read by a lapsed account, which it says has lapsed", async () => {
