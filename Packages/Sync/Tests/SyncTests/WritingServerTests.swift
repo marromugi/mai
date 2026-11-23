@@ -141,10 +141,107 @@ struct WritingServerTests {
     await #expect {
       try await device.synchronizer.sync()
     } throws: { error in
+      guard let error = error as? SyncFailures,
+        case .unexpectedAnswer = error.failures[asked] as? ServerError
+      else { return false }
+      return error.failures.count == 1 && error.report.received == [given.id]
+    }
+    #expect(try device.writings.all().map(\.id) == [given.id])
+  }
+
+  @Test func aWritingThatFailsAloneLeavesTheOthersToSync() async throws {
+    let device = try TwoDevices(server: { server() }, ownKey: ownKey).first
+    let tooLarge = try PlainWriting(
+      id: #require(UUID(uuidString: "00000000-0000-0000-0000-000000000001")),
+      updated: .init(timeIntervalSince1970: 1_000), contents: Data(count: 1_900_000))
+    let small = try PlainWriting(
+      id: #require(UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")),
+      updated: .init(timeIntervalSince1970: 1_000), contents: Data("小".utf8))
+    try device.writings.save(tooLarge)
+    try device.writings.save(small)
+
+    await #expect {
+      try await device.synchronizer.sync()
+    } throws: { error in
+      guard let error = error as? SyncFailures else { return false }
+      return error.failures[tooLarge.id] is SealingError && error.failures.count == 1
+        && error.report.sent == [small.id]
+    }
+    #expect(try await server().list().map(\.id) == [small.id])
+  }
+
+  @Test func aKeptBothSyncCutOffBeforeTheCopyIsSentMakesNoSecondCopy() async throws {
+    let id = UUID()
+    let cutting = CutOffFirstNewSave(fake)
+    let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
+    let cutOff = try TwoDevices.Device(server: server(transport: cutting), ownKey: ownKey)
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 1_000), contents: Data("b".utf8)))
+    _ = try await devices.first.synchronizer.sync()
+    try cutOff.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 2_000), contents: Data("c".utf8)))
+
+    await #expect(throws: ServerError.self) { try await cutOff.synchronizer.sync() }
+    let retried = try await cutOff.synchronizer.sync()
+
+    #expect(retried.keptBoth.isEmpty)
+    #expect(Set(try cutOff.writings.all().map(\.contents)) == [Data("b".utf8), Data("c".utf8)])
+    #expect(try cutOff.writings.all().count == 2)
+    #expect(try await server().list().count == 2)
+  }
+
+  @Test func aListingThatNamesAWritingTwiceIsRefused() async throws {
+    _ = try await server().save(
+      ownKey.seal(
+        PlainWriting(id: UUID(), updated: .init(timeIntervalSince1970: 1_000), contents: Data())),
+      over: nil)
+    let device = try TwoDevices(server: { server(transport: ListTwice(fake)) }, ownKey: ownKey)
+      .first
+
+    await #expect {
+      try await device.synchronizer.sync()
+    } throws: { error in
       guard case ServerError.unexpectedAnswer = error else { return false }
       return true
     }
-    #expect(try device.writings.all().map(\.id).contains(asked) == false)
+  }
+}
+
+/// Loses the answer to the first save of a new writing, as a dropped connection would.
+private actor CutOffFirstNewSave: HTTPTransport {
+  private let next: any HTTPTransport
+  private var cut = false
+
+  init(_ next: any HTTPTransport) {
+    self.next = next
+  }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    if !cut, request.httpMethod == "PUT",
+      request.value(forHTTPHeaderField: "Mai-Base-Revision") == "none"
+    {
+      cut = true
+      throw URLError(.networkConnectionLost)
+    }
+    return try await next.send(request)
+  }
+}
+
+/// Lists every writing twice.
+private struct ListTwice: HTTPTransport {
+  let next: any HTTPTransport
+
+  init(_ next: any HTTPTransport) {
+    self.next = next
+  }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    let (data, response) = try await next.send(request)
+    guard request.httpMethod ?? "GET" == "GET", request.url?.lastPathComponent == "writings",
+      let listing = try JSONSerialization.jsonObject(with: data) as? [String: [Any]],
+      let writings = listing["writings"]
+    else { return (data, response) }
+    return (try JSONSerialization.data(withJSONObject: ["writings": writings + writings]), response)
   }
 }
 

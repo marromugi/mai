@@ -55,42 +55,76 @@ public actor Synchronizer {
 
   private func syncOnce() async throws -> SyncReport {
     var synced = try state.load()
-    let mine = Dictionary(uniqueKeysWithValues: try writings.all().map { ($0.id, $0) })
-    let theirs = Dictionary(uniqueKeysWithValues: try await server.list().map { ($0.id, $0) })
+    let mine = Dictionary(try writings.all().map { ($0.id, $0) }) { first, _ in
+      preconditionFailure("The device's store keeps one writing per ID, but gave \(first.id) twice")
+    }
+    var theirs: [UUID: ServerEntry] = [:]
+    for entry in try await server.list() {
+      guard theirs.updateValue(entry, forKey: entry.id) == nil else {
+        throw ServerError.unexpectedAnswer("the server listed \(entry.id.uuidString) twice")
+      }
+    }
     var report = SyncReport()
+    var failures: [UUID: any Error] = [:]
 
     for id in Set(mine.keys).union(theirs.keys).sorted(by: { $0.uuidString < $1.uuidString }) {
-      let last = synced[id]
-      let writing = mine[id]
-      let deviceChanged = writing.map { Layout.milliseconds(of: $0.updated) != last?.updated }
-      guard let entry = theirs[id] else {
-        guard let writing else { preconditionFailure("Each ID is the device's or the server's") }
-        try await send(writing, over: nil, into: &synced, reporting: &report)
-        continue
+      do {
+        try await sync(
+          id, mine: mine[id], theirs: theirs[id], synced: &synced, reporting: &report)
+      } catch let error as SealingError {
+        failures[id] = error
+      } catch let error as OpeningError {
+        failures[id] = error
+      } catch let error as ServerError where error.concernsOneWriting {
+        failures[id] = error
       }
-      guard entry.revision != last?.revision || writing == nil else {
-        if let writing, deviceChanged == true {
-          try await send(writing, over: entry.revision, into: &synced, reporting: &report)
-        }
-        continue
-      }
-      guard let (received, revision) = try await read(id) else {
-        report.left.insert(id)
-        continue
-      }
-      if let writing, deviceChanged == true, !received.matches(writing) {
-        let copy = PlainWriting(id: UUID(), updated: writing.updated, contents: writing.contents)
-        try writings.save(copy)
-        report.keptBoth[id] = copy.id
-        try await send(copy, over: nil, into: &synced, reporting: &report)
-      }
-      try writings.save(received)
-      synced[id] = SyncState.Entry(
-        revision: revision, updated: Layout.milliseconds(of: received.updated))
-      try state.save(synced)
-      report.received.insert(id)
+    }
+    guard failures.isEmpty else {
+      throw SyncFailures(report: report, failures: failures)
     }
     return report
+  }
+
+  /// Syncs one writing. A failure that concerns this writing alone leaves the others to go on.
+  private func sync(
+    _ id: UUID, mine writing: PlainWriting?, theirs entry: ServerEntry?,
+    synced: inout [UUID: SyncState.Entry], reporting report: inout SyncReport
+  ) async throws {
+    let last = synced[id]
+    let deviceChanged = writing.map { Layout.milliseconds(of: $0.updated) != last?.updated }
+    guard let entry else {
+      guard let writing else { preconditionFailure("Each ID is the device's or the server's") }
+      try await send(writing, over: nil, into: &synced, reporting: &report)
+      return
+    }
+    guard entry.revision != last?.revision || writing == nil else {
+      if let writing, deviceChanged == true {
+        try await send(writing, over: entry.revision, into: &synced, reporting: &report)
+      }
+      return
+    }
+    guard let (received, revision) = try await read(id) else {
+      report.left.insert(id)
+      return
+    }
+    var copy: PlainWriting?
+    if let writing, deviceChanged == true, !received.matches(writing) {
+      copy = PlainWriting(id: UUID(), updated: writing.updated, contents: writing.contents)
+    }
+    if let copy {
+      try writings.save(copy)
+      report.keptBoth[id] = copy.id
+    }
+    // The server's copy and the sync state are kept before the device's copy is sent, so a
+    // failed send leaves only a new writing for the next sync to send, not a second copy.
+    try writings.save(received)
+    synced[id] = SyncState.Entry(
+      revision: revision, updated: Layout.milliseconds(of: received.updated))
+    try state.save(synced)
+    report.received.insert(id)
+    if let copy {
+      try await send(copy, over: nil, into: &synced, reporting: &report)
+    }
   }
 
   private func send(
@@ -116,6 +150,27 @@ public actor Synchronizer {
         "the server gave writing \(envelope.id.uuidString) for \(id.uuidString)")
     }
     return (try ownKey.open(envelope), revision)
+  }
+}
+
+/// A sync that went through every writing, but some failed alone: sealed too large, sealed with
+/// another own key, or refused by the server. `report` is what the rest did.
+public struct SyncFailures: LocalizedError {
+  public let report: SyncReport
+  public let failures: [UUID: any Error]
+
+  public var errorDescription: String? {
+    "\(failures.count) 件の文書を同期できませんでした。"
+  }
+}
+
+extension ServerError {
+  /// Whether the failure is about one writing, so the others can still sync.
+  fileprivate var concernsOneWriting: Bool {
+    switch self {
+    case .unreachable, .refused(status: 401, _): false
+    case .refused, .unexpectedAnswer: true
+    }
   }
 }
 

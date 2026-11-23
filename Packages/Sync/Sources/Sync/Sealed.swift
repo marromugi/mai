@@ -104,7 +104,7 @@ enum Layout {
   static let header = 28
   static let sealedKey = 12 + 32 + 16
   static let smallest = header + sealedKey + 12 + 16
-  /// The server's limit, which leaves room in its 2 MB row for the other columns.
+  /// The server's limit (`largestEnvelope` in `Server/src/envelope.ts`).
   static let largest = 1_900_000
 
   /// The time in whole milliseconds since 1970, when the server can hold it.

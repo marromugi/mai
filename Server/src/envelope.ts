@@ -8,7 +8,7 @@ const headerLength = 28;
 const sealedKeyLength = 12 + 32 + 16;
 const sealedContentsOverhead = 12 + 16;
 export const smallestEnvelope = headerLength + sealedKeyLength + sealedContentsOverhead;
-/** Leaves room in a Durable Object's 2 MB row for the other columns. */
+/** Well inside a Durable Object's 8 MB row; see the PR #37 Decisions for why not more. */
 export const largestEnvelope = 1_900_000;
 
 /** A writing ID in the lowercase text form, which is how the server names writings. */
