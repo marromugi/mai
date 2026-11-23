@@ -303,6 +303,22 @@ struct WritingEditingTests {
     #expect(edits.writing.links == [BodyLink(range: 0..<4, url: flour)])
   }
 
+  /// A combining mark typed at a link's end joins the link's last character, so the link takes in
+  /// the whole character rather than ending inside it.
+  @Test func aMarkJoiningALinksLastCharacterStaysInTheLink() throws {
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "cafe\n二行目", links: [BodyLink(range: 0..<4, url: flour)]))
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = NSRange(location: 4, length: 0)
+    type("\u{0301}", into: body)
+    #expect(edits.writing.body == "cafe\u{0301}\n二行目")
+    #expect(edits.writing.links == [BodyLink(range: 0..<5, url: flour)])
+  }
+
   @Test func editingABodyWithALink() {
     assertSnapshot(
       of: screen(editing: true, edits: Edits(writing: linked))

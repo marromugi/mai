@@ -6,7 +6,8 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
   var title: String
   /// Paragraphs separated by line breaks.
   var body: String
-  /// Stretches of `body` that link outside the app, in order and never overlapping.
+  /// Stretches of `body` that link outside the app: whole characters, in order, never overlapping,
+  /// as `fitted(to:)` leaves them.
   var links: [BodyLink]
   var updated: Date
 
@@ -24,20 +25,15 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
     case id, title, body, links, updated
   }
 
-  /// A writing saved before links were kept has none. One whose links don't fit its body is
-  /// refused.
+  /// A writing saved before links were kept has none. Links that don't fit its body are made to,
+  /// as `fitted(to:)` does, so the body is read whatever its links say.
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(UUID.self, forKey: .id)
     title = try container.decode(String.self, forKey: .title)
     body = try container.decode(String.self, forKey: .body)
-    links = try container.decodeIfPresent([BodyLink].self, forKey: .links) ?? []
+    links = (try container.decodeIfPresent([BodyLink].self, forKey: .links) ?? []).fitted(to: body)
     updated = try container.decode(Date.self, forKey: .updated)
-    guard links.fit(body) else {
-      throw DecodingError.dataCorruptedError(
-        forKey: .links, in: container,
-        debugDescription: "A link is empty, overlaps another, or lies outside the body.")
-    }
   }
 }
 

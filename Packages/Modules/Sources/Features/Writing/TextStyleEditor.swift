@@ -215,7 +215,7 @@ extension UITextView {
       guard let url = value as? URL else { return }
       links.append(BodyLink(range: range.location..<range.location + range.length, url: url))
     }
-    return links
+    return links.fitted(to: text)
   }
 }
 

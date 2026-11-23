@@ -59,24 +59,28 @@ struct WritingTests {
     }
   }
 
-  /// A file whose links don't fit its body is refused, by name, rather than read as another body.
+  /// A file whose links don't fit its body is still read, with each link widened to the whole
+  /// characters it touches, and one that is empty, past the end, or covered by the link before it
+  /// dropped.
   @Test(arguments: [
-    // Past the end, empty, overlapping, out of order, and through the middle of 🍞.
-    [BodyLink(range: 3..<5, url: bread)],
-    [BodyLink(range: 1..<1, url: bread)],
-    [BodyLink(range: 2..<4, url: bread), BodyLink(range: 3..<4, url: flour)],
-    [BodyLink(range: 3..<4, url: bread), BodyLink(range: 2..<3, url: flour)],
-    [BodyLink(range: 0..<1, url: bread)],
+    ([BodyLink(range: 3..<5, url: bread)], []),
+    ([BodyLink(range: 1..<1, url: bread)], []),
+    (
+      [BodyLink(range: 2..<4, url: bread), BodyLink(range: 3..<4, url: flour)],
+      [BodyLink(range: 2..<4, url: bread)]
+    ),
+    (
+      [BodyLink(range: 3..<4, url: bread), BodyLink(range: 2..<3, url: flour)],
+      [BodyLink(range: 3..<4, url: bread)]
+    ),
+    // Through the middle of 🍞.
+    ([BodyLink(range: 1..<3, url: bread)], [BodyLink(range: 0..<3, url: bread)]),
   ])
-  func aWritingWhoseLinksDontFitIsRefused(_ links: [BodyLink]) throws {
+  func linksThatDontFitAreFittedOnReading(_ saved: [BodyLink], _ read: [BodyLink]) throws {
     try withEmptyStore { store throws in
-      let writing = Writing(title: "朝", body: "🍞本文", links: links)
+      let writing = Writing(title: "朝", body: "🍞本文", links: saved)
       try store.save(writing)
-      #expect {
-        try store.all()
-      } throws: { error in
-        (error as? UnreadableWriting)?.file == store.file(for: writing.id)
-      }
+      #expect(try store.all().map(\.links) == [read])
     }
   }
 

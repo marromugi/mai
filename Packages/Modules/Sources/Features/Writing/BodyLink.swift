@@ -8,19 +8,21 @@ nonisolated struct BodyLink: Equatable, Codable, Sendable {
 }
 
 extension [BodyLink] {
-  /// Whether each link covers whole characters of `body` and at least one, and the links come in
-  /// order without overlapping.
-  nonisolated func fit(_ body: String) -> Bool {
-    var end = 0
-    for link in self {
-      guard link.range.lowerBound >= end, !link.range.isEmpty,
-        let found = Range(NSRange(link.range), in: body),
-        found.lowerBound.samePosition(in: body) != nil,
-        found.upperBound.samePosition(in: body) != nil
-      else { return false }
-      end = link.range.upperBound
+  /// These links made to fit `body`: each widened to the whole characters it touches and started
+  /// after the one before it. One that is empty, runs past the body, or has nothing left is
+  /// dropped.
+  nonisolated func fitted(to body: String) -> [BodyLink] {
+    var boundaries = body.indices.map { $0.utf16Offset(in: body) }
+    boundaries.append(body.utf16.count)
+    var fitted: [BodyLink] = []
+    for link in self where !link.range.isEmpty {
+      guard let end = boundaries.first(where: { $0 >= link.range.upperBound }) else { continue }
+      let start = boundaries.last { $0 <= link.range.lowerBound } ?? 0
+      let lower = Swift.max(start, fitted.last?.range.upperBound ?? 0)
+      guard lower < end else { continue }
+      fitted.append(BodyLink(range: lower..<end, url: link.url))
     }
-    return true
+    return fitted
   }
 }
 
