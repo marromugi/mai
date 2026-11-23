@@ -49,43 +49,12 @@ struct WritingPhotoStackTests {
     func contentHeight(_ photos: [UIImage]) throws -> CGFloat {
       let page = HostedPage(
         WritingView(
-          writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: photos,
+          writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [], open: { _ in },
+          photos: photos,
           setting: .constant(.standard), camera: .standIn(taking: nil), photoTaken: { _ in }))
       return try #require(page.scrollViews.first).contentSize.height
     }
     #expect(try contentHeight([.portrait]) > contentHeight([]))
-  }
-}
-
-extension UIImage {
-  /// A new photo 3 wide by 4 tall: a sky over a hill, with a sun at the top leading corner. Each is
-  /// its own image, as each photo the camera takes is.
-  fileprivate static var portrait: UIImage {
-    scene(CGSize(width: 300, height: 400), sky: .systemTeal)
-  }
-
-  /// A new photo 3 wide by 4 tall under a dusk sky, told apart from `portrait`.
-  fileprivate static var dusk: UIImage {
-    scene(CGSize(width: 300, height: 400), sky: .systemIndigo)
-  }
-
-  /// A new photo 4 wide by 3 tall, in other colours.
-  fileprivate static var landscape: UIImage {
-    scene(CGSize(width: 400, height: 300), sky: .systemOrange)
-  }
-
-  private static func scene(_ size: CGSize, sky: UIColor) -> UIImage {
-    let format = UIGraphicsImageRendererFormat()
-    format.scale = 1
-    return UIGraphicsImageRenderer(size: size, format: format).image { context in
-      sky.setFill()
-      context.fill(CGRect(origin: .zero, size: size))
-      UIColor.systemGreen.setFill()
-      context.fill(CGRect(x: 0, y: size.height * 0.6, width: size.width, height: size.height * 0.4))
-      UIColor.systemYellow.setFill()
-      context.cgContext.fillEllipse(
-        in: CGRect(x: size.width * 0.1, y: size.height * 0.1, width: 60, height: 60))
-    }
   }
 }
 

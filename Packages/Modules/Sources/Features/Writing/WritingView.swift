@@ -2,10 +2,13 @@ import SwiftUI
 internal import Typesetting
 
 /// A writing's page: its title, body, and `photos` on the type area, under a back mark, over the
-/// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap leaves it; its camera
-/// takes a photo with `camera` and hands it to `photoTaken`.
+/// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap or 「閉じる」 leaves it; its camera
+/// takes a photo with `camera` and hands it to `photoTaken`. Where one of `others`' titles appears
+/// in the body, it links to that writing, and a tap on it calls `open` with it.
 struct WritingView: View {
   let writing: Writing
+  let others: [Writing]
+  let open: (Writing) -> Void
   let photos: [UIImage]
   @Binding var setting: BodySetting
   let camera: Camera
@@ -15,19 +18,22 @@ struct WritingView: View {
 
   var body: some View {
     WritingScreen(
-      writing: writing, photos: photos, setting: $setting, typesetting: $typesetting,
+      writing: writing, others: others, open: open, photos: photos, setting: $setting,
+      typesetting: $typesetting,
       takingPhoto: $takingPhoto, camera: camera, photoTaken: photoTaken)
   }
 }
 
 /// The writing's page, with its `photos`, in or out of the typesetting mode. As the title scrolls
-/// off the top, the
-/// header fades in to stand in for it. In the mode the page stops scrolling and lifts off the desk
+/// off the top, the header fades in to stand in for it. In the mode the page stops scrolling and lifts off the desk
 /// above the typesetting bar, the typesetting gestures over it step `setting`, and a tap or the
-/// bar's 「閉じる」 leaves the mode. The bottom row's camera sets `takingPhoto`, which covers the page with `camera`'s screen until it takes a
-/// photo or is cancelled.
+/// bar's 「閉じる」 leaves the mode. The bottom row's camera sets `takingPhoto`, which covers the
+/// page with `camera`'s screen until it takes a photo or is cancelled. A tap on a mention of one of
+/// `others` in the body calls `open` with it.
 struct WritingScreen: View {
   let writing: Writing
+  let others: [Writing]
+  let open: (Writing) -> Void
   let photos: [UIImage]
   @Binding var setting: BodySetting
   @Binding var typesetting: Bool
@@ -36,14 +42,21 @@ struct WritingScreen: View {
   let photoTaken: (UIImage) -> Void
   @State private var titleCutOff: CGFloat = 0
   @State private var showingGestures = false
+  /// Found once per body and set of others, not at every update: the scroll updates the screen
+  /// each frame.
+  @State private var mentions: [TitleMention] = []
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     GeometryReader { proxy in
       ScrollView {
         WritingPage(
-          writing: writing, photos: photos, width: proxy.size.width, back: { dismiss() },
-          titleCutOff: { titleCutOff = $0 })
+          writing: writing, mentions: mentions, photos: photos, width: proxy.size.width,
+          back: { dismiss() }, titleCutOff: { titleCutOff = $0 })
+      }
+      .environment(\.openURL, .opening(mentions, with: open))
+      .task(id: MentionSource(body: writing.body, others: others)) {
+        mentions = writing.body.titleMentions(of: others)
       }
       .scrollDisabled(typesetting)
       .clipShape(PageShape(cornerRadius: typesetting ? Self.pageCornerRadius : 0))
@@ -153,11 +166,13 @@ private struct BottomRow: View {
   }
 }
 
-/// The page laid out across a screen `width` wide: the back mark, then the title, the body, and
-/// the photos after its last paragraph, piled as one stack, on the type area. `titleCutOff` hears
-/// how much of the title has scrolled above the scroll view's top, from 0 to 1.
+/// The page laid out across a screen `width` wide: the back mark, then the title, the body with
+/// its `mentions` linked, and the photos after its last paragraph, piled as one stack, on the type
+/// area. `titleCutOff` hears how much of the title has scrolled above the scroll view's top, from
+/// 0 to 1.
 struct WritingPage: View {
   let writing: Writing
+  var mentions: [TitleMention] = []
   let photos: [UIImage]
   let width: CGFloat
   let back: () -> Void
@@ -191,7 +206,7 @@ struct WritingPage: View {
             titleCutOff($0)
           }
           .padding(.bottom, scale.space(.m))
-        Text(body: writing.body)
+        Text(body: writing.body, mentions: mentions)
           .textStyle(.body)
         if !photos.isEmpty {
           PhotoStack(photos: photos, lineLength: area.lineLength)
@@ -268,6 +283,26 @@ struct WritingHeader: View {
   }
 }
 
+/// What a body's mentions are found from.
+private struct MentionSource: Equatable {
+  let body: String
+  let others: [Writing]
+}
+
+extension OpenURLAction {
+  /// Calls `open` with the writing a link among `mentions` names, and hands any other link to the
+  /// system.
+  static func opening(_ mentions: [TitleMention], with open: @escaping (Writing) -> Void)
+    -> OpenURLAction
+  {
+    OpenURLAction { url in
+      guard let writing = mentions.writing(linkedBy: url) else { return .systemAction }
+      open(writing)
+      return .handled
+    }
+  }
+}
+
 /// A short stroke across, met at its trailing end by one that leans down to the trailing side.
 private struct BackMark: Shape {
   nonisolated func path(in rect: CGRect) -> Path {
@@ -286,7 +321,8 @@ private struct BackMark: Shape {
   @Previewable @State var setting = BodySetting.standard
   NavigationStack {
     WritingView(
-      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: [],
+      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [],
+      open: { _ in }, photos: [],
       setting: $setting, camera: .device, photoTaken: { _ in })
   }
 }

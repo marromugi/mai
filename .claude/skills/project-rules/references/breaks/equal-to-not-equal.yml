@@ -1,0 +1,5 @@
+id: equal-to-not-equal
+language: Swift
+rule:
+  pattern: $A == $B
+fix: $A != $B
