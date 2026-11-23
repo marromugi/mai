@@ -10,6 +10,7 @@ import {
 import { parseAccountId, type AccountId } from "./account-id";
 import type { Challenge } from "./challenges";
 import { lastUsedResolution, sessionLifetime, type Caller } from "./sessions";
+import type { Environment } from "./app-store";
 
 /**
  * The only file that speaks to Turso. Every request is one `batch()`, so one round trip and one
@@ -19,8 +20,11 @@ import { lastUsedResolution, sessionLifetime, type Caller } from "./sessions";
 
 export type Listed = { id: WritingId; revision: Revision; updated: number; size: number };
 
-/** Why a caller was turned away: no live session, or a limit of its plan reached. */
-export type Refusal = "session" | Limit;
+/**
+ * Why a caller was turned away: no live session, a write to an account whose subscription has
+ * lapsed, or a limit of its plan reached.
+ */
+export type Refusal = "session" | "lapsed" | Limit;
 export type Limit = "requests" | "lists" | "saves" | "storage";
 
 export type Answer<T> = { ok: true; value: T } | { ok: false; refusal: Refusal };
@@ -34,12 +38,34 @@ export type NewAccount = {
   readonly appleSub: string;
   /** Apple's refresh token as `RefreshTokens.seal` sealed it for this account. */
   readonly sealedRefreshToken: Uint8Array;
-  /** A row of `plans`. */
-  readonly tier: string;
+  /** The subscription the account is made for; its product picks the plan. */
+  readonly purchase: Purchase;
 };
 
-/** `taken`: the account's ID or its Apple user has an account already. */
-export type Made = "made" | "challenge-used" | "taken";
+/** One subscription, as `subscriptions` keeps it. */
+export type Purchase = {
+  readonly originalTransactionId: string;
+  /** The transaction's `appAccountToken`. */
+  readonly account: AccountId | undefined;
+  readonly productId: string;
+  /** Its expiry, the end of its billing grace period if later, or when it was refunded or revoked. */
+  readonly paidUntil: number;
+  readonly revoked: boolean;
+  readonly environment: Environment;
+  /** When the App Store signed what this was read from; only a later one replaces it. */
+  readonly signedDate: number;
+};
+
+/**
+ * `taken`: the account's ID or its Apple user has an account already. `purchase-taken`: the
+ * subscription is another account's. `no-plan`: no plan is sold as the subscription's product.
+ */
+export type Made = "made" | "challenge-used" | "taken" | "purchase-taken" | "no-plan";
+
+/** What an account's own resent subscription did: the account's plan and paid-until time after it. */
+export type Kept =
+  | { kept: "kept"; tier: string; paidUntil: number }
+  | { kept: "another-account" | "no-plan" };
 
 export type SignedIn =
   | { signedIn: true; account: AccountId }
@@ -186,9 +212,10 @@ export class Store {
   }
 
   /**
-   * Makes the account and its first session, using up `challenge`. No account or session is
-   * written when the challenge was used before or has expired, or when the account's ID or Apple
-   * user already has an account; the challenge is used up all the same.
+   * Makes the account, its subscription and its first session, using up `challenge`. Nothing is
+   * written when the challenge was used before or has expired, when the account's ID or Apple
+   * user already has an account, when the subscription is another account's, or when no plan is
+   * sold as its product; the challenge is used up all the same.
    */
   async makeAccount(
     account: NewAccount,
@@ -196,22 +223,31 @@ export class Store {
     session: Caller,
     now: number,
   ): Promise<Made> {
+    const madeHere = `id = :id AND apple_sub = :sub AND apple_refresh_token = :refresh AND ${claimed}`;
     const results = await this.#claiming(
       now,
       challenge,
       [
-        `INSERT INTO accounts (id, apple_sub, apple_refresh_token, tier, created)
-         SELECT :id, :sub, :refresh, tier, :now FROM plans WHERE tier = :tier AND ${claimed}
-           AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = :id OR apple_sub = :sub)`,
+        `SELECT ${plan} AS plan, EXISTS (SELECT 1 FROM subscriptions
+                   WHERE original_transaction_id = :original AND account_id != :id) AS taken`,
+        `INSERT INTO accounts (id, apple_sub, apple_refresh_token, tier, paid_until, created)
+         SELECT :id, :sub, :refresh, tier, :paid, :now FROM plans
+         WHERE product_id = :product AND ${claimed}
+           AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = :id OR apple_sub = :sub)
+           AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE original_transaction_id = :original)`,
+        `INSERT INTO subscriptions
+           (original_transaction_id, account_id, product_id, paid_until, environment, signed_date)
+         SELECT :original, id, :product, :paid, :environment, :signed FROM accounts
+         WHERE ${madeHere}
+         ON CONFLICT (original_transaction_id) DO NOTHING`,
         `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
-         SELECT :session, id, :hash, :now, :now FROM accounts
-         WHERE id = :id AND apple_sub = :sub AND apple_refresh_token = :refresh AND ${claimed}`,
+         SELECT :session, id, :hash, :now, :now FROM accounts WHERE ${madeHere}`,
       ],
       {
+        ...purchaseValues(account.purchase),
         id: account.id,
         sub: account.appleSub,
         refresh: account.sealedRefreshToken,
-        tier: account.tier,
         session: session.session,
         hash: session.secretSha256,
         now,
@@ -220,7 +256,66 @@ export class Store {
     if (results === undefined) {
       return "challenge-used";
     }
-    return results[0]?.rowsAffected === 1 ? "made" : "taken";
+    const [found, made] = results;
+    if (made?.rowsAffected === 1) {
+      return "made";
+    }
+    const row = found?.rows[0];
+    if (Number(row?.["plan"]) !== 1) {
+      return "no-plan";
+    }
+    return Number(row?.["taken"]) === 1 ? "purchase-taken" : "taken";
+  }
+
+  /**
+   * Keeps the caller's own subscription, as the app resends it, when it is newer than what is
+   * kept. Answers the account's plan and paid-until time after it.
+   */
+  async keepPurchase(caller: Caller, purchase: Purchase, now: number): Promise<Answer<Kept>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => {
+      const mine = `coalesce(:account = ${account}, 0) AND NOT EXISTS (SELECT 1 FROM subscriptions
+        WHERE original_transaction_id = :original AND account_id != :account)`;
+      return [
+        `SELECT ${plan} AS plan, ${mine} AS mine`,
+        ...keepStatements(`${mine} AND ${allowed}`),
+        `SELECT tier, paid_until FROM accounts WHERE id = ${account}`,
+      ].map((sql) => ({
+        sql,
+        args: { ...purchaseValues(purchase), account: purchase.account ?? null },
+      }));
+    });
+    if (!answer.ok) {
+      return answer;
+    }
+    const found = answer.value[0]?.rows[0];
+    const account = answer.value.at(-1)?.rows[0];
+    if (Number(found?.["mine"]) !== 1) {
+      return { ok: true, value: { kept: "another-account" } };
+    }
+    if (Number(found?.["plan"]) !== 1) {
+      return { ok: true, value: { kept: "no-plan" } };
+    }
+    return {
+      ok: true,
+      value: {
+        kept: "kept",
+        tier: stored((tier) => tier, account?.["tier"]),
+        paidUntil: Number(account?.["paid_until"]),
+      },
+    };
+  }
+
+  /**
+   * Keeps a subscription as an App Store notification tells of it, when it is newer than what is
+   * kept. A subscription not kept yet is kept only for an account its `appAccountToken` names.
+   */
+  async keepNotified(purchase: Purchase): Promise<void> {
+    await this.#client.batch(
+      keepStatements("true").map((sql) =>
+        bind(sql, { ...purchaseValues(purchase), account: purchase.account ?? null }),
+      ),
+      "write",
+    );
   }
 
   /** Starts a session on the Apple user's account, using up `challenge`. */
@@ -355,20 +450,22 @@ export class Store {
       JOIN plans p ON p.tier = a.tier
       LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
       WHERE s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive`;
+    // A save is a write, and an account writes only while its subscription is paid for.
+    const paid = "(:save = 0 OR a.paid_until > :now)";
     const left = {
       requests: "coalesce(u.requests, 0) < p.requests_per_day",
       lists: "(:list = 0 OR coalesce(u.lists, 0) < p.lists_per_day)",
       saves: "(:save = 0 OR coalesce(u.saves, 0) < p.saves_per_day)",
     };
     const allowed = `EXISTS (SELECT 1 ${callerRows}
-      AND ${left.requests} AND ${left.lists} AND ${left.saves})`;
+      AND ${paid} AND ${left.requests} AND ${left.lists} AND ${left.saves})`;
     const account = "(SELECT account_id FROM sessions WHERE id = :session)";
     const statements = work(account, allowed);
 
     const results = await this.#client.batch(
       [
         {
-          sql: `SELECT ${left.requests} AS requests, ${left.lists} AS lists,
+          sql: `SELECT ${paid} AS lapsed, ${left.requests} AS requests, ${left.lists} AS lists,
                 ${left.saves} AS saves ${callerRows}`,
         },
         ...statements,
@@ -391,13 +488,51 @@ export class Store {
     if (gate === undefined) {
       return { ok: false, refusal: "session" };
     }
-    for (const limit of ["requests", "lists", "saves"] as const) {
+    for (const limit of ["lapsed", "requests", "lists", "saves"] as const) {
       if (Number(gate[limit]) !== 1) {
         return { ok: false, refusal: limit };
       }
     }
     return { ok: true, value: results.slice(1, 1 + statements.length) };
   }
+}
+
+/** Whether a plan is sold as the subscription's product, `:product`. */
+const plan = "EXISTS (SELECT 1 FROM plans WHERE product_id = :product)";
+
+function purchaseValues(purchase: Purchase): Record<string, InValue> {
+  return {
+    original: purchase.originalTransactionId,
+    product: purchase.productId,
+    paid: purchase.paidUntil,
+    environment: purchase.environment,
+    signed: purchase.signedDate,
+  };
+}
+
+/**
+ * Replaces the kept subscription `:original` with newer data, or keeps it for the account
+ * `:account` when it isn't kept yet; then sets its account's plan and paid-until time from all of
+ * the account's subscriptions. Each statement holds `condition` in its WHERE.
+ */
+function keepStatements(condition: string): string[] {
+  return [
+    `UPDATE subscriptions SET product_id = :product, paid_until = :paid,
+       environment = :environment, signed_date = :signed
+     WHERE original_transaction_id = :original AND signed_date < :signed
+       AND ${plan} AND ${condition}`,
+    `INSERT INTO subscriptions
+       (original_transaction_id, account_id, product_id, paid_until, environment, signed_date)
+     SELECT :original, id, :product, :paid, :environment, :signed FROM accounts
+     WHERE id = :account AND ${plan} AND ${condition}
+     ON CONFLICT (original_transaction_id) DO NOTHING`,
+    `UPDATE accounts SET
+       paid_until = (SELECT max(paid_until) FROM subscriptions WHERE account_id = accounts.id),
+       tier = coalesce((SELECT p.tier FROM subscriptions s JOIN plans p ON p.product_id = s.product_id
+                        WHERE s.account_id = accounts.id ORDER BY s.paid_until DESC LIMIT 1), tier)
+     WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original)
+       AND ${condition}`,
+  ];
 }
 
 /** A value read back from a column only this file writes, which holds only valid values. */

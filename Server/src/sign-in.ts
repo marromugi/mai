@@ -6,7 +6,8 @@ import { jsonBody, problem } from "./http";
 import { text, type Json } from "./jws";
 import type { RefreshTokens } from "./refresh-tokens";
 import { newSessionToken } from "./sessions";
-import type { Store } from "./store";
+import type { Made, Store } from "./store";
+import { notKept, purchaseRefused, readPurchase, type AppStore } from "./subscriptions";
 
 /**
  * The routes that need no session: `POST /challenges`, `POST /account` and `POST /sessions`.
@@ -21,18 +22,17 @@ export type SignIn = {
   readonly keys: AppleSignInKeys;
   readonly tokens: AppleTokens;
   readonly refreshTokens: RefreshTokens;
+  readonly appStore: AppStore;
 };
-
-/** The plan an account is made on until S4 (#22) sets it from the verified purchase. */
-const firstTier = "basic";
 
 export async function issueChallenge(signIn: SignIn, now: number): Promise<Response> {
   return Response.json({ challenge: await signIn.challenges.issue(now) }, { status: 201 });
 }
 
 /**
- * `{"account", "challenge", "identityToken", "authorizationCode"}`: the UUID the app made for the
- * account, a challenge from `POST /challenges`, and what Sign in with Apple gave the app for it.
+ * `{"account", "challenge", "identityToken", "authorizationCode", "transaction"}`: the UUID the
+ * app made for the account, a challenge from `POST /challenges`, what Sign in with Apple gave the
+ * app for it, and the StoreKit 2 transaction of the subscription bought for the account.
  */
 export async function makeAccount(
   request: Request,
@@ -42,14 +42,32 @@ export async function makeAccount(
   const body = await jsonBody(request);
   const account = parseAccountId(text(body?.["account"]) ?? "");
   const code = text(body?.["authorizationCode"]);
-  if (account === undefined || code === undefined) {
-    return problem(400, "an account is made from its UUID, a challenge, an ID token and a code");
+  const transaction = text(body?.["transaction"]);
+  if (account === undefined || code === undefined || transaction === undefined) {
+    return problem(
+      400,
+      "an account is made from its UUID, a challenge, an ID token, a code and a transaction",
+    );
   }
   const user = await signedInUser(body, signIn, now);
   if (!user.ok) {
     return user.response;
   }
-  // S4 (#22) checks here that the purchase sent with the account names it, and picks the plan.
+  const purchase = await readPurchase(transaction, undefined, signIn.appStore);
+  if (!purchase.ok) {
+    return purchaseRefused(purchase.failure);
+  }
+  if (purchase.value.account !== account) {
+    return notKept("another-account");
+  }
+  if (purchase.value.paidUntil <= now) {
+    return problem(
+      402,
+      purchase.value.revoked
+        ? "the purchase was refunded or revoked"
+        : "the purchase has expired; buy the plan again",
+    );
+  }
   const exchanged = await signIn.tokens.exchange(code, now);
   if (!exchanged.ok) {
     return exchanged.failure === "refused"
@@ -65,19 +83,21 @@ export async function makeAccount(
       id: account,
       appleSub: user.sub,
       sealedRefreshToken: await signIn.refreshTokens.seal(exchanged.value.refreshToken, account),
-      tier: firstTier,
+      purchase: purchase.value,
     },
     user.challenge,
     caller,
     Date.now(),
   );
-  if (made === "made") {
-    return Response.json({ token }, { status: 201 });
-  }
-  return made === "challenge-used"
-    ? problem(401, challengeUsed)
-    : problem(409, "this Apple user or this account ID has an account; sign in instead");
+  return made === "made" ? Response.json({ token }, { status: 201 }) : notMade[made]();
 }
+
+const notMade: Record<Exclude<Made, "made">, () => Response> = {
+  "challenge-used": () => problem(401, challengeUsed),
+  taken: () => problem(409, "this Apple user or this account ID has an account; sign in instead"),
+  "purchase-taken": () => notKept("another-account"),
+  "no-plan": () => notKept("no-plan"),
+};
 
 /** `{"challenge", "identityToken"}`: a challenge from `POST /challenges`, and Apple's ID token. */
 export async function startSession(
