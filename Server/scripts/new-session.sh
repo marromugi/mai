@@ -5,7 +5,12 @@
 # Usage: new-session.sh <database file> [plan]
 set -euo pipefail
 
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "usage: new-session.sh <database file> [plan]" >&2
+  exit 1
+fi
 database="$1"
+[[ -f "$database" ]] || { echo "$database is not a file; make it with schema.sql first" >&2; exit 1; }
 tier="${2:-basic}"
 [[ "$tier" =~ ^[a-z-]+$ ]] || { echo "a plan's name is lowercase letters and hyphens" >&2; exit 1; }
 account="$(uuidgen | tr '[:upper:]' '[:lower:]')"
