@@ -200,6 +200,7 @@ struct BodyGestureTests {
     (BodyAdjustment.base, 20, 20), (.base, 30, 24), (.base, 0, 12),
     (.lineHeight, 36, 36), (.lineHeight, 35, 32), (.lineHeight, 17, 20), (.lineHeight, 100, 44),
     (.tracking, -50, -50), (.tracking, 15, 10), (.tracking, -15, -10), (.tracking, 999, 200),
+    (.base, Int.max, 24), (.lineHeight, Int.min, 16), (.tracking, Int.min, -50),
   ])
   func movingToAValueKeepsTheRest(_ adjustment: BodyAdjustment, _ value: Int, _ expected: Int) {
     let moved = standard.moving(adjustment, to: value)

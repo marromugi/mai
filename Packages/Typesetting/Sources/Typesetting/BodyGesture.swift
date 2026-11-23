@@ -49,7 +49,9 @@ extension BodySetting {
 
   /// Moved by whole steps of the adjustment toward `value`, stopping at the ends of its range.
   public func moving(_ adjustment: BodyAdjustment, to value: Int) -> BodySetting {
-    moving(adjustment, by: (value - self[adjustment]) / adjustment.step)
+    let range = adjustment.range
+    let target = min(max(value, range.lowerBound), range.upperBound)
+    return moving(adjustment, by: (target - self[adjustment]) / adjustment.step)
   }
 
   /// Moved by `steps` of the adjustment's step, stopping at the ends of its range.

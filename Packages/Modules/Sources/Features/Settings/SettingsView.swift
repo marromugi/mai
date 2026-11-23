@@ -83,7 +83,8 @@ private struct SettingStepper: View {
   var body: some View {
     if dynamicTypeSize.isAccessibilitySize {
       VStack(alignment: .leading) {
-        label
+        // Read once, as the stepper's label.
+        label.accessibilityHidden(true)
         stepper { label }.labelsHidden()
       }
     } else {
