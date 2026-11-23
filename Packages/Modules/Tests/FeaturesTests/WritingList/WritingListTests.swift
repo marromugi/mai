@@ -80,7 +80,28 @@ struct WritingListTests {
         id: 4, title: "", characterCount: 0, updated: movedFromNow(DateComponents(day: -1))),
       WritingRow(id: 2, title: "", characterCount: 0, updated: now),
     ]
-    #expect(rows.newestFirst().map(\.id) == [2, 3, 4, 1])
+    #expect(rows.sorted(.newestFirst).map(\.id) == [2, 3, 4, 1])
+  }
+
+  @Test func rowsAreMostCharactersFirstAndTiesNewestFirstThenInIDOrder() {
+    let rows = [
+      WritingRow(id: 1, title: "", characterCount: 10, updated: now),
+      WritingRow(
+        id: 2, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+      WritingRow(
+        id: 6, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -1))),
+      WritingRow(id: 3, title: "", characterCount: 0, updated: now),
+      WritingRow(
+        id: 5, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+      WritingRow(
+        id: 4, title: "", characterCount: 99999, updated: movedFromNow(DateComponents(year: -1))),
+    ]
+    #expect(rows.sorted(.mostCharactersFirst).map(\.id) == [4, 6, 2, 5, 1, 3])
+  }
+
+  /// The chosen order is remembered by these names; changing one forgets what was chosen.
+  @Test func ordersAreRememberedByTheirNames() {
+    #expect(WritingListOrder.allCases.map(\.rawValue) == ["updated", "characterCount"])
   }
 
   @Test(arguments: [DynamicTypeSize.large, .accessibility5])
@@ -135,6 +156,7 @@ struct WritingListTests {
             updated: movedFromNow(DateComponents(hour: 3))),
         ],
         now: now,
+        order: .constant(.newestFirst),
         width: 402
       )
       .fixedSize(horizontal: false, vertical: true)
@@ -160,6 +182,10 @@ struct WritingListTests {
   @Test func listAtTheLargestSize() {
     assertList(.accessibility5, .light)
   }
+
+  @Test func listByCharacterCount() {
+    assertList(.large, .light, .mostCharactersFirst)
+  }
 }
 
 private func height(of row: WritingRow, size: DynamicTypeSize) -> CGFloat {
@@ -178,6 +204,7 @@ private func width(of view: some View) -> CGFloat {
 private func assertList(
   _ size: DynamicTypeSize,
   _ colorScheme: ColorScheme,
+  _ order: WritingListOrder = .newestFirst,
   fileID: StaticString = #fileID,
   file: StaticString = #filePath,
   testName: String = #function,
@@ -186,7 +213,8 @@ private func assertList(
 ) {
   assertSnapshot(
     of: WritingListPage(
-      rows: WritingRow.samples(now: now, calendar: calendar), now: now, width: 402
+      rows: WritingRow.samples(now: now, calendar: calendar), now: now, order: .constant(order),
+      width: 402
     )
     .fixedSize(horizontal: false, vertical: true)
     .frame(width: 402)
