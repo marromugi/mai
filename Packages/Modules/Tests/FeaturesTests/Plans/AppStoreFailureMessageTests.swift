@@ -25,6 +25,12 @@ struct AppStoreFailureMessageTests {
     #expect(appStoreFailureMessage(error) == "このプランは今は買えません。")
   }
 
+  @Test func anUnverifiedPurchaseSaysToTryLater() {
+    #expect(
+      PlanPurchaseError.unverified(.invalidSignature).localizedDescription
+        == "App Store の購入を確かめられませんでした。しばらくしてから、もう一度お試しください。")
+  }
+
   @Test func anythingElseSaysToTryLater() {
     #expect(
       appStoreFailureMessage(StoreKitError.unknown)

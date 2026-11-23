@@ -31,14 +31,18 @@ struct PlanPurchaseTests {
 
   @Test func eachPlanIsOnTheAppStore() async throws {
     let products = try await Product.products(for: SyncPlan.allCases.map(\.productID))
-    #expect(PlanOffer.all(in: products).map(\.plan) == SyncPlan.allCases)
+    let offers = PlanOffer.all(in: products)
+    #expect(offers.map(\.plan) == SyncPlan.allCases)
+    #expect(offers.map(\.price) == ["¥150", "¥700", "¥1,600"])
   }
 
   @Test func aPurchaseCarriesTheNewAccountIDAndKeepsIt() async throws {
     let outcome = try await buyPlan(product(.plus), keptIn: kept, purchase: Self.purchase)
     let id = try #require(kept.id)
     #expect(outcome == .bought(id))
-    #expect(try await latestTransaction(.plus).appAccountToken == id)
+    let bought = try await latestTransaction(.plus)
+    #expect(bought.appAccountToken == id)
+    #expect(kept.defaults.string(forKey: "syncAccountID") == id.uuidString)
   }
 
   @Test func aPurchaseCarriesTheKeptAccountID() async throws {
@@ -59,6 +63,15 @@ struct PlanPurchaseTests {
     #expect(upgraded == bought)
     #expect(reinstalled.id == kept.id)
     #expect(try await latestTransaction(.plus).appAccountToken == kept.id)
+  }
+
+  /// The account this device keeps wins over the one a plan already subscribed to was bought for.
+  @Test func aPurchaseCarriesTheKeptAccountIDOverTheSubscribedOne() async throws {
+    _ = try await buyPlan(product(.basic), keptIn: kept, purchase: Self.purchase)
+    let id = UUID()
+    kept.keep(id)
+    #expect(try await buyPlan(product(.plus), keptIn: kept, purchase: Self.purchase) == .bought(id))
+    #expect(try await latestTransaction(.plus).appAccountToken == id)
   }
 
   /// A cancel thrown rather than returned.
@@ -117,8 +130,18 @@ struct PlanPurchaseTests {
     #expect(outcome == .waiting)
     let id = try #require(kept.id)
     let waiting = try #require(session.allTransactions().first)
+    // The approved transaction reaches the app as an update, some time after the approval.
+    let approved = Task { () -> Transaction? in
+      for await result in Transaction.updates {
+        if case .verified(let transaction) = result, transaction.productID == SyncPlan.pro.productID
+        {
+          return transaction
+        }
+      }
+      return nil
+    }
     try session.approveAskToBuyTransaction(identifier: waiting.identifier)
-    #expect(try await latestTransaction(.pro).appAccountToken == id)
+    #expect(try #require(await approved.value).appAccountToken == id)
   }
 
   private static func purchase(
