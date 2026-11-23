@@ -471,6 +471,50 @@ struct WritingEditingTests {
   }
 }
 
+/// Pastes from the edit menu, one at a time: item providers loaded side by side in a test process
+/// stall until the tests waiting on them give up.
+@MainActor
+@Suite(.serialized)
+struct EditMenuPasteTests {
+  /// The edit menu's Paste, which hands over what was copied rather than the pasteboard, links
+  /// the selection to a copied URL or a copied web address.
+  @Test(arguments: [true, false])
+  func pastingFromTheEditMenuLinksTheSelection(_ copiedAsURL: Bool) async throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.selectedRange = NSRange(location: 0, length: 2)
+    body.paste(itemProviders: [
+      copiedAsURL
+        ? NSItemProvider(object: bread as NSURL)
+        : NSItemProvider(object: bread.absoluteString as NSString)
+    ])
+    try await page.settle(within: 15) { !edits.writing.links.isEmpty }
+    #expect(edits.writing.body == "朝の机\n二行目")
+    #expect(edits.writing.links == [BodyLink(range: 0..<2, url: bread)])
+  }
+
+  /// From the edit menu with nothing selected, a web address opens the sheet; other text goes in
+  /// as text.
+  @Test func pastingFromTheEditMenuWithNothingSelected() async throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = NSRange(location: 3, length: 0)
+    body.paste(itemProviders: [NSItemProvider(object: "夕方" as NSString)])
+    try await page.settle(within: 15) { edits.writing.body.contains("夕方") }
+    #expect(edits.writing.body == "朝の机夕方\n二行目")
+    #expect(page.presented == nil)
+    body.paste(itemProviders: [NSItemProvider(object: bread as NSURL)])
+    try await page.settle(within: 15) { page.presented != nil }
+    #expect(page.presented != nil)
+    #expect(edits.writing.links.isEmpty)
+  }
+
+}
+
 private let sampled = Writing(title: "間合いの調整", body: Writing.sampleBody)
 
 nonisolated private let bread = URL(string: "https://example.com/bread") ?? URL(filePath: "/")

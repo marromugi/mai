@@ -256,6 +256,39 @@ final class PlaceholderTextView: UITextView {
     pasteLink(url)
   }
 
+  /// The edit menu's Paste, which hands over what was copied without the pasteboard.
+  override func paste(itemProviders: [NSItemProvider]) {
+    guard let pasteLink, itemProviders.count == 1, let provider = itemProviders.first else {
+      super.paste(itemProviders: itemProviders)
+      return
+    }
+    Task {
+      if let url = await Self.text(of: provider).flatMap(URL.init(pastedLink:)) {
+        pasteLink(url)
+      } else {
+        pasteAsText(itemProviders)
+      }
+    }
+  }
+
+  private func pasteAsText(_ itemProviders: [NSItemProvider]) {
+    super.paste(itemProviders: itemProviders)
+  }
+
+  /// What `provider` holds as a URL, or else as text.
+  private static func text(of provider: NSItemProvider) async -> String? {
+    if provider.canLoadObject(ofClass: URL.self) {
+      let url = await withCheckedContinuation { done in
+        _ = provider.loadObject(ofClass: URL.self) { url, _ in done.resume(returning: url) }
+      }
+      if let url { return url.absoluteString }
+    }
+    guard provider.canLoadObject(ofClass: String.self) else { return nil }
+    return await withCheckedContinuation { done in
+      _ = provider.loadObject(ofClass: String.self) { text, _ in done.resume(returning: text) }
+    }
+  }
+
   private(set) lazy var placeholder: UILabel = {
     let label = UILabel()
     addSubview(label)

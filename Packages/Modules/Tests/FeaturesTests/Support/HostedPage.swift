@@ -26,10 +26,10 @@ final class HostedPage {
     controller.view.layoutIfNeeded()
   }
 
-  /// Waits until `done` holds, or until three seconds have passed. Waiting, unlike `settle()`, lets
+  /// Waits until `done` holds, or until `seconds` have passed. Waiting, unlike `settle()`, lets
   /// the main actor run the tasks queued on it.
-  func settle(until done: () -> Bool) async throws {
-    let deadline = Date(timeIntervalSinceNow: 3)
+  func settle(within seconds: TimeInterval = 3, until done: () -> Bool) async throws {
+    let deadline = Date(timeIntervalSinceNow: seconds)
     while !done(), Date() < deadline {
       try await Task.sleep(for: .milliseconds(50))
     }
