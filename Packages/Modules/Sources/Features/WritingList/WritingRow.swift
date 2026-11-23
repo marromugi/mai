@@ -1,6 +1,6 @@
 import Foundation
 
-/// One writing as the list shows it.
+/// One writing in the list.
 public struct WritingRow: Identifiable, Hashable, Sendable {
   public let id: Int
   public let title: String
@@ -20,12 +20,18 @@ public struct WritingRow: Identifiable, Hashable, Sendable {
     guard updated < now else { return "たった今" }
     let elapsed = calendar.dateComponents(
       [.year, .month, .day, .hour, .minute], from: updated, to: now)
-    if let years = elapsed.year, years > 0 { return "\(years)年前" }
-    if let months = elapsed.month, months > 0 { return "\(months)か月前" }
-    if let days = elapsed.day, days >= 7 { return "\(days / 7)週間前" }
-    if let days = elapsed.day, days > 0 { return "\(days)日前" }
-    if let hours = elapsed.hour, hours > 0 { return "\(hours)時間前" }
-    if let minutes = elapsed.minute, minutes > 0 { return "\(minutes)分前" }
+    let years = elapsed.year ?? 0
+    let months = elapsed.month ?? 0
+    // Across a fall-back the calendar can give 0 days and 24 hours.
+    let days = (elapsed.day ?? 0) + (elapsed.hour ?? 0) / 24
+    let hours = elapsed.hour ?? 0
+    let minutes = elapsed.minute ?? 0
+    if years > 0 { return "\(years)年前" }
+    if months > 0 { return "\(months)か月前" }
+    if days >= 7 { return "\(days / 7)週間前" }
+    if days > 0 { return "\(days)日前" }
+    if hours > 0 { return "\(hours)時間前" }
+    if minutes > 0 { return "\(minutes)分前" }
     return "たった今"
   }
 }
@@ -47,7 +53,7 @@ extension WritingRow {
       return date
     }
     return [
-      WritingRow(id: 1, title: "パンを焼く日", characterCount: 1920, updated: ago(1, .day)),
+      WritingRow(id: 1, title: "パンを焼く日", characterCount: 1920, updated: ago(24, .hour)),
       WritingRow(id: 2, title: "Hello, World!", characterCount: 1920, updated: ago(25, .hour)),
       WritingRow(
         id: 3, title: "ものすごく長すぎて入りきらない名前ですよものすごく長すぎて入りきらない名前ですよ",

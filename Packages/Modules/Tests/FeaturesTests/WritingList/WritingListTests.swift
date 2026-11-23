@@ -24,7 +24,7 @@ private let now: Date = {
   return date
 }()
 
-private func before(now offset: DateComponents) -> Date {
+private func movedFromNow(_ offset: DateComponents) -> Date {
   guard let date = calendar.date(byAdding: offset, to: now) else {
     preconditionFailure("\(offset) from \(now) is out of the calendar's range.")
   }
@@ -51,20 +51,33 @@ struct WritingListTests {
     (DateComponents(month: -11), "11か月前"),
     (DateComponents(year: -1, minute: 1), "11か月前"),
     (DateComponents(year: -1), "1年前"),
+    (DateComponents(year: -1, month: -3), "1年前"),
     (DateComponents(year: -12), "12年前"),
   ])
   func updatedIsWordedInTheLargestWholeUnit(_ offset: DateComponents, _ expected: String) {
-    let row = WritingRow(id: 0, title: "", characterCount: 0, updated: before(now: offset))
+    let row = WritingRow(id: 0, title: "", characterCount: 0, updated: movedFromNow(offset))
     #expect(row.updatedLabel(now: now, calendar: calendar) == expected)
+  }
+
+  /// New York falls back on 2025-11-02: 24 to 25 hours before noon that day is still a day.
+  @Test(arguments: [24.0, 24.5, 24.99])
+  func aDayAcrossTheFallBackIsOneDay(_ hours: Double) throws {
+    var newYork = Calendar(identifier: .gregorian)
+    newYork.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+    let noon = try #require(
+      newYork.date(from: DateComponents(year: 2025, month: 11, day: 2, hour: 12)))
+    let row = WritingRow(
+      id: 0, title: "", characterCount: 0, updated: noon.addingTimeInterval(-hours * 3600))
+    #expect(row.updatedLabel(now: noon, calendar: newYork) == "1日前")
   }
 
   @Test func rowsAreNewestFirstAndTiesInIDOrder() {
     let rows = [
       WritingRow(
-        id: 1, title: "", characterCount: 0, updated: before(now: DateComponents(day: -2))),
+        id: 1, title: "", characterCount: 0, updated: movedFromNow(DateComponents(day: -2))),
       WritingRow(id: 3, title: "", characterCount: 0, updated: now),
       WritingRow(
-        id: 4, title: "", characterCount: 0, updated: before(now: DateComponents(day: -1))),
+        id: 4, title: "", characterCount: 0, updated: movedFromNow(DateComponents(day: -1))),
       WritingRow(id: 2, title: "", characterCount: 0, updated: now),
     ]
     #expect(rows.newestFirst().map(\.id) == [2, 3, 4, 1])
@@ -92,7 +105,7 @@ struct WritingListTests {
   /// Measured widths land on device pixels, so they are checked to within half a point.
   @Test func idealRowWidthIsTitleGapAndDate() {
     let row = WritingRow(
-      id: 0, title: "パンを焼く日", characterCount: 1920, updated: before(now: DateComponents(day: -1)))
+      id: 0, title: "パンを焼く日", characterCount: 1920, updated: movedFromNow(DateComponents(day: -1)))
     let title = Text(verbatim: row.title).textStyle(.title)
     let expected =
       width(of: title) + TypeScale.standard.chars(1, of: .meta)
@@ -107,18 +120,19 @@ struct WritingListTests {
       as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
   }
 
-  /// An untitled row, a row updated after `now`, and one updated years ago, given oldest first.
+  /// An untitled row, a row updated after `now`, and one updated long enough ago that its label is
+  /// wider than the column, given oldest first.
   @Test func rowsWithUnusualValues() {
     assertSnapshot(
       of: WritingListPage(
         rows: [
           WritingRow(
             id: 1, title: "古い覚え書き", characterCount: 312,
-            updated: before(now: DateComponents(year: -12))),
+            updated: movedFromNow(DateComponents(year: -1234))),
           WritingRow(id: 2, title: "", characterCount: 0, updated: now),
           WritingRow(
             id: 3, title: "時計より先の原稿", characterCount: 1_234_567,
-            updated: before(now: DateComponents(hour: 3))),
+            updated: movedFromNow(DateComponents(hour: 3))),
         ],
         now: now,
         width: 402
