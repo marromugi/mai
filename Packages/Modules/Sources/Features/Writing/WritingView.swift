@@ -152,7 +152,8 @@ struct WritingPage: View {
 }
 
 /// The bar at the top once the title scrolls off: a close chevron on the margin and the title
-/// centred on one line, stepped down the size series to fit, over a fade the body passes under.
+/// centred on one line, stepped down the size series to fit, over a fade the body passes under. The
+/// title grows with neither Dynamic Type nor the body setting past its size at the standard scale.
 struct WritingHeader: View {
   let title: String
   let width: CGFloat
@@ -204,10 +205,12 @@ struct WritingHeader: View {
     .accessibilityLabel("閉じる")
   }
 
-  /// The title on one line in the title's bold, at `step`'s size.
+  /// The title on one line in the title's bold, at `step`'s size, which grows no larger than at
+  /// the standard scale.
   private func titleText(at step: TextRole) -> some View {
-    Text(verbatim: title)
-      .font(Font(scale.font(.title).withSize(scale.size(step))))
+    let size = min(scale.size(step), TypeScale.standard.size(step))
+    return Text(verbatim: title)
+      .font(Font(scale.font(.title).withSize(size)))
       .lineLimit(1)
       .accessibilityAddTraits(.isHeader)
   }
