@@ -2,8 +2,10 @@
 -- Applied once to a new database; see Server/README.md.
 
 -- What each plan may use. The quota triggers and src/store.ts read their limits from here.
+-- product_id is the plan's auto-renewable subscription in App Store Connect (Server/README.md).
 CREATE TABLE plans (
   tier TEXT PRIMARY KEY,
+  product_id TEXT UNIQUE,
   writings_bytes INTEGER NOT NULL,
   writings_count INTEGER NOT NULL,
   requests_per_day INTEGER NOT NULL,
@@ -12,24 +14,42 @@ CREATE TABLE plans (
 ) STRICT;
 
 INSERT INTO plans VALUES
-  ('basic', 100000000, 10000, 3000, 200, 500),
-  ('plus', 500000000, 50000, 10000, 300, 2000),
-  ('pro', 1000000000, 100000, 10000, 300, 2000);
+  ('basic', 'com.marromugi.mai.basic.monthly', 100000000, 10000, 3000, 200, 500),
+  ('plus', 'com.marromugi.mai.plus.monthly', 500000000, 50000, 10000, 300, 2000),
+  ('pro', 'com.marromugi.mai.pro.monthly', 1000000000, 100000, 10000, 300, 2000);
 
 -- id is the UUID the app made, which is also its purchases' appAccountToken. apple_sub is the
 -- Sign in with Apple user. apple_refresh_token is Apple's refresh token sealed by
 -- src/refresh-tokens.ts; it is never kept unsealed. own_key_check is set once, by the first device
--- to make the own key.
+-- to make the own key. tier and paid_until follow the account's subscriptions: tier is the plan of
+-- the one paid for longest, and paid_until the latest time any of them is paid until. Past
+-- paid_until the account has lapsed: it is read but not written.
 CREATE TABLE accounts (
   id TEXT PRIMARY KEY,
   apple_sub TEXT NOT NULL UNIQUE,
   apple_refresh_token BLOB NOT NULL,
   own_key_check BLOB,
   tier TEXT NOT NULL,
+  paid_until INTEGER NOT NULL,
   writings_bytes INTEGER NOT NULL DEFAULT 0,
   writings_count INTEGER NOT NULL DEFAULT 0,
   created INTEGER NOT NULL
 ) STRICT;
+
+-- An App Store subscription, by the originalTransactionId every renewal of it shares, as the
+-- latest data the App Store signed about it reads (signed_date), among data about its latest billing
+-- period (period_ends, the transaction's expiresDate). paid_until is when that period ends, the
+-- end of its billing grace period if later, or when it was refunded or revoked.
+CREATE TABLE subscriptions (
+  original_transaction_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  product_id TEXT NOT NULL,
+  period_ends INTEGER NOT NULL,
+  paid_until INTEGER NOT NULL,
+  environment TEXT NOT NULL,
+  signed_date INTEGER NOT NULL
+) STRICT;
+CREATE INDEX subscriptions_account ON subscriptions (account_id);
 
 -- token_sha256 is the SHA-256 of the session token's secret; the secret itself is never kept.
 CREATE TABLE sessions (
