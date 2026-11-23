@@ -111,6 +111,10 @@ struct WritingTests {
     }
   }
 
+  @Test func aRowCountsCharactersNotCodeUnits() {
+    #expect(WritingRow(Writing(title: "", body: "🍞🇯🇵が\n")).characterCount == 4)
+  }
+
   @Test func eachSampleBodyIsAsLongAsItsRowSays() {
     let now = Date(timeIntervalSinceReferenceDate: 815_000_000)
     let calendar = Calendar(identifier: .gregorian)

@@ -53,9 +53,7 @@ struct FileWritingStore: WritingStore {
 
   func save(_ writing: Writing) throws {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = .sortedKeys
-    try encoder.encode(writing).write(to: file(for: writing.id), options: .atomic)
+    try JSONEncoder().encode(writing).write(to: file(for: writing.id), options: .atomic)
   }
 
   func file(for id: Writing.ID) -> URL {

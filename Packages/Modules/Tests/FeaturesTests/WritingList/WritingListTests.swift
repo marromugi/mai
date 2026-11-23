@@ -24,6 +24,12 @@ private let now: Date = {
   return date
 }()
 
+/// Two stored writings for opening one of them.
+private let twoWritings = [
+  Writing(title: "別の文書", body: "別の本文。", updated: now),
+  Writing(title: "保存した文書", body: "保存した本文。\n二段落目。", updated: now),
+]
+
 private func movedFromNow(_ offset: DateComponents) -> Date {
   guard let date = calendar.date(byAdding: offset, to: now) else {
     preconditionFailure("\(offset) from \(now) is out of the calendar's range.")
@@ -154,10 +160,14 @@ struct WritingListTests {
     assertRoot(remembering: ["writingListOrder": "characterCount"])
   }
 
-  /// The page opened on a stored writing shows its stored title and body.
+  /// The page opened on a stored writing shows its stored title and body, not another's. Opening
+  /// each of the two in turn means whichever the store lists first, one test opens the other.
   @Test func rootOpensAStoredWriting() {
-    let writing = Writing(title: "保存した文書", body: "保存した本文。\n二段落目。", updated: .now)
-    assertRoot(remembering: [:], writings: [writing], opening: [writing.id])
+    assertRoot(remembering: [:], writings: twoWritings, opening: [twoWritings[1].id])
+  }
+
+  @Test func rootOpensTheOtherStoredWriting() {
+    assertRoot(remembering: [:], writings: twoWritings, opening: [twoWritings[0].id])
   }
 
   /// The rows are the stored writings, not the samples.
