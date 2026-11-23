@@ -1,6 +1,6 @@
 /// How the writer sets the body text of one document.
 /// `base` moves every role's size together; `lineHeight` and `tracking` apply to the body alone.
-public struct BodySetting: Equatable, Sendable {
+public struct BodySetting: Hashable, Sendable {
   /// The `16` of the size series 16 × 8 / n.
   public static let bases: ClosedRange<Int> = 12...24
   /// The body line height at the default size and base 16, in points on the line grid.
