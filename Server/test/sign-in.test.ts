@@ -627,6 +627,42 @@ describe("a challenge", () => {
 });
 
 describe("signing in", () => {
+  it("answers 401 for an ID token that isn't a JWS", async () => {
+    const apple = fakeApple();
+    const answer = await call(apple.signIn, "/sessions", {
+      challenge: await challenge(apple.signIn),
+      identityToken: "not.a-token",
+    });
+    expect(answer.status).toBe(401);
+  });
+
+  it("answers 502 when Apple's keys can't be fetched", async () => {
+    const apple = fakeApple({ keysAnswer: () => new Response("down", { status: 503 }) });
+    const fresh = await challenge(apple.signIn);
+    const answer = await call(apple.signIn, "/sessions", {
+      challenge: fresh,
+      identityToken: await identityToken(newSub(), fresh),
+    });
+    expect(answer.status).toBe(502);
+  });
+
+  it.each([
+    ["application/json; charset=utf-8", 404],
+    ["text/plain", 400],
+  ])("takes a body sent as %s with %i", async (contentType, status) => {
+    const apple = fakeApple();
+    const fresh = await challenge(apple.signIn);
+    const request = new Request("https://mai.test/sessions", {
+      method: "POST",
+      headers: { "Content-Type": contentType },
+      body: JSON.stringify({
+        challenge: fresh,
+        identityToken: await identityToken(newSub(), fresh),
+      }),
+    });
+    expect((await serve(request, await apple.signIn)).status).toBe(status);
+  });
+
   it("starts a session on the Apple user's account that the writings routes take", async () => {
     const apple = fakeApple();
     const { account, sub } = await makeAccount(apple);
