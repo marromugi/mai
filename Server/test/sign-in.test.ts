@@ -363,6 +363,23 @@ describe("making an account", () => {
   });
 
   it.each([
+    [
+      "no answer",
+      () => {
+        throw new TypeError("Network connection lost.");
+      },
+    ],
+    [
+      "tokens with a status that isn't OK",
+      () =>
+        Response.json(
+          {
+            refresh_token: "refresh",
+            id_token: `e30.${base64url(new TextEncoder().encode(JSON.stringify({ iss: appleIssuer, sub: "x" })))}.e30`,
+          },
+          { status: 302 },
+        ),
+    ],
     ["a 503 page", () => new Response("<html>busy</html>", { status: 503 })],
     ["a 500 page", () => new Response("<html>oops</html>", { status: 500 })],
     ["invalid_grant with a 500", () => Response.json({ error: "invalid_grant" }, { status: 500 })],
@@ -634,6 +651,16 @@ describe("signing in", () => {
       identityToken: "not.a-token",
     });
     expect(answer.status).toBe(401);
+  });
+
+  it("answers 400 for a body that isn't JSON", async () => {
+    const apple = fakeApple();
+    const request = new Request("https://mai.test/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{not json",
+    });
+    expect((await serve(request, await apple.signIn)).status).toBe(400);
   });
 
   it("answers 502 when Apple's keys can't be fetched", async () => {
