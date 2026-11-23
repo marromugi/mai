@@ -1,6 +1,6 @@
 # サーバー
 
-暗号化した文書だけを置き、端末どうしの同期に使う Cloudflare Worker(#25)。データは Turso の 1 つのデータベースに置き、アカウントのデータはどの表でもアカウント ID の列で分ける(#22 の設計、#43)。表は `schema.sql`、Turso に触るのは `src/store.ts` だけで、1 リクエストを 1 つの `batch()`(1 往復・1 トランザクション)にする。サーバーが分かるのは、文書ごとの ID・更新時刻・大きさと、アカウントごとの Apple の利用者・Apple の refresh トークン(封じたもの)・自分の鍵の確かめの値と、App Store の購読(取引の ID・商品・期限・環境)だけ。保存どうしを見分けるリビジョンは暗号化した文書の SHA-256 で、暗号文から誰でも出せるもの。
+暗号化した文書と写真だけを置き、端末どうしの同期に使う Cloudflare Worker(#25)。データは Turso の 1 つのデータベースに、写真は R2 に置き、アカウントのデータはどの表でもアカウント ID の列で分ける(#22 の設計、#43)。表は `schema.sql`、Turso に触るのは `src/store.ts` だけで、1 リクエストを 1 つの `batch()`(1 往復・1 トランザクション)にする(写真を送るときだけは、取り置きのあとに書き終わりを別に書く。下の「写真」)。サーバーが分かるのは、文書ごとの ID・更新時刻・大きさと、写真ごとの ID・大きさと、アカウントごとの Apple の利用者・Apple の refresh トークン(封じたもの)・自分の鍵の確かめの値と、App Store の購読(取引の ID・商品・期限・環境)だけ。保存どうしを見分けるリビジョンは暗号化した文書の SHA-256 で、暗号文から誰でも出せるもの。
 
 ## 暗号化した文書の形
 
@@ -53,11 +53,27 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 `PUT /writings/<ID>` は `Specs/ReadMode` のモデルの `Save` のうち文書そのものを置く部分にあたる。モデルには断られる保存がないので、#26 は受けられた保存にだけ写しを送る。`GET /writings/<ID>` は文書を取るもので、モデルは文書の中身を扱わない。モデルの `Sync` が取り込む設定は #26 が足す。
 
-`GET /account` はセッションのアカウントのことを答える。`plan` はプラン、`paidUntil` はいつまで払われているか(1970 年からのミリ秒)、`lapsed` はそれを過ぎたか。`usage` は `writingsBytes`・`writings`・`requests`・`lists`・`saves` それぞれの `{"used", "limit"}` で、`limit` はプランの上限、`requests`・`lists`・`saves` の `used` はその日(UTC)の、この要求の前までの数。`ownKeyCheck` は自分の鍵の確かめの値(小文字の 16 進)で、まだなければ null。端末はこれで自分の鍵を決める(#22 の設計の 3 節)。
+`GET /account` はセッションのアカウントのことを答える。`plan` はプラン、`paidUntil` はいつまで払われているか(1970 年からのミリ秒)、`lapsed` はそれを過ぎたか。`usage` は `writingsBytes`・`writings`・`photosBytes`・`requests`・`lists`・`saves`・`photos` それぞれの `{"used", "limit"}` で、`limit` はプランの上限、`requests`・`lists`・`saves`・`photos` の `used` はその日(UTC)の、この要求の前までの数。`ownKeyCheck` は自分の鍵の確かめの値(小文字の 16 進)で、まだなければ null。端末はこれで自分の鍵を決める(#22 の設計の 3 節)。
 
 - 端末に自分の鍵があるとき: その鍵から作った値と同じならそのまま使う。null なら `PUT /account/own-key-check` でその値を置く。違えばその鍵は使わず、リカバリーキーを求める。
 - 端末に自分の鍵がないとき: null なら鍵を作って、その値を置く。null でなければ鍵を作らず、リカバリーキーを求める。
 - 置こうとして 409 なら、別の端末が先に鍵を作っている。作った鍵は使わず、リカバリーキーを求める。
+
+### 写真
+
+写真は文書とは別に、写真とサムネイルの 2 つに分けて R2(バインディング `PHOTOS`)に置く(#28)。どちらもアプリが写真ごとの鍵で封じたもので、サーバーは中を見ない。文書は写真をその ID で指す。 どれも上の「セッションのある経路」と同じくセッションが要り、なければ 401。
+
+| 経路                                | 内容                                                                                                                                                                                    |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUT /photos/<ID>`                  | 封じた写真を `application/octet-stream` で、`Content-Length` をつけて送る。1 バイトから 50,000,000 バイトまで。201。その写真がもうあるか、別の要求が今送っていれば 409 で、何も変えない |
+| `PUT /photos/<ID>/thumbnail`        | 封じたサムネイルを同じように。1,000,000 バイトまで。写真より先に送ってもよい                                                                                                            |
+| `GET /photos/<ID>`、`.../thumbnail` | 置いたものをそのまま(`application/octet-stream`)。無ければ 404                                                                                                                          |
+
+型が違えば 415、`Content-Length` がなければ 411、0 バイトなら 400、大きすぎれば 413。写真の ID はアカウントごとに分かれ、ほかのアカウントの写真は読めない。同じ ID を別のアカウントが使っても混ざらない。消す経路はまだない。
+
+送るときは、まず `Content-Length` の分をプランの写真の容量から取っておき(`photos` 表に `state` が `reserved` の行を入れる。トリガーが `accounts.photos_bytes` に足し、超えれば 429)、それから R2 にちょうどその長さだけ書く。書けたら `stored` にして 201。長さが合わないか R2 が失敗したら、行を `releasing` にし、R2 に書いたものを消してから行を消して取っておいた分を戻し、要求は 500 で終わる。R2 で消せなければ行は `releasing` のまま残り、Cron がやり直す。取っておいてから 1 時間たっても `stored` にならない行(Worker が途中で止まったときなど)は、Cron が同じように `releasing` にして戻す。`reserved` の行だけが `stored` か `releasing` になるので、戻している途中の写真が `stored` になることも、`stored` の写真が戻されることもない。書き終わる前に戻されていたら、書いたものを消して 408 を返す。送り直せばよい。送る途中で端末の接続が切れても、Worker は R2 への書き込みと戻しを最後まで続ける(`ctx.waitUntil`)。Worker 自体が止まったときは、Cron が戻すまで(1 時間と少し)同じ写真を送ると 409 になる。
+
+R2 のキーは `<アカウント ID>/<写真 ID>/<photo か thumbnail>/<送るごとの ID>`。送るごとの ID は送り直しのたびに新しく、2 つの要求が同じキーに書くことはない。アカウントのものは `<アカウント ID>/` で始まるので、アカウント削除(#22 の S5)はこの前置きで消す。
 
 ### 購読
 
@@ -69,7 +85,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 - **送り直し**(`PUT /account/subscription`): 同じように確かめ、更新の情報は同じ `originalTransactionId` の取引のものに限る(別の購読のものは 400)。期限が過ぎたものや取り消されたものも受け、その通りに写す。`appAccountToken` が呼んだアカウントでないか、その購読が別のアカウントのものなら 409。期限の切れたアカウントからも送れる。今のものより古いか同じ時刻のもの、前の期間のものなら何も変えずに 200(アプリが同じ取引を送り直したときも)。
 - **通知**(`POST /app-store/notifications`): 署名と環境を同じように確かめ、通らなければ 400、受けない環境なら 403。取引のない通知(`TEST` など)、自動更新の購読でない取引、まだ置いていない購読で `appAccountToken` のアカウントがないものは、何もせず 200。まだ置いていない購読でアカウントがあれば、そのアカウントのものとして置く。今のものより古いか同じ時刻のもの、前の期間のものは何も変えない。Apple は 200 を返すまで送り直す。
 
-`accounts.paid_until` を過ぎたアカウントは期限切れで、文書を読めるが書けない。文書の保存(`PUT /writings/<ID>`)と自分の鍵の確かめの値(`PUT /account/own-key-check`)は 402 で、何も書かず、数えもしない。一覧・読み出し、アカウントを読むこと(`GET /account`)、購読を戻すための送り直しはそのまま使える。`paid_until` が期限の切れた時刻で、それから 90 日で消すのは #22 の S6。
+`accounts.paid_until` を過ぎたアカウントは期限切れで、文書と写真を読めるが書けない。文書の保存(`PUT /writings/<ID>`)、写真とサムネイル(`PUT /photos/<ID>`、`.../thumbnail`)、自分の鍵の確かめの値(`PUT /account/own-key-check`)は 402 で、何も書かず、数えもしない。一覧・読み出し、アカウントを読むこと(`GET /account`)、購読を戻すための送り直しはそのまま使える。`paid_until` が期限の切れた時刻で、それから 90 日で消すのは #22 の S6。
 
 `APP_STORE_ENVIRONMENTS` は受ける購入の環境で、`Production`・`Sandbox`、または両方をカンマで。`wrangler.jsonc` の値は `Production` で、本番の Worker は Sandbox(TestFlight と Sandbox のテスト用アカウント)の購入を受けない。Sandbox のビルドは、`APP_STORE_ENVIRONMENTS` を `Sandbox` にした別の Worker と別のデータベースに向ける。App Review の購入も Sandbox なので、本番が Sandbox も受けるかは #54 で聞いている。Xcode の StoreKit の試験(`environment: "Xcode"`)の取引は Apple の鍵で署名されていないので、どの Worker も受けない。
 
@@ -77,14 +93,21 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 アカウントはプラン(`plans` 表の `basic`・`plus`・`pro`)に入っている。上限に届いた要求は 429 で、何も書かず、数えもしない。
 
-- 1 日(UTC)のリクエスト数、そのうちの一覧(`GET /writings`)と保存(`PUT`、409 になったものも数える)の数。`usage` 表で数える。
+- 1 日(UTC)のリクエスト数、そのうちの一覧(`GET /writings`)と保存(`PUT`、409 になったものも数える)と写真(`PUT /photos/<ID>`。サムネイルは数えない。409 になったものと、取っておいたあと失敗したものも数える)の数。`usage` 表で数える。
 - 文書の合計の大きさと本数。`writings` のトリガーが `accounts` に足し、超えた保存は batch ごと戻る。大きさの減る保存は断らない。
+- 写真とサムネイルの合計の大きさ(上の「写真」)。
+
+| プラン | 写真の容量 | 写真 / 日 |
+| ------ | ---------- | --------- |
+| basic  | 5 GB       | 100       |
+| plus   | 50 GB      | 300       |
+| pro    | 200 GB     | 300       |
 
 上限の値は #22 の設計の案で、プランと値段の答え(#22 の質問)で変わりうる。変えるときは `plans` の行を書き換える。
 
 ### 期限の掃除
 
-Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` と、期限から 1 時間たった `used_challenges` を消す(`Store.sweep`)。#26 の写しと読み取りモードの期限もここに足す。
+Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` と、期限から 1 時間たった `used_challenges` を消す(`Store.sweep`)。1 時間たっても書き終わらない写真の取り置きを、R2 のものと一緒に 1 回 1,000 件まで戻す(`sweepUploads`)。#26 の写しと読み取りモードの期限もここに足す。
 
 ## Apple の署名
 
@@ -128,7 +151,7 @@ scripts/server-contract-test.sh
 まだしていない。するときは、次のものが作られる。
 
 - Turso: データベース `mai` 1 つ(`schema.sql` の表とトリガー、`plans` の 3 行)と、それに書ける認証トークン 1 つ
-- Cloudflare: Worker `mai-server` 1 つ(`workers.dev` の URL つき)、その毎分の Cron Trigger、変数 `APP_STORE_ENVIRONMENTS`(`Production`)、秘密 `TURSO_URL`・`TURSO_TOKEN`・`CHALLENGE_KEY`・`REFRESH_TOKEN_KEY`・`APPLE_CLIENT_ID`・`APPLE_TEAM_ID`・`APPLE_SIGN_IN_KEY_ID`・`APPLE_SIGN_IN_KEY`
+- Cloudflare: R2 のバケット `mai-photos` 1 つ(`wrangler r2 bucket create mai-photos`、Worker のバインディング `PHOTOS`)、Worker `mai-server` 1 つ(`workers.dev` の URL つき)、その毎分の Cron Trigger、変数 `APP_STORE_ENVIRONMENTS`(`Production`)、秘密 `TURSO_URL`・`TURSO_TOKEN`・`CHALLENGE_KEY`・`REFRESH_TOKEN_KEY`・`APPLE_CLIENT_ID`・`APPLE_TEAM_ID`・`APPLE_SIGN_IN_KEY_ID`・`APPLE_SIGN_IN_KEY`
 
 その前に開発者が Apple Developer でしておくこと:
 
@@ -162,6 +185,7 @@ key_id=...    # Sign in with Apple の鍵 ID
 p8=...        # その .p8 のパス
 turso db create mai
 turso db shell mai < schema.sql
+pnpm exec wrangler r2 bucket create mai-photos
 secrets="$(mktemp)"
 printf 'TURSO_URL=%s\nTURSO_TOKEN=%s\n' "$(turso db show mai --url)" "$(turso db tokens create mai)" > "$secrets"
 printf 'CHALLENGE_KEY=%s\nREFRESH_TOKEN_KEY=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -base64 32)" >> "$secrets"

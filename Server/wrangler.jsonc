@@ -4,6 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "triggers": { "crons": ["* * * * *"] },
+  // Sealed photos and thumbnails (src/photos.ts).
+  "r2_buckets": [{ "binding": "PHOTOS", "bucket_name": "mai-photos" }],
   // Whose purchases this Worker takes: Production, Sandbox, or both (Server/README.md).
   "vars": { "APP_STORE_ENVIRONMENTS": "Production" },
   "secrets": {

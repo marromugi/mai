@@ -1,5 +1,5 @@
 import { createClient, LibsqlError } from "@libsql/client/web";
-import type { Client, InStatement, InValue, ResultSet } from "@libsql/client/web";
+import type { Client, InStatement, InValue, ResultSet, Row } from "@libsql/client/web";
 import {
   parseRevision,
   parseWritingId,
@@ -11,10 +11,13 @@ import { parseAccountId, type AccountId } from "./account-id";
 import type { Challenge } from "./challenges";
 import { lastUsedResolution, sessionLifetime, type Caller } from "./sessions";
 import type { Environment } from "./app-store";
+import { parsePhotoId, parsePhotoPart, type PhotoId, type PhotoPart } from "./photo-id";
 
 /**
  * The only file that speaks to Turso. Every request is one `batch()`, so one round trip and one
- * transaction: it checks the caller, does the work only when the caller may, and counts it.
+ * transaction: it checks the caller, does the work only when the caller may, and counts it. A
+ * photo put is the one exception: its reservation is such a batch, and what follows R2 (marking it
+ * stored, or releasing it) is written apart, by the upload's ID, without the caller.
  * The tables are in `Server/schema.sql`.
  */
 
@@ -25,7 +28,7 @@ export type Listed = { id: WritingId; revision: Revision; updated: number; size:
  * lapsed, or a limit of its plan reached.
  */
 export type Refusal = "session" | "lapsed" | Limit;
-export type Limit = "requests" | "lists" | "saves" | "storage";
+export type Limit = "requests" | "lists" | "saves" | "photos" | "storage" | "photo-storage";
 
 export type Answer<T> = { ok: true; value: T } | { ok: false; refusal: Refusal };
 
@@ -83,7 +86,10 @@ export type AccountState = {
   tier: string;
   paidUntil: number;
   lapsed: boolean;
-  usage: Record<"writingsBytes" | "writings" | "requests" | "lists" | "saves", Use>;
+  usage: Record<
+    "writingsBytes" | "writings" | "photosBytes" | "requests" | "lists" | "saves" | "photos",
+    Use
+  >;
   ownKeyCheck: Uint8Array | null;
 };
 
@@ -92,10 +98,24 @@ export type SignedIn =
   | { signedIn: false; reason: "challenge-used" | "no-account" };
 
 /**
- * What a request counts against its plan's daily limits, beside the request itself. `save` and
- * `write` write the account's data, which only a paid-for account may do; only `save` is counted.
+ * What a request counts against its plan's daily limits, beside the request itself. `save`,
+ * `photo` and `write` write the account's data, which only a paid-for account may do; `write` is
+ * not counted.
  */
-type Counted = "list" | "save" | "write" | "other";
+type Counted = "list" | "save" | "photo" | "write" | "other";
+
+/** One upload of a part of a photo, which reserved room for it in the account's plan. */
+export type Upload = {
+  readonly account: AccountId;
+  readonly id: PhotoId;
+  readonly part: PhotoPart;
+  /** Tells this upload from any other of the same part. */
+  readonly upload: string;
+  readonly size: number;
+};
+
+/** Not reserved: the account has that part of the photo already, or is taking it now. */
+export type Reserved = { reserved: true; upload: Upload } | { reserved: false };
 
 type Statement = { sql: string; args?: Record<string, InValue> };
 
@@ -114,6 +134,12 @@ const claimStatement = `INSERT INTO used_challenges (value, expires, claim)
  * it expires still finds it there, however late its batch reaches the database.
  */
 export const usedChallengeMargin = 60 * 60 * 1000;
+
+/**
+ * An upload whose bytes R2 doesn't hold this long after it reserved room for them has failed
+ * without releasing it; the cron trigger releases it.
+ */
+export const uploadLifetime = 60 * 60 * 1000;
 const claimed = `EXISTS (SELECT 1 FROM used_challenges WHERE value = :challenge AND claim = :claim)`;
 
 export class Store {
@@ -226,6 +252,136 @@ export class Store {
         revision: revision === undefined ? null : stored(parseRevision, revision),
       },
     };
+  }
+
+  /**
+   * Reserves `size` bytes of the caller's plan for a part of the photo `id`, before its bytes are
+   * sent on, unless the account has that part already or is taking it now. Only a photo, not its
+   * thumbnail, counts as one of the day's photos.
+   */
+  async reservePhoto(
+    caller: Caller,
+    id: PhotoId,
+    part: PhotoPart,
+    size: number,
+    now: number,
+  ): Promise<Answer<Reserved>> {
+    const upload = crypto.randomUUID();
+    const counted = part === "photo" ? "photo" : "write";
+    let answer;
+    try {
+      answer = await this.#run(caller, now, counted, (account, allowed) => [
+        {
+          sql: `INSERT INTO photos (account_id, id, part, upload, size, reserved)
+                SELECT ${account}, :id, :part, :upload, :size, :now WHERE ${allowed}
+                ON CONFLICT (account_id, id, part) DO NOTHING`,
+          args: { id, part, upload, size },
+        },
+        {
+          sql: `SELECT account_id FROM photos
+                WHERE account_id = ${account} AND id = :id AND part = :part AND upload = :upload`,
+          args: { id, part, upload },
+        },
+      ]);
+    } catch (error) {
+      if (
+        error instanceof LibsqlError &&
+        error.message.includes("mai: over the plan's photo storage")
+      ) {
+        return { ok: false, refusal: "photo-storage" };
+      }
+      throw error;
+    }
+    if (!answer.ok) {
+      return answer;
+    }
+    const row = answer.value[1]?.rows[0];
+    if (row === undefined) {
+      return { ok: true, value: { reserved: false } };
+    }
+    return {
+      ok: true,
+      value: {
+        reserved: true,
+        upload: { account: stored(parseAccountId, row["account_id"]), id, part, upload, size },
+      },
+    };
+  }
+
+  /**
+   * Marks `upload` stored once R2 holds its bytes. False when it is being released or is gone:
+   * released as stale (`uploadLifetime`) before this.
+   */
+  async storePhoto(upload: Upload): Promise<boolean> {
+    const done = await this.#client.execute({
+      sql: `UPDATE photos SET state = 'stored' WHERE upload = :upload AND state = 'reserved'`,
+      args: { upload: upload.upload },
+    });
+    return done.rowsAffected === 1;
+  }
+
+  /** The upload R2 holds for that part of the caller's photo `id`, or undefined for none. */
+  async readPhoto(
+    caller: Caller,
+    id: PhotoId,
+    part: PhotoPart,
+    now: number,
+  ): Promise<Answer<Upload | undefined>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT account_id, id, part, upload, size FROM photos
+              WHERE account_id = ${account} AND id = :id AND part = :part AND state = 'stored'
+                AND ${allowed}`,
+        args: { id, part },
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    const row = answer.value[0]?.rows[0];
+    return { ok: true, value: row === undefined ? undefined : uploadOf(row) };
+  }
+
+  /**
+   * Starts releasing `upload`, which failed, unless it was stored. Answers it while it is being
+   * released, for what R2 got of it to be deleted before `forgetReleased`.
+   */
+  async startReleasing(upload: Upload): Promise<Upload[]> {
+    const { rows } = await this.#client.execute({
+      sql: `UPDATE photos SET state = 'releasing' WHERE upload = :upload AND state != 'stored'
+            RETURNING account_id, id, part, upload, size`,
+      args: { upload: upload.upload },
+    });
+    return rows.map(uploadOf);
+  }
+
+  /**
+   * Starts releasing at most `count` uploads reserved `uploadLifetime` or longer before `now` and
+   * never stored, and answers them.
+   */
+  async releaseStale(now: number, count: number): Promise<Upload[]> {
+    const { rows } = await this.#client.execute({
+      sql: `UPDATE photos SET state = 'releasing'
+            WHERE upload IN (SELECT upload FROM photos
+                             WHERE state != 'stored' AND reserved <= :stale LIMIT :count)
+            RETURNING account_id, id, part, upload, size`,
+      args: { stale: now - uploadLifetime, count },
+    });
+    return rows.map(uploadOf);
+  }
+
+  /** Releases the room of `uploads` being released, once R2 holds nothing of them. */
+  async forgetReleased(uploads: readonly Upload[]): Promise<void> {
+    if (uploads.length === 0) {
+      return;
+    }
+    await this.#client.batch(
+      uploads.map((upload) => ({
+        sql: `DELETE FROM photos WHERE upload = :upload AND state = 'releasing'`,
+        args: { upload: upload.upload },
+      })),
+      "write",
+    );
   }
 
   /** Checks the caller and counts the request, for a request that does nothing else. */
@@ -410,9 +566,11 @@ export class Store {
         sql: `SELECT a.tier, a.paid_until, NOT ${paidNow} AS lapsed, a.own_key_check,
                 a.writings_bytes, p.writings_bytes AS writings_bytes_limit,
                 a.writings_count, p.writings_count AS writings_count_limit,
+                a.photos_bytes, p.photos_bytes AS photos_bytes_limit,
                 coalesce(u.requests, 0) AS requests, p.requests_per_day,
                 coalesce(u.lists, 0) AS lists, p.lists_per_day,
-                coalesce(u.saves, 0) AS saves, p.saves_per_day
+                coalesce(u.saves, 0) AS saves, p.saves_per_day,
+                coalesce(u.photos, 0) AS photos, p.photos_per_day
               FROM accounts a
               JOIN plans p ON p.tier = a.tier
               LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
@@ -443,9 +601,11 @@ export class Store {
         usage: {
           writingsBytes: use("writings_bytes", "writings_bytes_limit"),
           writings: use("writings_count", "writings_count_limit"),
+          photosBytes: use("photos_bytes", "photos_bytes_limit"),
           requests: use("requests", "requests_per_day"),
           lists: use("lists", "lists_per_day"),
           saves: use("saves", "saves_per_day"),
+          photos: use("photos", "photos_per_day"),
         },
         ownKeyCheck: check === null ? null : new Uint8Array(check),
       },
@@ -516,7 +676,8 @@ export class Store {
       day: Math.floor(now / day),
       list: counted === "list" ? 1 : 0,
       save: counted === "save" ? 1 : 0,
-      write: counted === "save" || counted === "write" ? 1 : 0,
+      photo: counted === "photo" ? 1 : 0,
+      write: counted === "save" || counted === "photo" || counted === "write" ? 1 : 0,
     };
     const callerRows = `FROM sessions s
       JOIN accounts a ON a.id = s.account_id
@@ -529,9 +690,10 @@ export class Store {
       requests: "coalesce(u.requests, 0) < p.requests_per_day",
       lists: "(:list = 0 OR coalesce(u.lists, 0) < p.lists_per_day)",
       saves: "(:save = 0 OR coalesce(u.saves, 0) < p.saves_per_day)",
+      photos: "(:photo = 0 OR coalesce(u.photos, 0) < p.photos_per_day)",
     };
     const allowed = `EXISTS (SELECT 1 ${callerRows}
-      AND ${paid} AND ${left.requests} AND ${left.lists} AND ${left.saves})`;
+      AND ${paid} AND ${left.requests} AND ${left.lists} AND ${left.saves} AND ${left.photos})`;
     const account = "(SELECT account_id FROM sessions WHERE id = :session)";
     const statements = work(account, allowed);
 
@@ -539,14 +701,15 @@ export class Store {
       [
         {
           sql: `SELECT ${paid} AS lapsed, ${left.requests} AS requests, ${left.lists} AS lists,
-                ${left.saves} AS saves ${callerRows}`,
+                ${left.saves} AS saves, ${left.photos} AS photos ${callerRows}`,
         },
         ...statements,
         {
-          sql: `INSERT INTO usage (account_id, day, requests, lists, saves)
-                SELECT ${account}, :day, 1, :list, :save WHERE ${allowed}
+          sql: `INSERT INTO usage (account_id, day, requests, lists, saves, photos)
+                SELECT ${account}, :day, 1, :list, :save, :photo WHERE ${allowed}
                 ON CONFLICT (account_id, day) DO UPDATE SET requests = requests + 1,
-                  lists = lists + excluded.lists, saves = saves + excluded.saves`,
+                  lists = lists + excluded.lists, saves = saves + excluded.saves,
+                  photos = photos + excluded.photos`,
         },
         {
           sql: `UPDATE sessions SET last_used = :now
@@ -561,7 +724,7 @@ export class Store {
     if (gate === undefined) {
       return { ok: false, refusal: "session" };
     }
-    for (const limit of ["lapsed", "requests", "lists", "saves"] as const) {
+    for (const limit of ["lapsed", "requests", "lists", "saves", "photos"] as const) {
       if (Number(gate[limit]) !== 1) {
         return { ok: false, refusal: limit };
       }
@@ -612,6 +775,17 @@ function keepStatements(condition: string): string[] {
      WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original)
        AND ${condition}`,
   ];
+}
+
+/** An upload as a row of `photos` holds it. */
+function uploadOf(row: Row): Upload {
+  return {
+    account: stored(parseAccountId, row["account_id"]),
+    id: stored(parsePhotoId, row["id"]),
+    part: stored(parsePhotoPart, row["part"]),
+    upload: stored((upload) => upload, row["upload"]),
+    size: Number(row["size"]),
+  };
 }
 
 /** A value read back from a column only this file writes, which holds only valid values. */
