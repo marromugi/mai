@@ -108,21 +108,21 @@ function timeOf(element: Element | undefined): number | undefined {
   if (match === null) {
     return undefined;
   }
-  const [year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0] = match
-    .slice(1)
-    .map(Number);
-  const fullYear = element.tag === tags.utcTime ? (year < 50 ? 2000 : 1900) + year : year;
-  const time = Date.UTC(fullYear, month - 1, day, hour, minute, second);
-  const read = new Date(time);
-  // Date.UTC rolls an impossible date such as month 13 over into a real one.
-  return read.getUTCFullYear() === fullYear &&
-    read.getUTCMonth() === month - 1 &&
-    read.getUTCDate() === day &&
-    read.getUTCHours() === hour &&
-    read.getUTCMinutes() === minute &&
-    read.getUTCSeconds() === second
-    ? time
-    : undefined;
+  const [year = "", month = "", day = "", hour = "", minute = "", second = ""] = match.slice(1);
+  const fullYear =
+    element.tag === tags.utcTime ? (Number(year) < 50 ? 2000 : 1900) + Number(year) : Number(year);
+  const time = Date.UTC(
+    fullYear,
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  );
+  // Date.UTC rolls an impossible date such as month 13 over into a real one, which reads back
+  // differently.
+  const written = `${String(fullYear).padStart(4, "0")}-${month}-${day}T${hour}:${minute}:${second}`;
+  return new Date(time).toISOString().startsWith(written) ? time : undefined;
 }
 
 export const oids = {

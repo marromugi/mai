@@ -17,12 +17,12 @@ function length(count: number): number[] {
   return [0x80 | bytes.length, ...bytes];
 }
 
-function tlv(tag: number, ...parts: Uint8Array[]): Uint8Array {
+export function tlv(tag: number, ...parts: Uint8Array[]): Uint8Array {
   const contents = concat(...parts);
   return concat(Uint8Array.of(tag, ...length(contents.length)), contents);
 }
 
-function concat(...parts: Uint8Array[]): Uint8Array {
+export function concat(...parts: Uint8Array[]): Uint8Array {
   const joined = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -32,7 +32,7 @@ function concat(...parts: Uint8Array[]): Uint8Array {
   return joined;
 }
 
-const sequence = (...parts: Uint8Array[]) => tlv(0x30, ...parts);
+export const sequence = (...parts: Uint8Array[]) => tlv(0x30, ...parts);
 
 function oid(text: string): Uint8Array {
   const [first = 0, second = 0, ...rest] = text.split(".").map(Number);
@@ -47,7 +47,7 @@ function oid(text: string): Uint8Array {
   return tlv(0x06, Uint8Array.from(bytes));
 }
 
-function integer(bytes: Uint8Array): Uint8Array {
+export function integer(bytes: Uint8Array): Uint8Array {
   let start = 0;
   while (start < bytes.length - 1 && bytes[start] === 0) {
     start += 1;
@@ -101,12 +101,17 @@ export type CertificateOptions = {
   readonly curve: Curve;
   /** Signs the certificate; the certificate signs itself when left out. */
   readonly issuer?: Issued;
-  readonly authority?: boolean;
+  /** `"stated-false"` writes basicConstraints with `cA` set to FALSE, rather than leaving it out. */
+  readonly authority?: boolean | "stated-false";
   readonly extensions?: readonly string[];
   readonly notBefore?: number;
   readonly notAfter?: number;
-  /** A UTCTime written as is in place of `notBefore`, to make one no calendar has. */
-  readonly notBeforeText?: string;
+  /** A time written as is in place of `notBefore`: its tag (UTCTime 0x17) and its text. */
+  readonly notBeforeTime?: { readonly tag: number; readonly text: string };
+  /** The issuer's name as the certificate writes it, when it isn't the issuer's own. */
+  readonly issuerName?: string;
+  /** What the issuer hashes as it signs; SHA-384 when left out. */
+  readonly hash?: "SHA-256" | "SHA-384";
 };
 
 const year = 365 * 24 * 60 * 60 * 1000;
@@ -115,14 +120,20 @@ export async function makeCertificate(options: CertificateOptions): Promise<Issu
   const keys = keyPair(
     await crypto.subtle.generateKey(keyParameters(options.curve), true, ["sign", "verify"]),
   );
-  const issuerName = options.issuer?.name ?? options.name;
+  const issuerName = options.issuerName ?? options.issuer?.name ?? options.name;
+  const hash = options.hash ?? "SHA-384";
   const signingKey = options.issuer?.keys.privateKey ?? keys.privateKey;
   const signingCurve = options.issuer?.curve ?? options.curve;
   const now = Date.now();
-  const algorithm = sequence(oid(oids.ecdsaWithSha384));
+  const algorithm = sequence(oid(hash === "SHA-256" ? oids.ecdsaWithSha256 : oids.ecdsaWithSha384));
   const extensions = [
-    ...(options.authority === true
-      ? [extension(oids.basicConstraints, sequence(tlv(0x01, Uint8Array.of(0xff))))]
+    ...(options.authority === true || options.authority === "stated-false"
+      ? [
+          extension(
+            oids.basicConstraints,
+            sequence(tlv(0x01, Uint8Array.of(options.authority === true ? 0xff : 0x00))),
+          ),
+        ]
       : []),
     ...(options.extensions ?? []).map((id) => extension(id, Uint8Array.of(0x05, 0x00))),
   ];
@@ -132,18 +143,16 @@ export async function makeCertificate(options: CertificateOptions): Promise<Issu
     algorithm,
     name(issuerName),
     sequence(
-      options.notBeforeText === undefined
+      options.notBeforeTime === undefined
         ? time(options.notBefore ?? now - year)
-        : tlv(0x17, new TextEncoder().encode(options.notBeforeText)),
+        : tlv(options.notBeforeTime.tag, new TextEncoder().encode(options.notBeforeTime.text)),
       time(options.notAfter ?? now + year),
     ),
     name(options.name),
     new Uint8Array(buffer(await crypto.subtle.exportKey("spki", keys.publicKey))),
     ...(extensions.length > 0 ? [tlv(0xa3, sequence(...extensions))] : []),
   );
-  const raw = new Uint8Array(
-    await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-384" }, signingKey, signed),
-  );
+  const raw = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash }, signingKey, signed));
   const half = signingCurve === "P-256" ? 32 : 48;
   const signature = sequence(integer(raw.subarray(0, half)), integer(raw.subarray(half)));
   const der = sequence(signed, algorithm, tlv(0x03, Uint8Array.of(0), signature));

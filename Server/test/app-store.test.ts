@@ -217,7 +217,10 @@ describe("a signed transaction", () => {
       { leaf: { notAfter: signedDate - 2 * 60_000 } },
     ],
     ["a leaf not yet valid when it was signed", { leaf: { notBefore: signedDate + 2 * 60_000 } }],
-    ["a leaf valid from a day no calendar has", { leaf: { notBeforeText: "991399999999Z" } }],
+    [
+      "a leaf valid from a day no calendar has",
+      { leaf: { notBeforeTime: { tag: 0x17, text: "991399999999Z" } } },
+    ],
     [
       "an intermediate whose validity ended before it was signed",
       { intermediate: { notAfter: signedDate - 2 * 60_000 } },
@@ -435,8 +438,172 @@ describe("an App Store Server Notification", () => {
     ["no notificationType", { notificationType: undefined }],
     ["no data or summary", { data: undefined }],
     ["no signedDate", { signedDate: undefined }],
+    ["no notificationUUID", { notificationUUID: undefined }],
+    ["no version", { version: undefined }],
+    ["a subtype that isn't text", { subtype: 5 }],
   ])("is turned down with %s", async (_, change) => {
     const jws = await signAppStore(await notification(change), chain);
     expect(await verifyNotification(jws, expected)).toEqual({ ok: false, failure: "malformed" });
+  });
+
+  it.each([
+    ["no environment", { environment: undefined }],
+    ["a transaction that is null", { signedTransactionInfo: null }],
+    ["a transaction that isn't text", { signedTransactionInfo: 42 }],
+    ["renewal info that isn't text", { signedRenewalInfo: 42 }],
+    ["a transaction that isn't a JWS", { signedTransactionInfo: "not a jws" }],
+  ])("is turned down with data holding %s", async (_, data) => {
+    const jws = await signAppStore(await notification({}, data), chain);
+    expect(await verifyNotification(jws, expected)).toEqual({ ok: false, failure: "malformed" });
+  });
+
+  it.each([
+    ["externalPurchaseToken", { externalPurchaseTokenId: "t1", appAppleId: 1, bundleId }],
+    ["appData", { appAppleId: 1, bundleId, environment: "Sandbox" }],
+  ])("is accepted with %s in place of data", async (field, about) => {
+    const payload = await notification({ data: undefined, [field]: about });
+    const verified = await verifyNotification(await signAppStore(payload, chain), expected);
+    expect(verified.ok && verified.value.data).toBeUndefined();
+  });
+
+  it("is turned down when it isn't a JWS", async () => {
+    expect(await verifyNotification("not a jws", expected)).toEqual({
+      ok: false,
+      failure: "malformed",
+    });
+  });
+});
+
+describe("a signed transaction's fields", () => {
+  it("are read from Production as from Sandbox", async () => {
+    const jws = await signAppStore(transaction({ environment: "Production" }), chain);
+    const verified = await verifyTransaction(jws, expected);
+    expect(verified.ok && verified.value.environment).toBe("Production");
+  });
+
+  it.each([
+    ["no transactionId", { transactionId: undefined }],
+    ["no productId", { productId: undefined }],
+    ["an empty productId", { productId: "" }],
+    ["no type", { type: undefined }],
+    ["no purchaseDate", { purchaseDate: undefined }],
+    ["a purchaseDate that isn't whole", { purchaseDate: 1.5 }],
+    ["a revocationDate that isn't a number", { revocationDate: "yesterday" }],
+    ["an appAccountToken with text before it", { appAccountToken: `x${accountId}` }],
+    ["an appAccountToken with text after it", { appAccountToken: `${accountId}x` }],
+  ])("are turned down with %s", async (_, change) => {
+    const jws = await signAppStore(transaction(change), chain);
+    expect(await verifyTransaction(jws, expected)).toEqual({ ok: false, failure: "malformed" });
+  });
+});
+
+describe("signed renewal info's fields", () => {
+  it.each([
+    ["no originalTransactionId", { originalTransactionId: undefined }],
+    ["no productId", { productId: undefined }],
+    ["no environment", { environment: undefined }],
+    ["an autoRenewProductId that isn't text", { autoRenewProductId: 5 }],
+    ["an expirationIntent that isn't a number", { expirationIntent: "1" }],
+    ["a gracePeriodExpiresDate that isn't a number", { gracePeriodExpiresDate: "soon" }],
+    ["an isInBillingRetryPeriod that isn't true or false", { isInBillingRetryPeriod: 1 }],
+    ["a renewalDate that isn't a number", { renewalDate: "soon" }],
+    ["an appAccountToken that isn't a UUID", { appAccountToken: "account-1" }],
+  ])("are turned down with %s", async (_, change) => {
+    const jws = await signAppStore(renewalInfo(change), chain);
+    expect(await verifyRenewalInfo(jws, expected)).toEqual({ ok: false, failure: "malformed" });
+  });
+});
+
+describe("an App Store chain", () => {
+  /** A whole second, so certificate times, which hold seconds, can sit exactly on it. */
+  const at = Math.floor(signedDate / 1000) * 1000;
+  const skew = 60_000;
+
+  async function verdict(changes: Parameters<typeof makeChain>[0], root = chain.root) {
+    const made = await makeChain({ root, ...changes });
+    return verifyTransaction(await signAppStore(transaction({ signedDate: at }), made), {
+      root: certificateOf(root),
+      bundleId,
+    });
+  }
+
+  it.each([
+    ["a leaf that ended the skew before it was signed", { leaf: { notAfter: at - skew } }],
+    ["a leaf that starts the skew after it was signed", { leaf: { notBefore: at + skew } }],
+    ["an intermediate that ended the skew before", { intermediate: { notAfter: at - skew } }],
+    ["an intermediate that starts the skew after", { intermediate: { notBefore: at + skew } }],
+    [
+      "certificates signed with ECDSA and SHA-256",
+      { intermediate: { hash: "SHA-256" as const }, leaf: { hash: "SHA-256" as const } },
+    ],
+  ])("holds with %s", async (_, changes) => {
+    expect((await verdict(changes)).ok).toBe(true);
+  });
+
+  it.each([
+    ["a leaf that ended just past the skew", { leaf: { notAfter: at - skew - 1000 } }],
+    ["a leaf that starts just past the skew", { leaf: { notBefore: at + skew + 1000 } }],
+    [
+      "a leaf naming an issuer that isn't the intermediate",
+      { leaf: { issuerName: "Someone Else" } },
+    ],
+    [
+      "an intermediate stating it isn't an authority",
+      { intermediate: { authority: "stated-false" as const } },
+    ],
+  ])("breaks with %s", async (_, changes) => {
+    expect(await verdict(changes)).toEqual({ ok: false, failure: "chain" });
+  });
+
+  it("breaks when the root's validity ended before it was signed", async () => {
+    const root = await makeCertificate({
+      name: "Old Root CA",
+      curve: "P-384",
+      authority: true,
+      notAfter: at - skew - 1000,
+    });
+    expect(await verdict({}, root)).toEqual({ ok: false, failure: "chain" });
+  });
+
+  it("breaks when the root's validity starts after it was signed", async () => {
+    const root = await makeCertificate({
+      name: "Young Root CA",
+      curve: "P-384",
+      authority: true,
+      notBefore: at + skew + 1000,
+    });
+    expect(await verdict({}, root)).toEqual({ ok: false, failure: "chain" });
+  });
+
+  it.each([
+    ["a leaf that isn't text", (x5c: unknown[]) => [42, ...x5c.slice(1)]],
+    ["an intermediate that isn't text", (x5c: unknown[]) => [x5c[0], 42, x5c[2]]],
+    [
+      "an intermediate cut short",
+      (x5c: unknown[]) => [x5c[0], String(x5c[1]).slice(0, 40), x5c[2]],
+    ],
+  ])("breaks with %s in x5c", async (_, change) => {
+    const jws = await signAppStore(transaction(), chain);
+    const header = headerOf(jws);
+    const x5c = Array.isArray(header["x5c"]) ? header["x5c"] : [];
+    expect(
+      await verifyTransaction(withHeader(jws, { ...header, x5c: change(x5c) }), expected),
+    ).toEqual({ ok: false, failure: "chain" });
+  });
+
+  it("breaks when the leaf's signature isn't a DER SEQUENCE", async () => {
+    const der = chain.leaf.der.slice();
+    // The signature ends the certificate: BIT STRING, its length, no unused bits, SEQUENCE { r, s }.
+    const bits = der.findIndex(
+      (byte, index) =>
+        byte === 0x03 &&
+        der[index + 1] === der.length - index - 2 &&
+        der[index + 2] === 0 &&
+        der[index + 3] === 0x30,
+    );
+    expect(bits).toBeGreaterThan(0);
+    der[bits + 3] = 0x31;
+    const jws = await signAppStore(transaction(), { ...chain, leaf: { ...chain.leaf, der } });
+    expect(await verifyTransaction(jws, expected)).toEqual({ ok: false, failure: "chain" });
   });
 });

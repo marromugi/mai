@@ -257,3 +257,114 @@ describe("Apple's keys", () => {
     expect(await keys.key(signer.kid, now)).toEqual({ ok: false, failure: "unknown-key" });
   });
 });
+
+describe("an ID token without a key ID", () => {
+  it("is malformed, and Apple isn't asked", async () => {
+    const { keys, asked } = await freshKeys(() => jwks([signer]));
+    const token = await signIdentityToken(claims(), signer, { kid: undefined });
+
+    expect(await verifyIdentityToken(token, { bundleId, nonce }, keys, now)).toEqual({
+      ok: false,
+      failure: "malformed",
+    });
+    expect(asked).toEqual([]);
+  });
+});
+
+/** A cache holding Apple's keys with the given headers, and keys reading it. */
+async function keptWith(headers: Record<string, string>) {
+  const cache = await caches.open(crypto.randomUUID());
+  await cache.put(
+    appleKeysUrl,
+    new Response(await jwks([signer]), {
+      headers: { "Cache-Control": `max-age=${keysLifetime / 1000}`, ...headers },
+    }),
+  );
+  const apple = fakeApple(() => jwks([signer]));
+  return { keys: new AppleSignInKeys(apple.fetchKeys, cache), asked: apple.asked };
+}
+
+describe("Apple's keys as kept", () => {
+  it("count the gap from their fetch when no try is written", async () => {
+    const { keys, asked } = await keptWith({ "Mai-Fetched": String(now) });
+
+    expect(await keys.key(other.kid, now + 1)).toEqual({ ok: false, failure: "unknown-key" });
+    expect(asked).toEqual([]);
+  });
+
+  it.each([
+    ["a fetch time that isn't a number", { "Mai-Fetched": "soon" }],
+    ["no fetch time", {}],
+    ["a try time that isn't a number", { "Mai-Fetched": String(now), "Mai-Tried": "x" }],
+  ])("are fetched again with %s", async (_, headers) => {
+    const { keys, asked } = await keptWith(headers);
+
+    expect((await keys.key(signer.kid, now)).ok).toBe(true);
+    expect(asked).toHaveLength(1);
+  });
+
+  it("still last a day from their fetch after a fetch that failed", async () => {
+    let up = true;
+    const asked: string[] = [];
+    const keys = new AppleSignInKeys(
+      async (url) => {
+        asked.push(url);
+        return up ? new Response(await jwks([signer])) : new Response("down", { status: 503 });
+      },
+      await caches.open(crypto.randomUUID()),
+    );
+    await keys.key(signer.kid, now);
+    up = false;
+    await keys.key(other.kid, now + refetchGap);
+    up = true;
+
+    expect((await keys.key(signer.kid, now + keysLifetime)).ok).toBe(true);
+    expect(asked).toHaveLength(3);
+  });
+});
+
+async function keyFrom(body: unknown) {
+  const { keys } = await freshKeys(async () => JSON.stringify(body));
+  return keys.key(signer.kid, now);
+}
+
+async function signerEntry(): Promise<Record<string, unknown>> {
+  const body: unknown = JSON.parse(await jwks([signer]));
+  const [entry] = isJson(body) && Array.isArray(body["keys"]) ? body["keys"] : [];
+  return isJson(entry) ? { ...entry } : {};
+}
+
+describe("Apple's JWKS", () => {
+  it("is unavailable when Apple answers an error with a JWKS body", async () => {
+    const body = await jwks([signer]);
+    const keys = new AppleSignInKeys(
+      async () => new Response(body, { status: 500 }),
+      await caches.open(crypto.randomUUID()),
+    );
+    expect(await keys.key(signer.kid, now)).toEqual({ ok: false, failure: "keys-unavailable" });
+  });
+
+  it.each([
+    ["keys that aren't a list", () => ({ keys: {} })],
+    ["no keys", () => ({})],
+    ["a list", () => []],
+  ])("is unavailable with %s", async (_, body) => {
+    expect(await keyFrom(body())).toEqual({ ok: false, failure: "keys-unavailable" });
+  });
+
+  it.each([
+    ["another kty", { kty: "EC" }],
+    ["no kid", { kid: undefined }],
+    ["no n", { n: undefined }],
+    ["no e", { e: undefined }],
+  ])("leaves out an entry with %s", async (_, change) => {
+    expect(await keyFrom({ keys: [{ ...(await signerEntry()), ...change }] })).toEqual({
+      ok: false,
+      failure: "unknown-key",
+    });
+  });
+
+  it("reads past an entry that isn't an object", async () => {
+    expect((await keyFrom({ keys: ["junk", await signerEntry()] })).ok).toBe(true);
+  });
+});
