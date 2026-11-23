@@ -106,7 +106,7 @@ Save(d, w) ==
 \* Copies from an earlier period carry its expiry, so they go.
 \* The server refuses a period that has already ended by its clock.
 TurnOn(d, until) ==
-    /\ ~IsOn(view[d].mode, clock[d])
+    /\ ~view[d].mode.on
     /\ clock[d] < until
     /\ now < until
     /\ LET m == [on |-> TRUE, until |-> until]
@@ -192,10 +192,8 @@ Tick ==
                    copies, wrappedFor, view>>
     /\ fetched' = {}
 
-\* The server's cron, at most once per clock step: deletes expired copies and
-\* the expired mode.
+\* The server's cron: deletes expired copies and the expired mode.
 Sweep ==
-    /\ ~swept
     /\ swept' = TRUE
     /\ copies' = IF Broken = "KeepExpiredCopy" THEN copies
                  ELSE {c \in copies : now < c.expires}
