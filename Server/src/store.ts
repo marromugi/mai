@@ -42,7 +42,7 @@ export type NewAccount = {
 export type Made = "made" | "challenge-used" | "taken";
 
 export type SignedIn =
-  | { signedIn: true; account: string; ownKeyCheck: Uint8Array | null }
+  | { signedIn: true; account: string }
   | { signedIn: false; reason: "challenge-used" | "no-account" };
 
 /** What a request counts against its plan's daily limits, beside the request itself. */
@@ -223,7 +223,7 @@ export class Store {
       [
         `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
          SELECT :session, id, :hash, :now, :now FROM accounts WHERE apple_sub = :sub AND ${claimed}`,
-        `SELECT id, own_key_check FROM accounts WHERE apple_sub = :sub AND ${claimed}`,
+        `SELECT id FROM accounts WHERE apple_sub = :sub AND ${claimed}`,
       ],
       { sub: appleSub, session: session.session, hash: session.secretSha256, now },
     );
@@ -235,11 +235,9 @@ export class Store {
     if (started?.rowsAffected !== 1 || row === undefined) {
       return { signedIn: false, reason: "no-account" };
     }
-    const check = row["own_key_check"];
     return {
       signedIn: true,
       account: stored(parseWritingId, row["id"]),
-      ownKeyCheck: check instanceof ArrayBuffer ? new Uint8Array(check) : null,
     };
   }
 

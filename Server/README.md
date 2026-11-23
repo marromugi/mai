@@ -28,7 +28,7 @@
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /challenges` | 201 と `{"challenge"}`。5 分使える。アプリはその SHA-256(小文字の 16 進)を Sign in with Apple の nonce にする                                                                                                                                                                                  |
 | `POST /account`    | `{"account", "challenge", "identityToken", "authorizationCode"}`。`account` はアプリが作った UUID で、購入の `appAccountToken` と同じもの。201 と `{"token"}`(セッションのトークン)。その Apple の利用者かその ID のアカウントがもうあれば 409 で、何も作らない(サインインは `POST /sessions`) |
-| `POST /sessions`   | `{"challenge", "identityToken"}`。200 と `{"account", "token", "ownKeyCheck"}`(`ownKeyCheck` はまだなければ null、あれば base64url)。その Apple の利用者のアカウントがなければ 404                                                                                                             |
+| `POST /sessions`   | `{"challenge", "identityToken"}`。200 と `{"account", "token"}`。その Apple の利用者のアカウントがなければ 404                                                                                                                                                                                 |
 
 ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・`aud`(`APPLE_CLIENT_ID`)・`exp` と、nonce がチャレンジの SHA-256 であることを確かめる。チャレンジは `CHALLENGE_KEY` の HMAC で、サーバーは出すときには何も書かず、使ったものを期限まで `used_challenges` に置く。使ったもの、このサーバーが出していないもの、期限の切れたもの、ID トークンが別のチャレンジに作られたものは 401。チャレンジは通ればその場で使ったことになり、409 や 404 で終わっても使い直せない。
 

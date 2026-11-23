@@ -4,7 +4,7 @@ import type { Challenge, Challenges } from "./challenges";
 import { parseWritingId } from "./envelope";
 import { isJson, text, type Json } from "./jws";
 import type { RefreshTokens } from "./refresh-tokens";
-import { base64url, newSessionToken } from "./sessions";
+import { newSessionToken } from "./sessions";
 import type { Store } from "./store";
 
 /**
@@ -95,11 +95,7 @@ export async function startSession(
       ? problem(401, challengeUsed)
       : problem(404, "this Apple user has no account");
   }
-  return Response.json({
-    account: signedIn.account,
-    token,
-    ownKeyCheck: signedIn.ownKeyCheck === null ? null : base64url(signedIn.ownKeyCheck),
-  });
+  return Response.json({ account: signedIn.account, token });
 }
 
 const challengeUsed = "the challenge was used already; ask for another";

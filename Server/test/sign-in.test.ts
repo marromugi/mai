@@ -10,7 +10,7 @@ import { readCompactJws } from "../src/jws";
 import { RefreshTokens } from "../src/refresh-tokens";
 import type { SignIn } from "../src/sign-in";
 import { store } from "./accounts";
-import { base64url, jwks, makeSignInKey, signIdentityToken, type SignInKey } from "./apple-fakes";
+import { jwks, makeSignInKey, signIdentityToken, type SignInKey } from "./apple-fakes";
 
 const database = createClient({ url: env.TURSO_URL });
 
@@ -428,8 +428,8 @@ describe("signing in", () => {
     const answer = await signInAs(apple, sub);
 
     expect(answer.status).toBe(200);
-    const body = await answer.json<{ account: string; token: string; ownKeyCheck: null }>();
-    expect(body).toMatchObject({ account, ownKeyCheck: null });
+    const body = await answer.json<{ account: string; token: string }>();
+    expect(body).toEqual({ account, token: expect.stringMatching(/^s1\./) });
     const listed = await deployed("/writings", {
       headers: { Authorization: `Bearer ${body.token}` },
     });
@@ -483,9 +483,6 @@ describe("the own key check", () => {
     expect((await put(token, first)).status).toBe(204);
     expect((await put(token, first)).status).toBe(204);
     expect((await put(token, crypto.getRandomValues(new Uint8Array(32)))).status).toBe(409);
-
-    const signedIn = await (await signInAs(apple, made.sub)).json<{ ownKeyCheck: string }>();
-    expect(signedIn.ownKeyCheck).toBe(base64url(first));
   });
 
   it("is one account's own: another account's check doesn't stop it", async () => {
