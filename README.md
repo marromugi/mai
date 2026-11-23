@@ -12,7 +12,7 @@ xcodegen generate
 open Mai.xcodeproj
 ```
 
-コードは `Packages/Modules` のローカルパッケージに置き、`App/` はアプリの入り口だけを持つ。UIKit と SwiftUI を使わない文字組みの計算(文字の大きさ、行の高さ、余白、版面など)は `Packages/Typesetting` に置き、`Packages/Modules` がそれを使う。
+コードは `Packages/Modules` のローカルパッケージに置き、`App/` はアプリの入り口だけを持つ。UIKit と SwiftUI を使わない文字組みの計算(文字の大きさ、行の高さ、余白、版面など)は `Packages/Typesetting` に置き、`Packages/Modules` がそれを使う。文書の暗号化と同期は `Packages/Sync` に、同期先のサーバー(Cloudflare Worker)は `Server/` に置く(`Server/README.md`)。
 
 ## テスト
 
@@ -20,6 +20,19 @@ open Mai.xcodeproj
 
 ```sh
 swift test --package-path Packages/Typesetting
+```
+
+`Packages/Sync` のテストも Mac で走る。名前に `Contract` の付くテストは手元の Worker が要るので外し、`scripts/server-contract-test.sh` で走らせる(`Server/README.md`)。
+
+```sh
+swift test --package-path Packages/Sync --skip Contract
+```
+
+キーチェーンのテストはアプリの中でしか走らないので、`Mai` スキームの `MaiTests`(`AppTests/`)に置く。
+
+```sh
+xcodebuild test -project Mai.xcodeproj -scheme Mai -only-testing:MaiTests \
+  -destination 'platform=iOS Simulator,name=mai-snapshots' -collect-test-diagnostics never
 ```
 
 Dynamic Type の大きさ、フォント、画面のテストは `Packages/Modules` にあり、スナップショットテストと一緒にシミュレータで走る(次の節)。
