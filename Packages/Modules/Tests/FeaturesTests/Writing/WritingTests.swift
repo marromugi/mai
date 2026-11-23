@@ -75,12 +75,57 @@ struct WritingTests {
     ),
     // Through the middle of 🍞.
     ([BodyLink(range: 1..<3, url: bread)], [BodyLink(range: 0..<3, url: bread)]),
+    ([BodyLink(range: -1..<2, url: bread)], []),
+    // The third starts after the second, not the first.
+    (
+      [
+        BodyLink(range: 0..<2, url: bread), BodyLink(range: 2..<3, url: flour),
+        BodyLink(range: 2..<4, url: bread),
+      ],
+      [
+        BodyLink(range: 0..<2, url: bread), BodyLink(range: 2..<3, url: flour),
+        BodyLink(range: 3..<4, url: bread),
+      ]
+    ),
   ])
   func linksThatDontFitAreFittedOnReading(_ saved: [BodyLink], _ read: [BodyLink]) throws {
     try withEmptyStore { store throws in
       let writing = Writing(title: "朝", body: "🍞本文", links: saved)
       try store.save(writing)
       #expect(try store.all().map(\.links) == [read])
+    }
+  }
+
+  /// A link the file holds that can't be read as one is dropped, and the writing and its other
+  /// links are read.
+  @Test(arguments: [
+    #"[{"range":[3,1],"url":"https://example.com/bread"}, \#(good)]"#,
+    #"[{"range":[0,1],"url":""}, \#(good)]"#,
+    #"[{"range":[0],"url":"https://example.com/bread"}, \#(good)]"#,
+    #"[7, \#(good)]"#,
+  ])
+  func anUnreadableLinkIsDropped(_ links: String) throws {
+    try withEmptyStore { store throws in
+      let id = try #require(UUID(uuidString: "6F0C9A1E-0D8B-4C49-9E35-2B7E0A1D5C11"))
+      try FileManager.default.createDirectory(
+        at: store.directory, withIntermediateDirectories: true)
+      try Data(
+        #"{"id":"\#(id.uuidString)","title":"朝","body":"本文です","links":\#(links),"updated":0}"#
+          .utf8
+      ).write(to: store.file(for: id))
+      #expect(try store.all().map(\.links) == [[BodyLink(range: 2..<4, url: flour)]])
+    }
+  }
+
+  @Test func linksThatAreNotAListAreDropped() throws {
+    try withEmptyStore { store throws in
+      let id = try #require(UUID(uuidString: "6F0C9A1E-0D8B-4C49-9E35-2B7E0A1D5C11"))
+      try FileManager.default.createDirectory(
+        at: store.directory, withIntermediateDirectories: true)
+      try Data(
+        #"{"id":"\#(id.uuidString)","title":"朝","body":"本文","links":"x","updated":0}"#.utf8
+      ).write(to: store.file(for: id))
+      #expect(try store.all().map(\.body) == ["本文"])
     }
   }
 
@@ -253,6 +298,8 @@ struct WritingTests {
 
 nonisolated private let bread = URL(string: "https://example.com/bread") ?? URL(filePath: "/")
 nonisolated private let flour = URL(string: "https://example.com/flour") ?? URL(filePath: "/")
+/// A saved link that can be read: 「です」 of 「本文です」 linked to `flour`.
+nonisolated private let good = #"{"range":[2,4],"url":"https://example.com/flour"}"#
 
 /// A store whose every save fails.
 private struct RefusingStore: WritingStore {

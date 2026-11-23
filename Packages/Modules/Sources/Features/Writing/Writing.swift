@@ -25,15 +25,26 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
     case id, title, body, links, updated
   }
 
-  /// A writing saved before links were kept has none. Links that don't fit its body are made to,
-  /// as `fitted(to:)` does, so the body is read whatever its links say.
+  /// A writing saved before links were kept has none. A link that can't be read is dropped, and
+  /// the rest are made to fit the body as `fitted(to:)` does, so the body is read whatever its
+  /// links say.
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(UUID.self, forKey: .id)
     title = try container.decode(String.self, forKey: .title)
     body = try container.decode(String.self, forKey: .body)
-    links = (try container.decodeIfPresent([BodyLink].self, forKey: .links) ?? []).fitted(to: body)
+    let saved = (try? container.decodeIfPresent([ReadableLink].self, forKey: .links)) ?? nil
+    links = (saved ?? []).compactMap(\.link).fitted(to: body)
     updated = try container.decode(Date.self, forKey: .updated)
+  }
+}
+
+/// A saved link, or nil where it can't be read as one.
+private nonisolated struct ReadableLink: Decodable {
+  let link: BodyLink?
+
+  init(from decoder: any Decoder) throws {
+    link = try? BodyLink(from: decoder)
   }
 }
 

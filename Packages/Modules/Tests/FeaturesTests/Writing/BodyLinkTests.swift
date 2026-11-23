@@ -24,6 +24,15 @@ struct BodyLinkTests {
 
   /// A link is set in the text's colour under a solid line; a title mention inside it is not
   /// linked, and one outside it keeps its dotted line.
+  /// A title mention only partly covered by a link is not linked to its writing.
+  @Test func aMentionPartlyInALinkIsNotLinked() {
+    let body = "朝の夜の机に向かう"
+    let text = AttributedString(
+      body: body, links: [BodyLink(range: 0..<4, url: bread)],
+      mentions: body.titleMentions(of: [nightDesk]))
+    #expect(text.runs.map(\.link) == [bread, nil])
+  }
+
   @Test func theBodyDrawsLinksSolidAndMentionsDotted() {
     let body = "夜の机に向かうと夜の机に向かう"
     let link = BodyLink(range: 0..<7, url: bread)

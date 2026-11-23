@@ -9,13 +9,13 @@ nonisolated struct BodyLink: Equatable, Codable, Sendable {
 
 extension [BodyLink] {
   /// These links made to fit `body`: each widened to the whole characters it touches and started
-  /// after the one before it. One that is empty, runs past the body, or has nothing left is
-  /// dropped.
+  /// after the one before it. One that is empty, starts before the body or runs past its end, or
+  /// has nothing left is dropped.
   nonisolated func fitted(to body: String) -> [BodyLink] {
     var boundaries = body.indices.map { $0.utf16Offset(in: body) }
     boundaries.append(body.utf16.count)
     var fitted: [BodyLink] = []
-    for link in self where !link.range.isEmpty {
+    for link in self where !link.range.isEmpty && link.range.lowerBound >= 0 {
       guard let end = boundaries.first(where: { $0 >= link.range.upperBound }) else { continue }
       let start = boundaries.last { $0 <= link.range.lowerBound } ?? 0
       let lower = Swift.max(start, fitted.last?.range.upperBound ?? 0)
@@ -31,8 +31,7 @@ extension URL {
   /// host, with any space around it ignored.
   init?(pastedLink pasted: String) {
     let trimmed = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.contains(where: \.isWhitespace),
-      let url = URL(string: trimmed),
+    guard let url = URL(string: trimmed),
       let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
       url.host() != nil
     else { return nil }

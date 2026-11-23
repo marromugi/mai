@@ -147,8 +147,10 @@ struct StyledTextView: UIViewRepresentable {
     ) {
       let selection = view.selectedRange
       guard selection.length == 0 else {
-        view.textStorage.addAttribute(.link, value: url, range: selection)
-        changed(view.text, view.links)
+        let linked = NSMutableAttributedString(
+          attributedString: view.textStorage.attributedSubstring(from: selection))
+        linked.addAttribute(.link, value: url, range: NSRange(location: 0, length: linked.length))
+        restyle(selection, in: view, as: linked)
         return
       }
       askTitle(
@@ -165,8 +167,20 @@ struct StyledTextView: UIViewRepresentable {
           view.textStorage.addAttribute(
             .link, value: url,
             range: NSRange(location: start, length: (inserted as NSString).length))
+          Self.unlinkTypingAtALinksEdge(in: view)
           changed(view.text, view.links)
         })
+    }
+
+    /// Gives `range` of `view`'s text the attributes `styled` has, as one change undo takes back.
+    private func restyle(_ range: NSRange, in view: UITextView, as styled: NSAttributedString) {
+      let before = view.textStorage.attributedSubstring(from: range)
+      view.textStorage.replaceCharacters(in: range, with: styled)
+      view.undoManager?.registerUndo(withTarget: view) { [weak self] view in
+        self?.restyle(range, in: view, as: before)
+      }
+      Self.unlinkTypingAtALinksEdge(in: view)
+      changed(view.text, view.links)
     }
 
     func textView(
@@ -188,18 +202,22 @@ struct StyledTextView: UIViewRepresentable {
       changed(view.text, view.links)
     }
 
-    /// Text typed at a link's end is not linked: only text typed inside a link goes on it.
     func textViewDidChangeSelection(_ view: UITextView) {
+      Self.unlinkTypingAtALinksEdge(in: view)
+    }
+
+    /// Text typed at the caret goes on a link only when the characters on both sides of the caret
+    /// are on that link: text typed at a link's start or end is not linked.
+    private static func unlinkTypingAtALinksEdge(in view: UITextView) {
       let caret = view.selectedRange
       let storage = view.textStorage
-      guard caret.length == 0, caret.location > 0,
-        let before = storage.attribute(.link, at: caret.location - 1, effectiveRange: nil)
-          as? URL
-      else { return }
-      let after =
-        caret.location < storage.length
-        ? storage.attribute(.link, at: caret.location, effectiveRange: nil) as? URL : nil
-      guard after != before else { return }
+      guard caret.length == 0 else { return }
+      func link(at location: Int) -> URL? {
+        guard location >= 0, location < storage.length else { return nil }
+        return storage.attribute(.link, at: location, effectiveRange: nil) as? URL
+      }
+      let before = link(at: caret.location - 1)
+      guard before == nil || before != link(at: caret.location) else { return }
       view.typingAttributes[.link] = nil
     }
   }

@@ -251,16 +251,19 @@ struct WritingEditingTests {
     #expect(edits.writing.links.isEmpty)
   }
 
-  /// The title the sheet gives goes in at the caret where the address was pasted, linked to it,
-  /// and the caret after it; an empty title puts the address itself in; none puts nothing in.
+  /// The title the sheet gives goes in at the caret where the address was pasted, wherever the
+  /// caret went meanwhile, linked to it, and the caret after it; an empty title puts the address
+  /// itself in; none puts nothing in.
   @Test(arguments: [
     ("パンの店", "朝の机パンの店\n二行目", [BodyLink(range: 3..<7, url: bread)], 7),
+    ("🍞🍞", "朝の机🍞🍞\n二行目", [BodyLink(range: 3..<7, url: bread)], 7),
     (" ", "朝の机https://example.com/bread\n二行目", [BodyLink(range: 3..<28, url: bread)], 28),
   ])
   func theTitleGivenGoesInLinked(
     _ title: String, _ body: String, _ links: [BodyLink], _ caret: Int
   ) throws {
     let asked = try AskedForATitle()
+    asked.view.selectedRange = NSRange(location: 0, length: 0)
     asked.answer(title)
     #expect(asked.view.text == body)
     #expect(asked.view.links == links)
@@ -275,6 +278,85 @@ struct WritingEditingTests {
     #expect(asked.view.text == "朝の机\n二行目")
     #expect(asked.view.links.isEmpty)
     #expect(asked.changes.isEmpty)
+  }
+
+  /// Text typed right after a title put in inside another link goes on neither link.
+  @Test func typingAfterATitlePutInsideALinkIsNotLinked() throws {
+    let asked = try AskedForATitle(links: [BodyLink(range: 1..<5, url: flour)])
+    asked.answer("パン")
+    #expect(
+      asked.view.links == [
+        BodyLink(range: 1..<3, url: flour), BodyLink(range: 3..<5, url: bread),
+        BodyLink(range: 5..<7, url: flour),
+      ])
+    asked.view.insertText("x")
+    #expect(asked.view.text == "朝の机パンx\n二行目")
+    #expect(
+      asked.view.links == [
+        BodyLink(range: 1..<3, url: flour), BodyLink(range: 3..<5, url: bread),
+        BodyLink(range: 6..<8, url: flour),
+      ])
+  }
+
+  /// Undo after linking a selection takes the link off, and only that.
+  @Test func undoAfterLinkingASelectionTakesTheLinkOff() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = NSRange(location: 3, length: 0)
+    type("と", into: body)
+    page.settle()
+    body.selectedRange = NSRange(location: 0, length: 2)
+    try paste("https://example.com/bread", into: body)
+    page.settle()
+    try #require(body.undoManager).undo()
+    page.settle()
+    #expect(edits.writing.body == "朝の机と\n二行目")
+    #expect(edits.writing.links.isEmpty)
+  }
+
+  /// A web address with space around it, or held as a URL rather than text, links the selection.
+  @Test func aWebAddressWithSpaceOrHeldAsAURLLinksTheSelection() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.selectedRange = NSRange(location: 0, length: 2)
+    try paste("  https://example.com/bread\n", into: body)
+    #expect(edits.writing.links == [BodyLink(range: 0..<2, url: bread)])
+    body.selectedRange = NSRange(location: 4, length: 3)
+    try paste(into: body) { $0.url = flour }
+    #expect(
+      edits.writing.links == [
+        BodyLink(range: 0..<2, url: bread), BodyLink(range: 4..<7, url: flour),
+      ])
+  }
+
+  /// Links changed from elsewhere while editing are drawn in the editor.
+  @Test func linksChangedFromElsewhereAreShown() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    edits.writing.links = [BodyLink(range: 0..<2, url: bread)]
+    page.show(screen(editing: true, edits: edits))
+    #expect(body.links == [BodyLink(range: 0..<2, url: bread)])
+  }
+
+  /// Links are kept when text still being composed is kept as editing ends.
+  @Test func linksAreKeptWithTextBeingComposedWhenEditingEnds() async throws {
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "朝の机\n二行目", links: [BodyLink(range: 0..<2, url: bread)]))
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = NSRange(location: (body.text as NSString).length, length: 0)
+    body.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0))
+    page.show(screen(editing: false, edits: edits))
+    try await page.settle { edits.writing.body.hasSuffix("かな") }
+    #expect(edits.writing.links == [BodyLink(range: 0..<2, url: bread)])
   }
 
   /// The sheet's title field is focused as it opens, so the title can be typed at once.
@@ -301,6 +383,29 @@ struct WritingEditingTests {
     type("と", into: body)
     #expect(edits.writing.body == "粉との店とへ\n二行目")
     #expect(edits.writing.links == [BodyLink(range: 0..<4, url: flour)])
+  }
+
+  /// Text typed at a link's start, at the body's start or end, or between two links goes on no
+  /// link.
+  @Test(arguments: [
+    ("粉の店\n二行目", [BodyLink(range: 0..<3, url: flour)], 0, [BodyLink(range: 1..<4, url: flour)]),
+    ("朝\n粉の店", [BodyLink(range: 2..<5, url: flour)], 5, [BodyLink(range: 2..<5, url: flour)]),
+    (
+      "粉パン\n二行目", [BodyLink(range: 0..<1, url: flour), BodyLink(range: 1..<3, url: bread)], 1,
+      [BodyLink(range: 0..<1, url: flour), BodyLink(range: 2..<4, url: bread)]
+    ),
+  ])
+  func typingAtALinksEdgeIsNotLinked(
+    _ text: String, _ links: [BodyLink], _ caret: Int, _ after: [BodyLink]
+  ) throws {
+    let edits = Edits(writing: Writing(title: "朝", body: text, links: links))
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = NSRange(location: caret, length: 0)
+    type("と", into: body)
+    #expect(edits.writing.links == after)
   }
 
   /// A combining mark typed at a link's end joins the link's last character, so the link takes in
@@ -380,10 +485,16 @@ private let linked = Writing(
 /// pastes nothing here.
 @MainActor
 private func paste(_ text: String, into view: UITextView) throws {
+  try paste(into: view) { $0.string = text }
+}
+
+/// Pastes what `fill` puts on a pasteboard of the test's own into `view`.
+@MainActor
+private func paste(into view: UITextView, _ fill: (UIPasteboard) -> Void) throws {
   let editor = try #require(view as? PlaceholderTextView)
   let pasteboard = try #require(UIPasteboard(name: .init(UUID().uuidString), create: true))
   defer { UIPasteboard.remove(withName: pasteboard.name) }
-  pasteboard.string = text
+  fill(pasteboard)
   editor.pasteboard = pasteboard
   editor.paste(nil)
 }
@@ -397,12 +508,16 @@ private final class AskedForATitle {
   private var coordinator: StyledTextView.Coordinator?
   private var asked: TitleRequest?
 
-  init() throws {
+  init(links: [BodyLink] = []) throws {
     let coordinator = StyledTextView.Coordinator(changed: { _, _ in }, oneLine: false)
     coordinator.changed = { [weak self] in self?.changes.append(($0, $1)) }
     self.coordinator = coordinator
     view.delegate = coordinator
-    view.text = "朝の机\n二行目"
+    let text = NSMutableAttributedString(string: "朝の机\n二行目")
+    for link in links {
+      text.addAttribute(.link, value: link.url, range: NSRange(link.range))
+    }
+    view.attributedText = text
     view.selectedRange = NSRange(location: 3, length: 0)
     coordinator.paste(bread, into: view) { self.asked = $0 }
     try #require(asked != nil)
