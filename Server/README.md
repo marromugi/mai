@@ -59,6 +59,23 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 上限の値は #22 の設計の案で、プランと値段の答え(#22 の質問)で変わりうる。変えるときは `plans` の行を書き換える。
 
+### 書体
+
+| 経路                | 内容                                                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /fonts/<file>` | R2 のバケット(binding `FONTS`)の `fonts/<file>` を返す。セッションは要らない。`Cache-Control: public, max-age=31536000, immutable`。無い名前は 404、GET 以外は 405 |
+
+アプリは和文の書体をここから取り、`FontFamily.known` の SHA-256 と合うものだけを端末に置く(#48)。置くファイルは `fonts.json` に、google/fonts のコミットと SHA-256 と一緒に並べてある。アプリの一覧と `fonts.json` が同じファイルを指すことは `ServerFontsTests` が確かめる。書体のライセンスはアプリが持っているので、バケットには置かない。
+
+`scripts/upload-fonts.sh` が google/fonts から取り、SHA-256 を確かめてからバケットに置く。手元では `wrangler dev` と同じ `--persist-to` を渡す。
+
+```sh
+scripts/upload-fonts.sh --local --persist-to /private/tmp/mai-wrangler
+pnpm exec wrangler dev --persist-to /private/tmp/mai-wrangler --var TURSO_URL:http://127.0.0.1:8080 --var TURSO_TOKEN:
+```
+
+デバッグビルドのアプリは `http://localhost:8787` から取る。ほかのポートは環境変数 `MAI_SERVER_URL` で渡す。リリースビルドはまだサーバーを持たず、和文の書体は一覧に出ない。
+
 ### 期限の掃除
 
 Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` と、期限から 1 時間たった `used_challenges` を消す(`Store.sweep`)。#26 の写しと読み取りモードの期限もここに足す。
@@ -105,6 +122,7 @@ scripts/server-contract-test.sh
 まだしていない。するときは、次のものが作られる。
 
 - Turso: データベース `mai` 1 つ(`schema.sql` の表とトリガー、`plans` の 3 行)と、それに書ける認証トークン 1 つ
+- Cloudflare: R2 のバケット `mai-fonts` 1 つと、そこに置く書体のファイル 6 つ(合わせて 28.8 MB)
 - Cloudflare: Worker `mai-server` 1 つ(`workers.dev` の URL つき)、その毎分の Cron Trigger、秘密 `TURSO_URL`・`TURSO_TOKEN`・`CHALLENGE_KEY`・`REFRESH_TOKEN_KEY`・`APPLE_CLIENT_ID`・`APPLE_TEAM_ID`・`APPLE_SIGN_IN_KEY_ID`・`APPLE_SIGN_IN_KEY`
 
 その前に開発者が Apple Developer でしておくこと:
@@ -131,6 +149,10 @@ printf 'TURSO_URL=%s\nTURSO_TOKEN=%s\n' "$(turso db show mai --url)" "$(turso db
 printf 'CHALLENGE_KEY=%s\nREFRESH_TOKEN_KEY=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -base64 32)" >> "$secrets"
 printf 'APPLE_CLIENT_ID=com.marromugi.mai\nAPPLE_TEAM_ID=%s\nAPPLE_SIGN_IN_KEY_ID=%s\nAPPLE_SIGN_IN_KEY=%s\n' \
   "$team_id" "$key_id" "$(grep -v -- ----- "$p8" | tr -d '\n')" >> "$secrets"
+pnpm exec wrangler r2 bucket create mai-fonts
+scripts/upload-fonts.sh --remote
 pnpm exec wrangler deploy --secrets-file "$secrets"
 rm "$secrets"
 ```
+
+デプロイしたら、アプリの `MaiApp.server` のリリースビルドの値を Worker の URL にする。

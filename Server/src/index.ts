@@ -1,5 +1,6 @@
 import { AppleSignInKeys } from "./apple-sign-in";
 import { AppleTokens } from "./apple-tokens";
+import { serveFont } from "./fonts";
 import { Challenges } from "./challenges";
 import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
 import { RefreshTokens } from "./refresh-tokens";
@@ -14,6 +15,9 @@ import { Store, type Answer, type Refusal } from "./store";
  */
 export default {
   fetch(request, env): Promise<Response> {
+    if (new URL(request.url).pathname.startsWith("/fonts/")) {
+      return serveFont(request, env.FONTS);
+    }
     return serve(
       request,
       signInOf(env, (url, init) => fetch(url, init), caches.default),

@@ -4,6 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "triggers": { "crons": ["* * * * *"] },
+  // Font files for the app (src/fonts.ts), as scripts/upload-fonts.sh puts them.
+  "r2_buckets": [{ "binding": "FONTS", "bucket_name": "mai-fonts" }],
   "secrets": {
     "required": [
       "TURSO_URL",

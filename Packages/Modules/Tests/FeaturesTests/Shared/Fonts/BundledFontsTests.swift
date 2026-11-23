@@ -54,3 +54,22 @@ struct BundledFontsTests {
     text.firstMatch(of: /\d{4}(?:-\d{4})? (.+?) \(/).map { String($0.output.1) }
   }
 }
+
+/// The families the app fetches are the files `Server/fonts.json` has uploaded, with the same hashes.
+struct ServerFontsTests {
+  struct Manifest: Decodable {
+    struct File: Decodable, Equatable {
+      let name: String
+      let sha256: String
+    }
+    let files: [File]
+  }
+
+  @Test func theCatalogsServerFilesAreTheManifests() throws {
+    let manifest = URL(filePath: #filePath)
+      .appending(path: "../../../../../../../Server/fonts.json").standardized
+    let files = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: manifest)).files
+    let fetched = FontFamily.known.filter { !$0.isBundled }.flatMap(\.files)
+    #expect(fetched.map { Manifest.File(name: $0.name, sha256: $0.sha256) } == files)
+  }
+}
