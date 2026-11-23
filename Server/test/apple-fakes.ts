@@ -1,8 +1,5 @@
 import { appleOids } from "../src/app-store";
 import { oids, readCertificate, type Certificate, type Curve } from "../src/der";
-import { base64url } from "../src/jws";
-
-export { base64url };
 
 /**
  * Stand-ins for Apple made in the tests: a certificate authority standing in for Apple Root CA -
@@ -200,6 +197,10 @@ export async function makeChain(
     ...changes.leaf,
   });
   return { root, intermediate, leaf };
+}
+
+export function base64url(bytes: Uint8Array): string {
+  return base64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
 function base64(bytes: Uint8Array): string {

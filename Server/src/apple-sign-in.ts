@@ -49,7 +49,7 @@ export async function verifyIdentityToken(
   if (jws === undefined) {
     return { ok: false, failure: "malformed" };
   }
-  // Apple's documentation says ES256; the keys it publishes are RS256 (checked for #44).
+  // Apple publishes RS256 keys only (#44).
   if (jws.header["alg"] !== "RS256") {
     return { ok: false, failure: "algorithm" };
   }

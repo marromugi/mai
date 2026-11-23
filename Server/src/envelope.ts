@@ -20,11 +20,6 @@ export function parseWritingId(text: string): WritingId | undefined {
 }
 
 function isWritingId(text: string): text is WritingId {
-  return isLowercaseUuid(text);
-}
-
-/** A UUID in the lowercase text form, which is how the server names writings and accounts. */
-export function isLowercaseUuid(text: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(text);
 }
 

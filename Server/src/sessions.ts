@@ -1,5 +1,3 @@
-import { base64url } from "./jws";
-
 /**
  * A session token is `s1.<session ID>.<secret>`, the secret 32 random bytes in base64url. The
  * server keeps only the SHA-256 of the secret as written in the token (`sessions.token_sha256`);
@@ -43,4 +41,11 @@ export async function newSessionToken(): Promise<{ token: string; caller: Caller
 
 async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+}
+
+function base64url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 }

@@ -37,13 +37,6 @@ export function readCompactJws(compact: string): CompactJws | undefined {
   };
 }
 
-export function base64url(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
-}
-
 export function base64urlBytes(encoded: string): Uint8Array | undefined {
   if (!/^[A-Za-z0-9_-]*$/.test(encoded) || encoded.length % 4 === 1) {
     return undefined;

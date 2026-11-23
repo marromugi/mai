@@ -1,4 +1,3 @@
-import { isLowercaseUuid } from "./envelope";
 import { equalBytes, rawSignature, readCertificate, type Certificate } from "./der";
 import { base64Bytes, isJson, readCompactJws, text, whole, type Checked, type Json } from "./jws";
 
@@ -384,5 +383,8 @@ function flag(value: unknown): boolean | undefined {
 
 function uuid(value: unknown): string | undefined {
   const lowered = typeof value === "string" ? value.toLowerCase() : undefined;
-  return lowered !== undefined && isLowercaseUuid(lowered) ? lowered : undefined;
+  return lowered !== undefined &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(lowered)
+    ? lowered
+    : undefined;
 }
