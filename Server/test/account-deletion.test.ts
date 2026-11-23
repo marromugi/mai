@@ -321,14 +321,11 @@ describe("deleting an account", () => {
     expect((await serveWith(put)).status).toBe(201);
     // More held photos than R2 lists at once, and an old upload's bytes past them, on page two.
     const held = Array.from({ length: 1000 }, () => crypto.randomUUID());
-    await database.batch(
-      held.map((upload) => ({
-        sql: `INSERT INTO photos (account_id, id, part, upload, size, state, reserved)
-              VALUES (?, ?, 'photo', ?, 1, 'stored', 0)`,
-        args: [one.account, crypto.randomUUID(), upload],
-      })),
-      "write",
-    );
+    await database.execute({
+      sql: `INSERT INTO photos (account_id, id, part, upload, size, state, reserved)
+            SELECT ?, value, 'photo', value, 1, 'stored', 0 FROM json_each(?)`,
+      args: [one.account, JSON.stringify(held)],
+    });
     const heldKeys = held.map((upload) => `${one.account}/held/photo/${upload}`);
     await Promise.all(heldKeys.map((key) => env.PHOTOS.put(key, "x")));
     const oldUpload = `${one.account}/zz-old/photo/upload`;
