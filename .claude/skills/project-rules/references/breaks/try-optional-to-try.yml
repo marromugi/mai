@@ -1,0 +1,5 @@
+id: try-optional-to-try
+language: Swift
+rule:
+  pattern: try? $E
+fix: try $E

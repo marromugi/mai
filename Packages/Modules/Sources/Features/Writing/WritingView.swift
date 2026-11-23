@@ -5,7 +5,8 @@ internal import Typesetting
 /// bottom row. The row's pencil makes the title and body editable until 「完了」, each change
 /// handed to `edit`; its 「組版を調整」 enters the typesetting mode, and a tap or 「閉じる」 leaves
 /// it; its camera takes a photo with `camera` and hands it to `photoTaken`. Where one of `others`'
-/// titles appears in the body, it links to that writing, and a tap on it calls `open` with it.
+/// titles appears in the body, it links to that writing, and a tap on it calls `open` with it. The
+/// body's own links open their pages, and a web address pasted while editing becomes one.
 struct WritingView: View {
   let writing: Writing
   let others: [Writing]
@@ -230,7 +231,7 @@ struct WritingPage: View {
           if editing {
             TextStyleEditor(
               role: .heading, text: writing.title, placeholder: "タイトル", oneLine: true
-            ) { title in
+            ) { title, _ in
               edit { $0.title = title }
             }
           } else {
@@ -248,9 +249,16 @@ struct WritingPage: View {
         }
         .padding(.bottom, scale.space(.m))
         if editing {
-          TextStyleEditor(role: .body, text: writing.body) { body in edit { $0.body = body } }
+          TextStyleEditor(
+            role: .body, text: writing.body, links: writing.links, pastesLinks: true
+          ) { body, links in
+            edit {
+              $0.body = body
+              $0.links = links
+            }
+          }
         } else {
-          Text(body: writing.body, mentions: mentions)
+          Text(body: writing.body, links: writing.links, mentions: mentions)
             .textStyle(.body)
         }
         if !photos.isEmpty {

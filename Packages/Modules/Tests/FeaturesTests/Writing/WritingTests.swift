@@ -26,12 +26,106 @@ struct WritingTests {
     Writing(
       title: "\"引用\" と \\ と\n改行", body: "\r\n\t\u{3000}",
       updated: Date(timeIntervalSinceReferenceDate: -1.5)),
+    Writing(
+      title: "リンク", body: "🍞の焼き方と粉の店",
+      links: [
+        BodyLink(range: 0..<6, url: bread), BodyLink(range: 7..<10, url: flour),
+      ],
+      updated: Date(timeIntervalSinceReferenceDate: 0)),
   ])
   func aSavedWritingIsReadBackByTheNextLaunch(_ writing: Writing) throws {
     try withEmptyStore { store throws in
       try store.save(writing)
       let relaunched = FileWritingStore(directory: store.directory)
       #expect(try relaunched.all() == [writing])
+    }
+  }
+
+  /// A file saved before links were kept reads as a writing with none.
+  @Test func aWritingSavedWithoutLinksHasNone() throws {
+    try withEmptyStore { store throws in
+      let id = try #require(UUID(uuidString: "6F0C9A1E-0D8B-4C49-9E35-2B7E0A1D5C11"))
+      try FileManager.default.createDirectory(
+        at: store.directory, withIntermediateDirectories: true)
+      try Data(
+        #"{"id":"\#(id.uuidString)","title":"朝","body":"本文","updated":0}"#.utf8
+      ).write(to: store.file(for: id))
+      #expect(
+        try store.all() == [
+          Writing(
+            id: id, title: "朝", body: "本文", links: [],
+            updated: Date(timeIntervalSinceReferenceDate: 0))
+        ])
+    }
+  }
+
+  /// A file whose links don't fit its body is still read, with each link widened to the whole
+  /// characters it touches, and one that is empty, past the end, or covered by the link before it
+  /// dropped.
+  @Test(arguments: [
+    ([BodyLink(range: 3..<5, url: bread)], []),
+    ([BodyLink(range: 1..<1, url: bread)], []),
+    (
+      [BodyLink(range: 2..<4, url: bread), BodyLink(range: 3..<4, url: flour)],
+      [BodyLink(range: 2..<4, url: bread)]
+    ),
+    (
+      [BodyLink(range: 3..<4, url: bread), BodyLink(range: 2..<3, url: flour)],
+      [BodyLink(range: 3..<4, url: bread)]
+    ),
+    // Through the middle of 🍞.
+    ([BodyLink(range: 1..<3, url: bread)], [BodyLink(range: 0..<3, url: bread)]),
+    ([BodyLink(range: -1..<2, url: bread)], []),
+    // The third starts after the second, not the first.
+    (
+      [
+        BodyLink(range: 0..<2, url: bread), BodyLink(range: 2..<3, url: flour),
+        BodyLink(range: 2..<4, url: bread),
+      ],
+      [
+        BodyLink(range: 0..<2, url: bread), BodyLink(range: 2..<3, url: flour),
+        BodyLink(range: 3..<4, url: bread),
+      ]
+    ),
+  ])
+  func linksThatDontFitAreFittedOnReading(_ saved: [BodyLink], _ read: [BodyLink]) throws {
+    try withEmptyStore { store throws in
+      let writing = Writing(title: "朝", body: "🍞本文", links: saved)
+      try store.save(writing)
+      #expect(try store.all().map(\.links) == [read])
+    }
+  }
+
+  /// A link the file holds that can't be read as one is dropped, and the writing and its other
+  /// links are read.
+  @Test(arguments: [
+    #"[{"range":[3,1],"url":"https://example.com/bread"}, \#(good)]"#,
+    #"[{"range":[0,1],"url":""}, \#(good)]"#,
+    #"[{"range":[0],"url":"https://example.com/bread"}, \#(good)]"#,
+    #"[7, \#(good)]"#,
+  ])
+  func anUnreadableLinkIsDropped(_ links: String) throws {
+    try withEmptyStore { store throws in
+      let id = try #require(UUID(uuidString: "6F0C9A1E-0D8B-4C49-9E35-2B7E0A1D5C11"))
+      try FileManager.default.createDirectory(
+        at: store.directory, withIntermediateDirectories: true)
+      try Data(
+        #"{"id":"\#(id.uuidString)","title":"朝","body":"本文です","links":\#(links),"updated":0}"#
+          .utf8
+      ).write(to: store.file(for: id))
+      #expect(try store.all().map(\.links) == [[BodyLink(range: 2..<4, url: flour)]])
+    }
+  }
+
+  @Test func linksThatAreNotAListAreDropped() throws {
+    try withEmptyStore { store throws in
+      let id = try #require(UUID(uuidString: "6F0C9A1E-0D8B-4C49-9E35-2B7E0A1D5C11"))
+      try FileManager.default.createDirectory(
+        at: store.directory, withIntermediateDirectories: true)
+      try Data(
+        #"{"id":"\#(id.uuidString)","title":"朝","body":"本文","links":"x","updated":0}"#.utf8
+      ).write(to: store.file(for: id))
+      #expect(try store.all().map(\.body) == ["本文"])
     }
   }
 
@@ -149,6 +243,17 @@ struct WritingTests {
     #expect(writings == [writing])
   }
 
+  @Test func anEditThatOnlyLinksTextChangesTheWriting() throws {
+    let writing = Writing(title: "朝", body: "粉の店", updated: Date(timeIntervalSince1970: 1))
+    var writings = [writing]
+    let edited = try #require(
+      writings.edit(writing.id, at: Date(timeIntervalSince1970: 2)) {
+        $0.links = [BodyLink(range: 0..<3, url: flour)]
+      })
+    #expect(edited.links == [BodyLink(range: 0..<3, url: flour)])
+    #expect(edited.updated == Date(timeIntervalSince1970: 2))
+  }
+
   @Test func anEditToAWritingNotThereChangesNothing() {
     let writing = Writing(title: "朝", body: "一行目", updated: Date(timeIntervalSince1970: 1))
     var writings = [writing]
@@ -190,6 +295,11 @@ struct WritingTests {
     #expect(writings[0].updated == Date(timeIntervalSince1970: 2))
   }
 }
+
+nonisolated private let bread = URL(string: "https://example.com/bread") ?? URL(filePath: "/")
+nonisolated private let flour = URL(string: "https://example.com/flour") ?? URL(filePath: "/")
+/// A saved link that can be read: 「です」 of 「本文です」 linked to `flour`.
+nonisolated private let good = #"{"range":[2,4],"url":"https://example.com/flour"}"#
 
 /// A store whose every save fails.
 private struct RefusingStore: WritingStore {

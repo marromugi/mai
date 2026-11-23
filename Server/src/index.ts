@@ -5,12 +5,22 @@ import { Challenges } from "./challenges";
 import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
 import { RefreshTokens } from "./refresh-tokens";
 import { callerOf } from "./sessions";
-import { issueChallenge, makeAccount, problem, startSession, type SignIn } from "./sign-in";
+import { appleRootCaG3 } from "./apple-root";
+import type { Certificate } from "./der";
+import { problem } from "./http";
+import {
+  parseEnvironments,
+  receiveNotification,
+  sentSubscription,
+  subscriptionKept,
+} from "./subscriptions";
+import { issueChallenge, makeAccount, startSession, type SignIn } from "./sign-in";
 import { Store, type Answer, type Refusal } from "./store";
 
 /**
  * Of writings, the server keeps only sealed ones, and knows of each only its ID, updated time and size;
- * of each account, its Apple user, Apple's refresh token (sealed), and its own key check.
+ * of each account, its Apple user, Apple's refresh token (sealed), its own key check, and its
+ * App Store subscriptions (transaction ID, product, expiry, environment).
  * Font files are served apart from accounts, from R2 (`src/fonts.ts`), so of a font fetched it
  * knows only which file and the request's address. Routes are listed in `Server/README.md`.
  */
@@ -30,11 +40,15 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-/** What signing in reaches, from the Worker's secrets; `send` is `fetch` outside the tests. */
+/**
+ * What the routes reach, from the Worker's secrets and vars; `send` is `fetch` and
+ * `appStoreRoot` is Apple Root CA - G3 outside the tests.
+ */
 export function signInOf(
   env: Env,
   send: (url: string, init?: RequestInit) => Promise<Response>,
   cache: Cache,
+  appStoreRoot: Certificate = appleRootCaG3,
 ): SignIn {
   return {
     store: Store.open(env.TURSO_URL, env.TURSO_TOKEN),
@@ -48,6 +62,10 @@ export function signInOf(
       key: env.APPLE_SIGN_IN_KEY,
     }),
     refreshTokens: new RefreshTokens(env.REFRESH_TOKEN_KEY),
+    appStore: {
+      signer: { root: appStoreRoot, bundleId: env.APPLE_CLIENT_ID },
+      environments: parseEnvironments(env.APP_STORE_ENVIRONMENTS),
+    },
   };
 }
 
@@ -62,6 +80,8 @@ export async function serve(request: Request, signIn: SignIn): Promise<Response>
       return makeAccount(request, signIn, now);
     case "POST /sessions":
       return startSession(request, signIn, now);
+    case "POST /app-store/notifications":
+      return receiveNotification(request, signIn.appStore, signIn.store);
   }
 
   const caller = await callerOf(request.headers.get("Authorization"));
@@ -79,6 +99,13 @@ export async function serve(request: Request, signIn: SignIn): Promise<Response>
       return (await store.endSession(caller, now))
         ? new Response(null, { status: 204 })
         : refused("session");
+    case "PUT /account/subscription": {
+      const sent = await sentSubscription(request, signIn.appStore);
+      if (!sent.ok) {
+        return turnedDown(sent.status, sent.reason);
+      }
+      return answered(await store.keepPurchase(caller, sent.purchase, now), subscriptionKept);
+    }
     case "PUT /account/own-key-check": {
       if (request.headers.get("Content-Type") !== "application/octet-stream") {
         return turnedDown(415, "the own key check is sent as application/octet-stream");
@@ -154,6 +181,10 @@ function answered<T>(answer: Answer<T>, respond: (value: T) => Response): Respon
 
 const refusals: Record<Refusal, { status: number; reason: string }> = {
   session: { status: 401, reason: "the session token is unknown, or its session has ended" },
+  lapsed: {
+    status: 402,
+    reason: "the account's subscription has lapsed; it is read but not written",
+  },
   requests: { status: 429, reason: "the plan's requests for today are used up" },
   lists: { status: 429, reason: "the plan's listings for today are used up" },
   saves: { status: 429, reason: "the plan's saves for today are used up" },

@@ -6,6 +6,8 @@
   "triggers": { "crons": ["* * * * *"] },
   // Font files for the app (src/fonts.ts), as scripts/upload-fonts.sh puts them.
   "r2_buckets": [{ "binding": "FONTS", "bucket_name": "mai-fonts" }],
+  // Whose purchases this Worker takes: Production, Sandbox, or both (Server/README.md).
+  "vars": { "APP_STORE_ENVIRONMENTS": "Production" },
   "secrets": {
     "required": [
       "TURSO_URL",

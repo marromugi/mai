@@ -1,4 +1,4 @@
-import { problem } from "./sign-in";
+import { problem } from "./http";
 
 /** A font file's name as `fonts.json` lists them: no path, a font's extension, and short of R2's limit on a key. */
 const fontName = /^\/fonts\/([A-Za-z0-9-]{1,100}\.(?:ttf|otf))$/;
