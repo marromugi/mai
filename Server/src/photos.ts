@@ -82,7 +82,7 @@ export async function putPhoto(
   try {
     await bucket.put(key, body.pipeThrough(new FixedLengthStream(size)));
   } catch (error) {
-    await release(store, bucket, [upload]);
+    await release(store, bucket, await store.startReleasing(upload));
     throw error;
   }
   if (!(await store.storePhoto(upload))) {
@@ -126,17 +126,17 @@ export async function getPhoto(
 
 /** Releases uploads that reserved room and never finished (`uploadLifetime`); run by the cron trigger. */
 export async function sweepUploads(store: Store, bucket: R2Bucket, now: number): Promise<void> {
-  await release(store, bucket, await store.staleUploads(now, sweptAtOnce));
+  await release(store, bucket, await store.releaseStale(now, sweptAtOnce));
 }
 
 /**
- * Removes what R2 may hold of `uploads`, then the room they reserved. Where R2 can't be reached
- * the room stays reserved, for the cron trigger to release later.
+ * Deletes what R2 may hold of `uploads`, which are being released, then the room they reserved.
+ * Where R2 can't be reached the room stays reserved, for the cron trigger to release later.
  */
 async function release(store: Store, bucket: R2Bucket, uploads: Upload[]): Promise<void> {
   if (uploads.length === 0) {
     return;
   }
   await bucket.delete(uploads.map(photoKey));
-  await store.releaseUploads(uploads);
+  await store.forgetReleased(uploads);
 }

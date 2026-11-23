@@ -119,20 +119,21 @@ CREATE TRIGGER writings_resized AFTER UPDATE OF size ON writings BEGIN
 END;
 
 -- Each part of a photo, sealed on the device, kept in R2 under the key src/photos.ts makes from
--- account_id, id, part and upload. A part is reserved (stored = 0) before its bytes go to R2, so
--- its size counts against the plan from then on, and stored (1) once R2 holds them. upload names
--- the one request that reserved it; reserved is when.
+-- account_id, id, part and upload. A part is 'reserved' before its bytes go to R2, so its size
+-- counts against the plan from then on, and 'stored' once R2 holds them. An upload that failed is
+-- 'releasing' until what R2 got of it is deleted; then its row goes. Only a 'reserved' row becomes
+-- either of the others. upload names the one request that reserved it; reserved is when.
 CREATE TABLE photos (
   account_id TEXT NOT NULL,
   id TEXT NOT NULL,
   part TEXT NOT NULL CHECK (part IN ('photo', 'thumbnail')),
-  upload TEXT NOT NULL,
+  upload TEXT NOT NULL UNIQUE,
   size INTEGER NOT NULL,
-  stored INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'reserved' CHECK (state IN ('reserved', 'stored', 'releasing')),
   reserved INTEGER NOT NULL,
   PRIMARY KEY (account_id, id, part)
 ) STRICT;
-CREATE INDEX photos_unstored ON photos (reserved) WHERE stored = 0;
+CREATE INDEX photos_unstored ON photos (reserved) WHERE state != 'stored';
 
 -- accounts.photos_bytes follows every reserved or stored part. A reservation that grows an account
 -- past its plan aborts the whole batch with this message, which src/store.ts answers as 429.

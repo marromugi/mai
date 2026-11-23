@@ -4,13 +4,37 @@ import { createClient } from "@libsql/client/web";
 import { describe, expect, it } from "vitest";
 import worker, { serve, signInOf } from "../src/index";
 import { parseAccountId } from "../src/account-id";
-import { parsePhotoId, parsePhotoPart } from "../src/photo-id";
-import { largestPart } from "../src/photos";
-import { uploadLifetime, type Upload } from "../src/store";
+import { parsePhotoId, parsePhotoPart, type PhotoId, type PhotoPart } from "../src/photo-id";
+import { largestPart, photoKey, sweepUploads } from "../src/photos";
+import type { Caller } from "../src/sessions";
+import type { Upload } from "../src/store";
 import { newAccount, products, store } from "./accounts";
 
 const database = createClient({ url: env.TURSO_URL });
 const day = 24 * 60 * 60 * 1000;
+/** How long an upload has to reach R2 before the cron trigger releases its room. */
+const hour = 60 * 60 * 1000;
+
+function newPhotoId(): PhotoId {
+  const id = parsePhotoId(crypto.randomUUID());
+  if (id === undefined) throw new Error("crypto.randomUUID gives a UUID");
+  return id;
+}
+
+/** Reserves room for a part of a photo as a put does at `now`, and nothing more. */
+async function reserve(
+  caller: Caller,
+  id: PhotoId,
+  part: PhotoPart,
+  size: number,
+  now: number,
+): Promise<Upload> {
+  const reserved = await store.reservePhoto(caller, id, part, size, now);
+  if (!reserved.ok || !reserved.value.reserved) {
+    throw new Error("a new account reserves room for a new photo");
+  }
+  return reserved.value.upload;
+}
 
 /** Sealed bytes as the app would send them: the server never looks inside. */
 function sealed(length: number, fill = 0xab): Uint8Array<ArrayBuffer> {
@@ -96,7 +120,7 @@ async function keysOf(account: string): Promise<string[]> {
 
 async function photoRows(account: string): Promise<unknown[]> {
   const { rows } = await database.execute({
-    sql: "SELECT id, part, size, stored FROM photos WHERE account_id = ? ORDER BY id, part",
+    sql: "SELECT id, part, size, state FROM photos WHERE account_id = ? ORDER BY id, part",
     args: [account],
   });
   return rows.map((row) => ({ ...row }));
@@ -159,6 +183,17 @@ describe("a photo and its thumbnail", () => {
     expect(await usageOf(token)).toMatchObject({
       photosBytes: { used: 540, limit: 5_000_000_000 },
       photos: { used: 1, limit: 100 },
+    });
+  });
+
+  it.each([
+    [products.plus, 50_000_000_000, 300],
+    [products.pro, 200_000_000_000, 300],
+  ])("are limited on %s to %d bytes and %d photos a day", async (product, bytes, perDay) => {
+    const { token } = await newAccount(product);
+    expect(await usageOf(token)).toMatchObject({
+      photosBytes: { used: 0, limit: bytes },
+      photos: { used: 0, limit: perDay },
     });
   });
 
@@ -283,7 +318,9 @@ describe("an upload that fails", () => {
       const object = await env.PHOTOS.put(key, value);
       if (object === null) throw new Error("a put without onlyIf always stores");
       // The cron trigger releasing it as stale, as R2 finishes.
-      await store.releaseUploads([uploadOf(key, 10)]);
+      const released = await store.startReleasing(uploadOf(key, 10));
+      await env.PHOTOS.delete(key);
+      await store.forgetReleased(released);
       return object;
     });
     const request = photoRequest(`/photos/${id}`, token, { method: "PUT", body: sealed(10) });
@@ -293,29 +330,89 @@ describe("an upload that fails", () => {
     expect(await photosBytes(account)).toBe(0);
     expect(await keysOf(account)).toEqual([]);
   });
+
+  it("keeps its room until R2 deletes what it got, which the cron trigger retries", async () => {
+    const { account, token } = await newAccount();
+    const id = crypto.randomUUID();
+    const broken = new Proxy(
+      bucketWith(async (key, value) => {
+        await env.PHOTOS.put(key, value);
+        throw new Error("R2 took the bytes and then failed");
+      }),
+      {
+        get(target, name, receiver) {
+          if (name === "delete") return () => Promise.reject(new Error("R2 can't delete"));
+          return Reflect.get(target, name, receiver);
+        },
+      },
+    );
+    const request = photoRequest(`/photos/${id}`, token, { method: "PUT", body: sealed(10) });
+    await expect(serveWith(request, broken)).rejects.toThrow("R2 can't delete");
+    expect(await photoRows(account)).toEqual([{ id, part: "photo", size: 10, state: "releasing" }]);
+    expect(await photosBytes(account)).toBe(10);
+    expect(await keysOf(account)).toHaveLength(1);
+
+    await database.execute({
+      sql: "UPDATE photos SET reserved = reserved - ? WHERE account_id = ?",
+      args: [hour, account],
+    });
+    await worker.scheduled(createScheduledController({ scheduledTime: Date.now() }), env);
+    expect(await photoRows(account)).toEqual([]);
+    expect(await photosBytes(account)).toBe(0);
+    expect(await keysOf(account)).toEqual([]);
+  });
+
+  it("isn't found while it is still being sent", async () => {
+    const { caller, token } = await newAccount();
+    const id = newPhotoId();
+    const reserved = await store.reservePhoto(caller, id, "photo", 10, Date.now());
+    expect(reserved).toMatchObject({ ok: true, value: { reserved: true } });
+    expect((await call(`/photos/${id}`, token)).status).toBe(404);
+  });
 });
 
 describe("the cron trigger", () => {
-  it("releases an upload that never finished, and what R2 holds of it, an hour on", async () => {
+  it("releases uploads that never finished, and what R2 holds of them, an hour on", async () => {
     const { account, caller } = await newAccount();
-    const id = parsePhotoId(crypto.randomUUID());
-    if (id === undefined) throw new Error("crypto.randomUUID gives a UUID");
+    const id = newPhotoId();
+    const other = newPhotoId();
     const now = Date.now();
-    const stale = await store.reservePhoto(caller, id, "photo", 10, now - uploadLifetime);
-    const fresh = await store.reservePhoto(caller, id, "thumbnail", 5, now - uploadLifetime + 1000);
-    if (!stale.ok || !stale.value.reserved || !fresh.ok || !fresh.value.reserved) {
-      throw new Error("a new account reserves room for a photo");
-    }
+    const stale = await reserve(caller, id, "photo", 10, now - hour);
+    await reserve(caller, other, "thumbnail", 7, now - hour);
+    await reserve(caller, id, "thumbnail", 5, now - hour + 1);
     // A Worker that stopped after R2 took the bytes, before it marked them stored.
-    const key = `${account}/${id}/photo/${stale.value.upload.upload}`;
+    const key = `${account}/${id}/photo/${stale.upload}`;
     await env.PHOTOS.put(key, sealed(10));
-    expect(await photosBytes(account)).toBe(15);
+    expect(await photosBytes(account)).toBe(22);
 
-    await worker.scheduled(createScheduledController({ scheduledTime: now }), env);
+    await sweepUploads(store, env.PHOTOS, now);
 
-    expect(await photoRows(account)).toEqual([{ id, part: "thumbnail", size: 5, stored: 0 }]);
+    expect(await photoRows(account)).toEqual([
+      { id, part: "thumbnail", size: 5, state: "reserved" },
+    ]);
     expect(await photosBytes(account)).toBe(5);
     expect(await keysOf(account)).toEqual([]);
+  });
+
+  it("leaves an upload stored before it ran", async () => {
+    const { account, caller, token } = await newAccount();
+    const id = newPhotoId();
+    const upload = await reserve(caller, id, "photo", 10, Date.now() - hour);
+    await env.PHOTOS.put(photoKey(upload), sealed(10));
+    expect(await store.storePhoto(upload)).toBe(true);
+
+    await sweepUploads(store, env.PHOTOS, Date.now());
+
+    expect(await photosBytes(account)).toBe(10);
+    expect(await bytesOf(await call(`/photos/${id}`, token))).toEqual(sealed(10));
+  });
+
+  it("keeps an upload it started releasing from being stored", async () => {
+    const { caller } = await newAccount();
+    const upload = await reserve(caller, newPhotoId(), "photo", 10, Date.now() - hour);
+    const released = await store.releaseStale(Date.now(), 1000);
+    expect(released.map((each) => each.upload)).toContain(upload.upload);
+    expect(await store.storePhoto(upload)).toBe(false);
   });
 
   it("leaves stored photos as they are", async () => {
@@ -376,16 +473,36 @@ describe("a photo request not of the one shape", () => {
   });
 
   it.each([
-    ["photo", `/photos/${id}`],
-    ["thumbnail", `/photos/${id}/thumbnail`],
-  ] as const)("is refused with 413 for a %s past its largest", async (part, path) => {
+    ["photo", `/photos/${id}`, 50_000_001],
+    ["thumbnail", `/photos/${id}/thumbnail`, 1_000_001],
+  ] as const)("is refused with 413 for a %s past its largest", async (part, path, length) => {
     const { account, token } = await newAccount();
     const answer = await call(path, token, {
       method: "PUT",
       body: sealed(10),
-      contentLength: largestPart[part] + 1,
+      contentLength: length,
     });
     expect(answer.status).toBe(413);
+    expect(await answer.json()).toEqual({
+      error: `a sealed ${part} is at most ${largestPart[part]} bytes`,
+    });
+    expect(await photoRows(account)).toEqual([]);
+  });
+
+  it("takes a thumbnail of exactly its largest", async () => {
+    const { token } = await newAccount();
+    const answer = await put(`/photos/${id}/thumbnail`, token, sealed(1_000_000));
+    expect(answer.status).toBe(201);
+  });
+
+  it("is refused with 411 for a Content-Length with more than digits", async () => {
+    const { account, token } = await newAccount();
+    const request = photoRequest(`/photos/${id}`, token, {
+      method: "PUT",
+      body: sealed(10),
+      contentLength: "10abc",
+    });
+    expect((await serveWith(request, env.PHOTOS)).status).toBe(411);
     expect(await photoRows(account)).toEqual([]);
   });
 
@@ -398,6 +515,15 @@ describe("a photo request not of the one shape", () => {
     const { token } = await newAccount();
     expect((await call(path, token)).status).toBe(status);
   });
+
+  it.each([`/photos/${id}/original`, `/photos/${id}/thumbnail/more`])(
+    "keeps nothing sent to %s",
+    async (path) => {
+      const { account, token } = await newAccount();
+      expect((await put(path, token, sealed(10))).status).toBe(404);
+      expect(await photoRows(account)).toEqual([]);
+    },
+  );
 
   it("is refused for a method other than GET and PUT", async () => {
     const { token } = await newAccount();

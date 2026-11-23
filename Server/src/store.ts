@@ -1,5 +1,5 @@
 import { createClient, LibsqlError } from "@libsql/client/web";
-import type { Client, InStatement, InValue, ResultSet } from "@libsql/client/web";
+import type { Client, InStatement, InValue, ResultSet, Row } from "@libsql/client/web";
 import {
   parseRevision,
   parseWritingId,
@@ -307,18 +307,14 @@ export class Store {
   }
 
   /**
-   * Marks `upload` stored once R2 holds its bytes. False when its reservation is gone: released
-   * as stale (`uploadLifetime`) before this.
+   * Marks `upload` stored once R2 holds its bytes. False when it is being released or is gone:
+   * released as stale (`uploadLifetime`) before this.
    */
   async storePhoto(upload: Upload): Promise<boolean> {
-    const done = await this.#client.execute(
-      bind(
-        `UPDATE photos SET stored = 1
-         WHERE account_id = :account AND id = :id AND part = :part AND upload = :upload
-           AND stored = 0`,
-        { ...upload },
-      ),
-    );
+    const done = await this.#client.execute({
+      sql: `UPDATE photos SET state = 'stored' WHERE upload = :upload AND state = 'reserved'`,
+      args: { upload: upload.upload },
+    });
     return done.rowsAffected === 1;
   }
 
@@ -331,8 +327,8 @@ export class Store {
   ): Promise<Answer<Upload | undefined>> {
     const answer = await this.#run(caller, now, "other", (account, allowed) => [
       {
-        sql: `SELECT account_id, upload, size FROM photos
-              WHERE account_id = ${account} AND id = :id AND part = :part AND stored = 1
+        sql: `SELECT account_id, id, part, upload, size FROM photos
+              WHERE account_id = ${account} AND id = :id AND part = :part AND state = 'stored'
                 AND ${allowed}`,
         args: { id, part },
       },
@@ -341,50 +337,47 @@ export class Store {
       return answer;
     }
     const row = answer.value[0]?.rows[0];
-    if (row === undefined) {
-      return { ok: true, value: undefined };
-    }
-    return {
-      ok: true,
-      value: {
-        account: stored(parseAccountId, row["account_id"]),
-        id,
-        part,
-        upload: stored((upload) => upload, row["upload"]),
-        size: Number(row["size"]),
-      },
-    };
+    return { ok: true, value: row === undefined ? undefined : uploadOf(row) };
   }
 
-  /** At most `count` uploads reserved `uploadLifetime` or longer before `now` and never stored. */
-  async staleUploads(now: number, count: number): Promise<Upload[]> {
+  /**
+   * Starts releasing `upload`, which failed, unless it was stored. Answers it while it is being
+   * released, for what R2 got of it to be deleted before `forgetReleased`.
+   */
+  async startReleasing(upload: Upload): Promise<Upload[]> {
     const { rows } = await this.#client.execute({
-      sql: `SELECT account_id, id, part, upload, size FROM photos
-            WHERE stored = 0 AND reserved <= :stale LIMIT :count`,
+      sql: `UPDATE photos SET state = 'releasing' WHERE upload = :upload AND state != 'stored'
+            RETURNING account_id, id, part, upload, size`,
+      args: { upload: upload.upload },
+    });
+    return rows.map(uploadOf);
+  }
+
+  /**
+   * Starts releasing at most `count` uploads reserved `uploadLifetime` or longer before `now` and
+   * never stored, and answers them.
+   */
+  async releaseStale(now: number, count: number): Promise<Upload[]> {
+    const { rows } = await this.#client.execute({
+      sql: `UPDATE photos SET state = 'releasing'
+            WHERE upload IN (SELECT upload FROM photos
+                             WHERE state != 'stored' AND reserved <= :stale LIMIT :count)
+            RETURNING account_id, id, part, upload, size`,
       args: { stale: now - uploadLifetime, count },
     });
-    return rows.map((row) => ({
-      account: stored(parseAccountId, row["account_id"]),
-      id: stored(parsePhotoId, row["id"]),
-      part: stored(parsePhotoPart, row["part"]),
-      upload: stored((upload) => upload, row["upload"]),
-      size: Number(row["size"]),
-    }));
+    return rows.map(uploadOf);
   }
 
-  /** Releases the room each of `uploads` reserved, unless it was stored. */
-  async releaseUploads(uploads: readonly Upload[]): Promise<void> {
+  /** Releases the room of `uploads` being released, once R2 holds nothing of them. */
+  async forgetReleased(uploads: readonly Upload[]): Promise<void> {
     if (uploads.length === 0) {
       return;
     }
     await this.#client.batch(
-      uploads.map((upload) =>
-        bind(
-          `DELETE FROM photos WHERE account_id = :account AND id = :id AND part = :part
-             AND upload = :upload AND stored = 0`,
-          { ...upload },
-        ),
-      ),
+      uploads.map((upload) => ({
+        sql: `DELETE FROM photos WHERE upload = :upload AND state = 'releasing'`,
+        args: { upload: upload.upload },
+      })),
       "write",
     );
   }
@@ -780,6 +773,17 @@ function keepStatements(condition: string): string[] {
      WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original)
        AND ${condition}`,
   ];
+}
+
+/** An upload as a row of `photos` holds it. */
+function uploadOf(row: Row): Upload {
+  return {
+    account: stored(parseAccountId, row["account_id"]),
+    id: stored(parsePhotoId, row["id"]),
+    part: stored(parsePhotoPart, row["part"]),
+    upload: stored((upload) => upload, row["upload"]),
+    size: Number(row["size"]),
+  };
 }
 
 /** A value read back from a column only this file writes, which holds only valid values. */
