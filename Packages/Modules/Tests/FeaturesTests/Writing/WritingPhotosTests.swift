@@ -5,7 +5,7 @@ import UIKit
 
 struct WritingPhotosTests {
   @Test func aWritingWithNoPhotosReadsAsEmpty() {
-    #expect(WritingPhotos()[1].isEmpty)
+    #expect(WritingPhotos()[UUID(sample: 1)].isEmpty)
   }
 
   @Test func eachWritingKeepsItsOwnPhotosInOrder() {
@@ -13,14 +13,14 @@ struct WritingPhotosTests {
     let second = Camera.photo(.green)
     let other = Camera.photo(.blue)
     var photos = WritingPhotos()
-    photos[1].append(first)
-    photos[2].append(other)
-    photos[1].append(second)
-    #expect(photos[1].count == 2)
-    #expect(photos[1].first === first)
-    #expect(photos[1].last === second)
-    #expect(photos[2].count == 1)
-    #expect(photos[2].first === other)
-    #expect(photos[3].isEmpty)
+    photos[UUID(sample: 1)].append(first)
+    photos[UUID(sample: 2)].append(other)
+    photos[UUID(sample: 1)].append(second)
+    #expect(photos[UUID(sample: 1)].count == 2)
+    #expect(photos[UUID(sample: 1)].first === first)
+    #expect(photos[UUID(sample: 1)].last === second)
+    #expect(photos[UUID(sample: 2)].count == 1)
+    #expect(photos[UUID(sample: 2)].first === other)
+    #expect(photos[UUID(sample: 3)].isEmpty)
   }
 }

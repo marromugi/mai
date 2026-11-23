@@ -24,6 +24,12 @@ private let now: Date = {
   return date
 }()
 
+/// Two stored writings for opening one of them.
+private let twoWritings = [
+  Writing(title: "別の文書", body: "別の本文。", updated: now),
+  Writing(title: "保存した文書", body: "保存した本文。\n二段落目。", updated: now),
+]
+
 private func movedFromNow(_ offset: DateComponents) -> Date {
   guard let date = calendar.date(byAdding: offset, to: now) else {
     preconditionFailure("\(offset) from \(now) is out of the calendar's range.")
@@ -55,7 +61,8 @@ struct WritingListTests {
     (DateComponents(year: -12), "12年前"),
   ])
   func updatedIsWordedInTheLargestWholeUnit(_ offset: DateComponents, _ expected: String) {
-    let row = WritingRow(id: 0, title: "", characterCount: 0, updated: movedFromNow(offset))
+    let row = WritingRow(
+      id: UUID(sample: 0), title: "", characterCount: 0, updated: movedFromNow(offset))
     #expect(row.updatedLabel(now: now, calendar: calendar) == expected)
   }
 
@@ -67,36 +74,44 @@ struct WritingListTests {
     let noon = try #require(
       newYork.date(from: DateComponents(year: 2025, month: 11, day: 2, hour: 12)))
     let row = WritingRow(
-      id: 0, title: "", characterCount: 0, updated: noon.addingTimeInterval(-hours * 3600))
+      id: UUID(sample: 0), title: "", characterCount: 0,
+      updated: noon.addingTimeInterval(-hours * 3600))
     #expect(row.updatedLabel(now: noon, calendar: newYork) == "1日前")
   }
 
   @Test func rowsAreNewestFirstAndTiesInIDOrder() {
     let rows = [
       WritingRow(
-        id: 1, title: "", characterCount: 0, updated: movedFromNow(DateComponents(day: -2))),
-      WritingRow(id: 3, title: "", characterCount: 0, updated: now),
+        id: UUID(sample: 1), title: "", characterCount: 0,
+        updated: movedFromNow(DateComponents(day: -2))),
+      WritingRow(id: UUID(sample: 3), title: "", characterCount: 0, updated: now),
       WritingRow(
-        id: 4, title: "", characterCount: 0, updated: movedFromNow(DateComponents(day: -1))),
-      WritingRow(id: 2, title: "", characterCount: 0, updated: now),
+        id: UUID(sample: 4), title: "", characterCount: 0,
+        updated: movedFromNow(DateComponents(day: -1))),
+      WritingRow(id: UUID(sample: 2), title: "", characterCount: 0, updated: now),
     ]
-    #expect(rows.sorted(.newestFirst).map(\.id) == [2, 3, 4, 1])
+    #expect(rows.sorted(.newestFirst).map(\.id) == [2, 3, 4, 1].map(UUID.init(sample:)))
   }
 
   @Test func rowsAreMostCharactersFirstAndTiesNewestFirstThenInIDOrder() {
     let rows = [
-      WritingRow(id: 1, title: "", characterCount: 10, updated: now),
+      WritingRow(id: UUID(sample: 1), title: "", characterCount: 10, updated: now),
       WritingRow(
-        id: 5, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+        id: UUID(sample: 5), title: "", characterCount: 300,
+        updated: movedFromNow(DateComponents(day: -2))),
       WritingRow(
-        id: 6, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -1))),
-      WritingRow(id: 3, title: "", characterCount: 0, updated: now),
+        id: UUID(sample: 6), title: "", characterCount: 300,
+        updated: movedFromNow(DateComponents(day: -1))),
+      WritingRow(id: UUID(sample: 3), title: "", characterCount: 0, updated: now),
       WritingRow(
-        id: 2, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+        id: UUID(sample: 2), title: "", characterCount: 300,
+        updated: movedFromNow(DateComponents(day: -2))),
       WritingRow(
-        id: 4, title: "", characterCount: 99999, updated: movedFromNow(DateComponents(year: -1))),
+        id: UUID(sample: 4), title: "", characterCount: 99999,
+        updated: movedFromNow(DateComponents(year: -1))),
     ]
-    #expect(rows.sorted(.mostCharactersFirst).map(\.id) == [4, 6, 2, 5, 1, 3])
+    #expect(
+      rows.sorted(.mostCharactersFirst).map(\.id) == [4, 6, 2, 5, 1, 3].map(UUID.init(sample:)))
   }
 
   /// The chosen order is remembered by these names; changing one forgets what was chosen.
@@ -106,8 +121,8 @@ struct WritingListTests {
 
   @Test(arguments: [DynamicTypeSize.large, .accessibility5])
   func untitledRowKeepsOneTitleLine(_ size: DynamicTypeSize) {
-    let untitled = WritingRow(id: 0, title: "", characterCount: 0, updated: now)
-    let titled = WritingRow(id: 0, title: "朝", characterCount: 0, updated: now)
+    let untitled = WritingRow(id: UUID(sample: 0), title: "", characterCount: 0, updated: now)
+    let titled = WritingRow(id: UUID(sample: 0), title: "朝", characterCount: 0, updated: now)
     #expect(height(of: untitled, size: size) == height(of: titled, size: size))
   }
 
@@ -126,7 +141,8 @@ struct WritingListTests {
   /// Measured widths land on device pixels, so they are checked to within half a point.
   @Test func idealRowWidthIsTitleGapAndDate() {
     let row = WritingRow(
-      id: 0, title: "パンを焼く日", characterCount: 1920, updated: movedFromNow(DateComponents(day: -1)))
+      id: UUID(sample: 0), title: "パンを焼く日", characterCount: 1920,
+      updated: movedFromNow(DateComponents(day: -1)))
     let title = Text(verbatim: row.title).textStyle(.title)
     let expected =
       width(of: title) + TypeScale.standard.chars(1, of: .meta)
@@ -144,6 +160,26 @@ struct WritingListTests {
     assertRoot(remembering: ["writingListOrder": "characterCount"])
   }
 
+  /// The page opened on a stored writing shows its stored title and body, not another's. Opening
+  /// each of the two in turn means whichever the store lists first, one test opens the other.
+  @Test func rootOpensAStoredWriting() {
+    assertRoot(remembering: [:], writings: twoWritings, opening: [twoWritings[1].id])
+  }
+
+  @Test func rootOpensTheOtherStoredWriting() {
+    assertRoot(remembering: [:], writings: twoWritings, opening: [twoWritings[0].id])
+  }
+
+  /// The rows are the stored writings, not the samples.
+  @Test func rootShowsTheStoredWritings() {
+    assertRoot(
+      remembering: [:],
+      writings: [
+        Writing(title: "保存した文書", body: "本文", updated: .now),
+        Writing(title: "もうひとつ", body: "", updated: .now),
+      ])
+  }
+
   /// An untitled row, a row updated after `now`, and one updated long enough ago that its label is
   /// wider than the column, given oldest first.
   @Test func rowsWithUnusualValues() {
@@ -151,11 +187,11 @@ struct WritingListTests {
       of: WritingListPage(
         rows: [
           WritingRow(
-            id: 1, title: "古い覚え書き", characterCount: 312,
+            id: UUID(sample: 1), title: "古い覚え書き", characterCount: 312,
             updated: movedFromNow(DateComponents(year: -1234))),
-          WritingRow(id: 2, title: "", characterCount: 0, updated: now),
+          WritingRow(id: UUID(sample: 2), title: "", characterCount: 0, updated: now),
           WritingRow(
-            id: 3, title: "時計より先の原稿", characterCount: 1_234_567,
+            id: UUID(sample: 3), title: "時計より先の原稿", characterCount: 1_234_567,
             updated: movedFromNow(DateComponents(hour: 3))),
         ],
         now: now,
@@ -203,9 +239,12 @@ private func width(of view: some View) -> CGFloat {
     .sizeThatFits(in: CGSize(width: 2000, height: 2000)).width
 }
 
-/// The app's first screen, reading what is remembered from a store holding only `remembered`.
+/// The app's first screen, reading what is remembered from a store holding only `remembered`,
+/// and writings from a store holding only `writings` (seeded with the samples when there are none).
 private func assertRoot(
   remembering remembered: [String: String],
+  writings: [Writing] = [],
+  opening path: [Writing.ID] = [],
   testName: String = #function
 ) {
   let suite = "WritingListTests.\(testName)"
@@ -216,8 +255,19 @@ private func assertRoot(
   for (key, value) in remembered {
     store.set(value, forKey: key)
   }
+  let directory = FileManager.default.temporaryDirectory.appending(
+    path: "WritingListTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let writingStore = FileWritingStore(directory: directory)
+  for writing in writings {
+    do {
+      try writingStore.save(writing)
+    } catch {
+      preconditionFailure("A writing can't be saved to \(directory): \(error)")
+    }
+  }
   assertSnapshot(
-    of: RootView().defaultAppStorage(store)
+    of: RootView(store: writingStore, path: path).defaultAppStorage(store)
       .frame(width: 402, height: 874).background(Color(.systemBackground)),
     as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
     testName: testName)
