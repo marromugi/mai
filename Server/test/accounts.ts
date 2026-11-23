@@ -17,12 +17,16 @@ export const store = Store.open(env.TURSO_URL, env.TURSO_TOKEN);
 export const photos: Photos = { bucket: env.PHOTOS, keepAlive: () => undefined };
 
 /**
- * Runs the Worker's cron trigger once, with Apple reached through `fetch`, and waits for what it
- * keeps alive.
+ * Runs the Worker's cron trigger once, with Apple reached through `fetch` and `secrets` over the
+ * tests' own, and waits for what it keeps alive.
  */
-export async function runCron(): Promise<void> {
+export async function runCron(secrets: Partial<Env> = {}): Promise<void> {
   const ctx = createExecutionContext();
-  await worker.scheduled(createScheduledController({ scheduledTime: Date.now() }), env, ctx);
+  await worker.scheduled(
+    createScheduledController({ scheduledTime: Date.now() }),
+    { ...env, ...secrets },
+    ctx,
+  );
   await waitOnExecutionContext(ctx);
 }
 

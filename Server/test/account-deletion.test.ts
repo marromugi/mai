@@ -11,7 +11,7 @@ import { RefreshTokens } from "../src/refresh-tokens";
 import { newSessionToken } from "../src/sessions";
 import type { SignIn } from "../src/sign-in";
 import { accountTables, lapsedKept, type Purchase, type Store } from "../src/store";
-import { newAccount, products, store as testStore } from "./accounts";
+import { newAccount, products, runCron, store as testStore } from "./accounts";
 
 const database = createClient({ url: env.TURSO_URL });
 const day = 24 * 60 * 60 * 1000;
@@ -569,6 +569,28 @@ describe("the cron trigger, for lapsed accounts", () => {
     vi.restoreAllMocks();
   });
 
+  // First in the block, before its other tests leave lapsed accounts behind for the run to pick.
+  it("is what the Worker's cron trigger runs, with Apple reached through fetch", async () => {
+    const one = await lapsedAccount(Date.now() - lapsedKept - day);
+    const revoked: string[] = [];
+    const real = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (input !== appleRevokeUrl) {
+        return real(input, init);
+      }
+      const form = init?.body;
+      if (form instanceof URLSearchParams) revoked.push(form.get("token") ?? "");
+      return new Response(null, { status: 200 });
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await runCron({ APPLE_SIGN_IN_KEY: clientKeyPem });
+
+    expect(revoked).toContain(one.refreshToken);
+    expect(await rowsOf(one.account)).toEqual(noRow);
+    expect(await keysOf(one.account)).toEqual([]);
+  });
+
   it("deletes an account lapsed 90 days ago, as DELETE /account does, and not one lapsed 89", async () => {
     const at = nextLapse();
     const old = await lapsedAccount(at);
@@ -631,29 +653,77 @@ describe("the cron trigger, for lapsed accounts", () => {
     expect(await keysOf(one.account)).toEqual([]);
   });
 
-  it(`deletes at most ${lapsedDeletedAtOnce} accounts a run, the longest lapsed first`, async () => {
+  it(`deletes at most ${lapsedDeletedAtOnce} accounts a run`, async () => {
     const at = nextLapse();
     const made = [];
     for (let index = 0; index <= lapsedDeletedAtOnce; index += 1) {
-      made.push(await lapsedAccount(at + index * 60_000));
-    }
-    const last = made.at(-1);
-    if (last === undefined) {
-      throw new Error("the loop made accounts");
+      made.push(await lapsedAccount(at - index));
     }
     const apple = fakeApple();
 
-    await deleteLapsed(at + lapsedKept + day, { apple });
-    expect(apple.revoked.toSorted()).toEqual(
-      made
-        .slice(0, lapsedDeletedAtOnce)
-        .map((one) => one.refreshToken)
-        .toSorted(),
-    );
-    expect(await rowsOf(last.account)).toEqual(everyRow);
+    await deleteLapsed(at + lapsedKept, { apple });
+    expect(apple.revoked).toHaveLength(lapsedDeletedAtOnce);
+    const left = [];
+    for (const one of made) {
+      if ((await rowsOf(one.account)).accounts === 1) left.push(one);
+    }
+    expect(left).toHaveLength(1);
+    expect(apple.revoked).not.toContain(left[0]?.refreshToken);
 
-    await deleteLapsed(at + lapsedKept + day, { apple });
-    expect(await rowsOf(last.account)).toEqual(noRow);
+    await deleteLapsed(at + lapsedKept, { apple });
+    expect(await rowsOf(left[0]?.account ?? "")).toEqual(noRow);
+  });
+
+  it(`reaches other accounts while ${lapsedDeletedAtOnce} fail every run`, async () => {
+    const at = nextLapse();
+    for (let index = 0; index < lapsedDeletedAtOnce; index += 1) {
+      const failing = await lapsedAccount(at - index);
+      await database.execute({
+        sql: "UPDATE accounts SET apple_refresh_token = ? WHERE id = ?",
+        args: [new Uint8Array(40), failing.account],
+      });
+    }
+    const fine = await lapsedAccount(at);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    for (let run = 0; run < 20 && (await rowsOf(fine.account)).accounts === 1; run += 1) {
+      await deleteLapsed(at + lapsedKept);
+    }
+    expect(await rowsOf(fine.account)).toEqual(noRow);
+  });
+
+  it("keeps an account a late renewal shows lapsed under 90 days when it is marked", async () => {
+    const at = nextLapse();
+    const one = await lapsedAccount(at);
+    await deleteLapsed(at + lapsedKept, {
+      store: (reached) =>
+        storeWith(reached, "markForDeletion", async (account, now) => {
+          // Signed a day after the lapse, so paid until 59 days before the run.
+          await reached.keepNotified(renewal(one, at + day));
+          return reached.markForDeletion(account, now);
+        }),
+    });
+    expect(await paidUntilOf(one.account)).toBe(at + day + month);
+    expect(await rowsOf(one.account)).toEqual(everyRow);
+  });
+
+  it("sweeps R2 again for a put that landed while the rows went, whatever rows the account had", async () => {
+    const at = nextLapse();
+    const one = await lapsedAccount(at);
+    await database.execute({
+      sql: "DELETE FROM writings WHERE account_id = ?",
+      args: [one.account],
+    });
+    const late = `${one.account}/late/photo/upload`;
+    await deleteLapsed(at + lapsedKept, {
+      store: (reached) =>
+        storeWith(reached, "deleteLapsedAccount", async (account) => {
+          await env.PHOTOS.put(late, "x");
+          return reached.deleteLapsedAccount(account);
+        }),
+    });
+    expect(await rowsOf(one.account)).toEqual(noRow);
+    expect(await keysOf(one.account)).toEqual([]);
   });
 
   it("goes on with the other accounts when one fails, and finishes it in a later run", async () => {

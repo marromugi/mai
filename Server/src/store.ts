@@ -593,13 +593,14 @@ export class Store {
   }
 
   /**
-   * At most `count` accounts lapsed `lapsedKept` or longer before `now`, longest first, with their
-   * sealed refresh tokens, for the cron trigger to delete.
+   * At most `count` accounts lapsed `lapsedKept` or longer before `now`, picked at random, with
+   * their sealed refresh tokens, for the cron trigger to delete. At random, so that accounts that
+   * fail every time can't take every place in every run.
    */
   async lapsedToDelete(now: number, count: number): Promise<ToDelete[]> {
     const { rows } = await this.#client.execute({
       sql: `SELECT id, apple_refresh_token FROM accounts WHERE paid_until <= :due
-            ORDER BY paid_until LIMIT :count`,
+            ORDER BY random() LIMIT :count`,
       args: { due: now - lapsedKept, count },
     });
     return rows.map(toDelete);

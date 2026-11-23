@@ -41,8 +41,8 @@ export async function deleteAccount(
 export const lapsedDeletedAtOnce = 10;
 
 /**
- * Deletes the accounts lapsed `lapsedKept` or longer, at most `lapsedDeletedAtOnce`, longest
- * first, as `deleteAccount` does; run by the cron trigger. Each is marked once Apple has revoked
+ * Deletes the accounts lapsed `lapsedKept` or longer, at most `lapsedDeletedAtOnce` picked at
+ * random, as `deleteAccount` does; run by the cron trigger. Each is marked once Apple has revoked
  * its token and before R2 is touched: a resubscription before then keeps the account whole, and
  * one after it no longer keeps it, so an account that fails partway is finished by a later run.
  * One that fails is logged and left for the next run, and the others go on.
