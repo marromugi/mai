@@ -98,7 +98,10 @@ export async function serve(request: Request, signIn: SignIn): Promise<Response>
     case "GET /account":
       return answered(await store.account(caller, now), (state) =>
         Response.json({
-          ...state,
+          plan: state.tier,
+          paidUntil: state.paidUntil,
+          lapsed: state.lapsed,
+          usage: state.usage,
           ownKeyCheck: state.ownKeyCheck === null ? null : hex(state.ownKeyCheck),
         }),
       );

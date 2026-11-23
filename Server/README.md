@@ -51,9 +51,13 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 文書の ID はアカウントごとに分かれ、ほかのアカウントの文書は読めず、書けず、一覧にも出ない。
 
-`GET /account` はセッションのアカウントのことを答える。`plan` はプラン、`paidUntil` はいつまで払われているか(1970 年からのミリ秒)、`lapsed` はそれを過ぎたか。`usage` は `writingsBytes`・`writings`・`requests`・`lists`・`saves` それぞれの `{"used", "limit"}` で、`limit` はプランの上限、`requests`・`lists`・`saves` の `used` はその日(UTC)の、この要求の前までの数。`ownKeyCheck` は自分の鍵の確かめの値(小文字の 16 進)で、まだなければ null。端末は自分の鍵から作った値と比べ、同じならそのまま使い、null なら鍵を作って `PUT /account/own-key-check` で置き、違えばリカバリーキーを求める。
+`PUT /writings/<ID>` は `Specs/ReadMode` のモデルの `Save` のうち文書そのものを置く部分にあたる。モデルには断られる保存がないので、#26 は受けられた保存にだけ写しを送る。`GET /writings/<ID>` は文書を取るもので、モデルは文書の中身を扱わない。モデルの `Sync` が取り込む設定は #26 が足す。
 
-`PUT` は `Specs/ReadMode` のモデルの `Save` のうち文書そのものを置く部分にあたる。モデルには断られる保存がないので、#26 は受けられた保存にだけ写しを送る。`GET` は文書を取るもので、モデルは文書の中身を扱わない。モデルの `Sync` が取り込む設定は #26 が足す。
+`GET /account` はセッションのアカウントのことを答える。`plan` はプラン、`paidUntil` はいつまで払われているか(1970 年からのミリ秒)、`lapsed` はそれを過ぎたか。`usage` は `writingsBytes`・`writings`・`requests`・`lists`・`saves` それぞれの `{"used", "limit"}` で、`limit` はプランの上限、`requests`・`lists`・`saves` の `used` はその日(UTC)の、この要求の前までの数。`ownKeyCheck` は自分の鍵の確かめの値(小文字の 16 進)で、まだなければ null。端末はこれで自分の鍵を決める(#22 の設計の 3 節)。
+
+- 端末に自分の鍵があるとき: その鍵から作った値と同じならそのまま使う。null なら `PUT /account/own-key-check` でその値を置く。違えばその鍵は使わず、リカバリーキーを求める。
+- 端末に自分の鍵がないとき: null なら鍵を作って、その値を置く。null でなければ鍵を作らず、リカバリーキーを求める。
+- 置こうとして 409 なら、別の端末が先に鍵を作っている。作った鍵は使わず、リカバリーキーを求める。
 
 ### 購読
 

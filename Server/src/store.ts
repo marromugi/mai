@@ -80,7 +80,7 @@ export type Use = { used: number; limit: number };
  * before the request that read them. `ownKeyCheck` is null until a device keeps one.
  */
 export type AccountState = {
-  plan: string;
+  tier: string;
   paidUntil: number;
   lapsed: boolean;
   usage: Record<"writingsBytes" | "writings" | "requests" | "lists" | "saves", Use>;
@@ -407,7 +407,7 @@ export class Store {
   async account(caller: Caller, now: number): Promise<Answer<AccountState>> {
     const answer = await this.#run(caller, now, "other", (account, allowed) => [
       {
-        sql: `SELECT a.tier, a.paid_until, a.paid_until <= :now AS lapsed, a.own_key_check,
+        sql: `SELECT a.tier, a.paid_until, NOT ${paidNow} AS lapsed, a.own_key_check,
                 a.writings_bytes, p.writings_bytes AS writings_bytes_limit,
                 a.writings_count, p.writings_count AS writings_count_limit,
                 coalesce(u.requests, 0) AS requests, p.requests_per_day,
@@ -437,7 +437,7 @@ export class Store {
     return {
       ok: true,
       value: {
-        plan: stored((tier) => tier, row["tier"]),
+        tier: stored((tier) => tier, row["tier"]),
         paidUntil: Number(row["paid_until"]),
         lapsed: Number(row["lapsed"]) === 1,
         usage: {
@@ -524,7 +524,7 @@ export class Store {
       LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
       WHERE s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive`;
     // An account writes only while its subscription is paid for.
-    const paid = "(:write = 0 OR a.paid_until > :now)";
+    const paid = `(:write = 0 OR ${paidNow})`;
     const left = {
       requests: "coalesce(u.requests, 0) < p.requests_per_day",
       lists: "(:list = 0 OR coalesce(u.lists, 0) < p.lists_per_day)",
@@ -569,6 +569,9 @@ export class Store {
     return { ok: true, value: results.slice(1, 1 + statements.length) };
   }
 }
+
+/** Whether the account `a` is paid for at `:now`; once it isn't, the account has lapsed. */
+const paidNow = "a.paid_until > :now";
 
 /** Whether a plan is sold as the subscription's product, `:product`. */
 const plan = "EXISTS (SELECT 1 FROM plans WHERE product_id = :product)";
