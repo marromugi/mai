@@ -12,7 +12,8 @@ struct PhotoStack: View {
   var body: some View {
     let shown = Array(photos.suffix(Self.layers.count))
     ZStack {
-      ForEach(Array(shown.enumerated()), id: \.element) { index, photo in
+      // Keyed on the image object: each photo the camera takes is a new one.
+      ForEach(Array(shown.enumerated()), id: \.element.id) { index, photo in
         let layer = Self.layers[shown.count - 1 - index]
         PhotoPrint(photo: photo, bounds: bounds)
           .rotationEffect(.degrees(layer.tilt))
@@ -23,7 +24,12 @@ struct PhotoStack: View {
     .padding(.vertical, scale.space(.m))
     .accessibilityElement(children: .ignore)
     .accessibilityAddTraits(.isImage)
-    .accessibilityLabel(photos.count == 1 ? "写真" : "写真 \(photos.count)枚")
+    .accessibilityLabel(Self.label(count: photos.count))
+  }
+
+  /// What VoiceOver reads for a stack of `count` photos.
+  static func label(count: Int) -> String {
+    count == 1 ? "写真" : "写真 \(count)枚"
   }
 
   /// The box each print fits in, border included: smaller than the text column.
@@ -66,4 +72,8 @@ private struct PhotoPrint: View {
   private static let border = UIColor { traits in
     traits.userInterfaceStyle == .dark ? UIColor(white: 0.85, alpha: 1) : .white
   }
+}
+
+extension UIImage {
+  fileprivate var id: ObjectIdentifier { ObjectIdentifier(self) }
 }

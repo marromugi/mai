@@ -18,23 +18,28 @@ struct WritingPhotoStackTests {
     assertPage([.landscape], .light)
   }
 
-  /// Photos taken one after another pile up, the newest on top.
+  /// Photos taken one after another pile up, the newest (the dusk) on top.
   @Test func photosInARow() {
-    assertPage([.portrait, .landscape, .portrait], .light)
+    assertPage([.portrait, .landscape, .dusk], .light)
   }
 
   @Test func photosInARowInDarkMode() {
-    assertPage([.portrait, .landscape, .portrait], .dark)
+    assertPage([.portrait, .landscape, .dusk], .dark)
   }
 
   @Test func photosInARowAtTheLargestSize() {
-    assertPage([.portrait, .landscape, .portrait], .light, .accessibility5)
+    assertPage([.portrait, .landscape, .dusk], .light, .accessibility5)
+  }
+
+  @Test func voiceOverReadsTheCount() {
+    #expect(PhotoStack.label(count: 1) == "写真")
+    #expect(PhotoStack.label(count: 5) == "写真 5枚")
   }
 
   /// Under the newest three, older photos are not drawn.
   @Test func theStackDrawsTheNewestThree() throws {
     let older: [UIImage] = [.landscape, .landscape]
-    let newest: [UIImage] = [.portrait, .landscape, .portrait]
+    let newest: [UIImage] = [.portrait, .landscape, .dusk]
     let all = try #require(pageImage(older + newest)?.pngData())
     #expect(all == pageImage(newest)?.pngData())
   }
@@ -57,6 +62,11 @@ extension UIImage {
   /// its own image, as each photo the camera takes is.
   fileprivate static var portrait: UIImage {
     scene(CGSize(width: 300, height: 400), sky: .systemTeal)
+  }
+
+  /// A new photo 3 wide by 4 tall under a dusk sky, told apart from `portrait`.
+  fileprivate static var dusk: UIImage {
+    scene(CGSize(width: 300, height: 400), sky: .systemIndigo)
   }
 
   /// A new photo 4 wide by 3 tall, in other colours.

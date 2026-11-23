@@ -20,7 +20,8 @@ struct WritingView: View {
   }
 }
 
-/// The writing's page in or out of the typesetting mode. As the title scrolls off the top, the
+/// The writing's page, with its `photos`, in or out of the typesetting mode. As the title scrolls
+/// off the top, the
 /// header fades in to stand in for it. In the mode the page shrinks to a sheet on the desk and stops
 /// scrolling, the typesetting gestures over it step `setting`, and a tap leaves the mode. The bottom
 /// row's camera sets `takingPhoto`, which covers the page with `camera`'s screen until it takes a
