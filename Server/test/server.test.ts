@@ -491,20 +491,49 @@ describe("a plan's storage", () => {
     expect(grown.status).toBe(429);
 
     for (const other of [before, after]) {
-      const saved = await request(`/writings/${id}`, {
+      const others = `Bearer ${other.token}`;
+      for (const writing of [id, otherId]) {
+        const saved = await request(`/writings/${writing}`, {
+          method: "PUT",
+          body: envelope({ writing }),
+          authorization: others,
+        });
+        expect(saved.status).toBe(200);
+      }
+      // 174 + 126 = 300 bytes.
+      const filled = await request(`/writings/${id}`, {
         method: "PUT",
-        body: envelope({ contentsLength: 58 }),
-        authorization: `Bearer ${other.token}`,
-      });
-      expect(saved.status).toBe(200);
-      // 300 bytes with the one above.
-      const filled = await request(`/writings/${otherId}`, {
-        method: "PUT",
-        body: envelope({ writing: otherId }),
-        authorization: `Bearer ${other.token}`,
+        body: envelope({ updated: 1_790_000_001_000n, contentsLength: 58 }),
+        base: first,
+        authorization: others,
       });
       expect(filled.status).toBe(200);
     }
+  });
+
+  it("doesn't count one account's growing writing against another", async () => {
+    const growing = `Bearer ${(await newAccount("test-storage")).token}`;
+    await request(`/writings/${id}`, { method: "PUT", body: envelope(), authorization });
+    await request(`/writings/${id}`, {
+      method: "PUT",
+      body: envelope(),
+      authorization: growing,
+    });
+    const grown = await request(`/writings/${id}`, {
+      method: "PUT",
+      body: envelope({ updated: 1_790_000_001_000n, contentsLength: 58 }),
+      base: first,
+      authorization: growing,
+    });
+    expect(grown.status).toBe(200);
+
+    // 126 + 174 = 300 bytes.
+    const filled = await request(`/writings/${otherId}`, {
+      method: "PUT",
+      body: envelope({ writing: otherId, contentsLength: 58 }),
+      authorization,
+    });
+    expect(filled.status).toBe(200);
   });
 });
 
