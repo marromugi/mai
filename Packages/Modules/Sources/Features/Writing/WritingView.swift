@@ -205,8 +205,7 @@ struct WritingHeader: View {
     .accessibilityLabel("閉じる")
   }
 
-  /// The title on one line in the title's bold, at `step`'s size, which grows no larger than at
-  /// the standard scale.
+  /// The title on one line in the title's bold, at `step`'s size.
   private func titleText(at step: TextRole) -> some View {
     let size = min(scale.size(step), TypeScale.standard.size(step))
     return Text(verbatim: title)
