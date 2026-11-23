@@ -61,12 +61,14 @@ struct SettingsForm: View {
 }
 
 /// One value of a body setting, with what it reads as and a stepper that moves it a step at a time
-/// within its range.
+/// within its range. At accessibility sizes the stepper goes under the title and value, so neither
+/// breaks mid-word.
 private struct SettingStepper: View {
   let title: LocalizedStringKey
   let adjustment: BodyAdjustment
   @Binding var setting: BodySetting
   let value: (BodySetting) -> String
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
   init(
     _ title: LocalizedStringKey, _ adjustment: BodyAdjustment, setting: Binding<BodySetting>,
@@ -79,16 +81,29 @@ private struct SettingStepper: View {
   }
 
   var body: some View {
+    if dynamicTypeSize.isAccessibilitySize {
+      VStack(alignment: .leading) {
+        label
+        stepper { label }.labelsHidden()
+      }
+    } else {
+      stepper { label }
+    }
+  }
+
+  private var label: some View {
+    LabeledContent(title, value: value(setting))
+  }
+
+  private func stepper(_ label: () -> some View) -> some View {
     Stepper(
       value: Binding(
         get: { setting[adjustment] },
         set: { setting = setting.moving(adjustment, to: $0) }
       ),
       in: adjustment.range,
-      step: adjustment.step
-    ) {
-      LabeledContent(title, value: value(setting))
-    }
+      step: adjustment.step,
+      label: label)
   }
 }
 
