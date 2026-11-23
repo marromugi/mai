@@ -45,6 +45,15 @@
 
 Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` を消す(`Store.sweep`)。#26 の写しと読み取りモードの期限もここに足す。
 
+## Apple の署名
+
+経路はまだ呼ばない(#22 の S3・S4 が呼ぶ)。どれも WebCrypto だけで確かめ、通れば読み出した値を、通らなければ理由を返す。
+
+- `src/apple-sign-in.ts`: Sign in with Apple の ID トークン。Apple の JWKS(RS256)で署名、`iss`、`aud`(バンドル ID)、`exp`、渡された `nonce`。JWKS は Cache に 1 日置き、知らない鍵 ID が来たら取り直す(前の取得から 5 分たっていれば、1 回だけ)。
+- `src/app-store.ts`: StoreKit 2 の署名つき取引・更新の情報と、App Store Server Notifications V2 の `signedPayload`(中の取引と更新の情報も)。ES256 の署名と、`x5c` の葉・中間が `src/apple-root.ts` の Apple Root CA - G3 までつながること。ルートは引数で渡し、`x5c` の中のルートは使わない。
+
+テストは自分で作った認証局と鍵で作ったものを確かめる。本物で確かめているのは、G3 と、それが署名した中間の WWDR G6 だけ。
+
 ## 手元で動かす
 
 テストは手元の libSQL サーバー `sqld`(`turso dev` が中で動かすもの)を空のデータベースで立て、`schema.sql` を入れてから走る。ログインは要らない。
