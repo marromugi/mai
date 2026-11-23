@@ -18,7 +18,8 @@ import { Store, type Answer, type Refusal } from "./store";
 
 /**
  * The server keeps only sealed writings, and knows of each only its ID, updated time and size;
- * of each account, its Apple user, Apple's refresh token (sealed), and its own key check.
+ * of each account, its Apple user, Apple's refresh token (sealed), its own key check, and its
+ * App Store subscriptions (transaction ID, product, expiry, environment).
  * Routes are listed in `Server/README.md`.
  */
 export default {
@@ -34,7 +35,10 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-/** What signing in reaches, from the Worker's secrets; `send` is `fetch` outside the tests. */
+/**
+ * What the routes reach, from the Worker's secrets and vars; `send` is `fetch` and
+ * `appStoreRoot` is Apple Root CA - G3 outside the tests.
+ */
 export function signInOf(
   env: Env,
   send: (url: string, init?: RequestInit) => Promise<Response>,
