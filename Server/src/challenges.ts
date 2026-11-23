@@ -1,4 +1,5 @@
 import { base64urlBytes } from "./jws";
+import { hex } from "./hex";
 import { base64url } from "./sessions";
 
 /**
@@ -55,7 +56,7 @@ export class Challenges {
     return {
       value,
       expires,
-      nonce: Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(""),
+      nonce: hex(digest),
     };
   }
 

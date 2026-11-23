@@ -2,6 +2,7 @@ import { AppleSignInKeys } from "./apple-sign-in";
 import { AppleTokens } from "./apple-tokens";
 import { Challenges } from "./challenges";
 import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
+import { hex } from "./hex";
 import { RefreshTokens } from "./refresh-tokens";
 import { callerOf } from "./sessions";
 import { appleRootCaG3 } from "./apple-root";
@@ -94,6 +95,16 @@ export async function serve(request: Request, signIn: SignIn): Promise<Response>
       return (await store.endSession(caller, now))
         ? new Response(null, { status: 204 })
         : refused("session");
+    case "GET /account":
+      return answered(await store.account(caller, now), (state) =>
+        Response.json({
+          plan: state.tier,
+          paidUntil: state.paidUntil,
+          lapsed: state.lapsed,
+          usage: state.usage,
+          ownKeyCheck: state.ownKeyCheck === null ? null : hex(state.ownKeyCheck),
+        }),
+      );
     case "PUT /account/subscription": {
       const sent = await sentSubscription(request, signIn.appStore);
       if (!sent.ok) {
