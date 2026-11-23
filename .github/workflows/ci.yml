@@ -33,6 +33,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: Server/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - name: Install sqld, the libSQL server the tests run on
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o sqld.tar.xz https://github.com/tursodatabase/libsql/releases/download/libsql-server-v0.24.32/libsql-server-x86_64-unknown-linux-gnu.tar.xz
+          echo "71720fc8648c19efef416efebd47145ef59b62e198770533530a858e1336879f  sqld.tar.xz" | sha256sum -c -
+          mkdir sqld && tar -xf sqld.tar.xz -C sqld
+          dirname "$(find "$PWD/sqld" -type f -name sqld)" >> "$GITHUB_PATH"
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm fmt:check

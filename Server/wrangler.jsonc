@@ -3,9 +3,6 @@
   "name": "mai-server",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
-  "durable_objects": {
-    "bindings": [{ "name": "WRITINGS", "class_name": "Writings" }],
-  },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Writings"] }],
-  "secrets": { "required": ["ACCESS_TOKEN_SHA256"] },
+  "triggers": { "crons": ["* * * * *"] },
+  "secrets": { "required": ["TURSO_URL", "TURSO_TOKEN"] },
 }

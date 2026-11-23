@@ -1,16 +1,35 @@
+import { createServer } from "node:net";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
-export default defineConfig({
-  plugins: [
-    cloudflareTest({
-      wrangler: { configPath: "./wrangler.jsonc" },
-      miniflare: {
-        // SHA-256 of "test-token", the token the tests send.
-        bindings: {
-          ACCESS_TOKEN_SHA256: "4c5dc9b7708905f77f5e5d16316b5dfb425e68cb326dcd55a860e90a7707031e",
-        },
-      },
-    }),
-  ],
+async function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() => {
+        if (address === null || typeof address === "string") {
+          reject(new Error("a TCP server listening on a port has an address with a port"));
+        } else {
+          resolve(address.port);
+        }
+      });
+    });
+  });
+}
+
+export default defineConfig(async () => {
+  // `test/sqld.ts` starts the tests' libSQL server on this port.
+  const port = await freePort();
+  process.env["MAI_TEST_SQLD_PORT"] = String(port);
+  return {
+    test: { globalSetup: ["./test/sqld.ts"] },
+    plugins: [
+      cloudflareTest({
+        wrangler: { configPath: "./wrangler.jsonc" },
+        miniflare: { bindings: { TURSO_URL: `http://127.0.0.1:${port}`, TURSO_TOKEN: "" } },
+      }),
+    ],
+  };
 });

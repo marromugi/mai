@@ -1,11 +1,7 @@
-import { reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { newAccount } from "./accounts";
 import fixture from "./fixtures/sealed-writing.json";
-
-afterEach(async () => {
-  await reset();
-});
 
 function bytes(hex: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(hex.match(/../g) ?? [], (pair) => parseInt(pair, 16));
@@ -37,11 +33,12 @@ it("opens, by the layout in Server/README.md, a writing the app sealed", async (
 });
 
 it("keeps a writing the app sealed", async () => {
+  const { token } = await newAccount();
   const saved = await exports.default.fetch(
     new Request(`https://mai.test/writings/${fixture.id}`, {
       method: "PUT",
       headers: {
-        Authorization: "Bearer test-token",
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/octet-stream",
         "Mai-Base-Revision": "none",
       },
@@ -54,7 +51,7 @@ it("keeps a writing the app sealed", async () => {
   expect(await saved.json()).toEqual({ revision });
 
   const listed = await exports.default.fetch(
-    new Request("https://mai.test/writings", { headers: { Authorization: "Bearer test-token" } }),
+    new Request("https://mai.test/writings", { headers: { Authorization: `Bearer ${token}` } }),
   );
   expect(await listed.json()).toEqual({
     writings: [{ id: fixture.id, revision, updated: fixture.updated, size: envelope.length }],
