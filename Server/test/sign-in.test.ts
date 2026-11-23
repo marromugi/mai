@@ -198,7 +198,7 @@ async function accountRow(id: string) {
 }
 
 describe("making an account", () => {
-  it("makes it from a valid ID token and code, with a session #46's routes take", async () => {
+  it("makes it from a valid ID token and code, with a session the writings routes take", async () => {
     const apple = fakeApple();
     const { account, sub, code, answer } = await makeAccount(apple);
 
@@ -503,7 +503,7 @@ describe("a challenge", () => {
 });
 
 describe("signing in", () => {
-  it("starts a session on the Apple user's account that #46's routes take", async () => {
+  it("starts a session on the Apple user's account that the writings routes take", async () => {
     const apple = fakeApple();
     const { account, sub } = await makeAccount(apple);
 

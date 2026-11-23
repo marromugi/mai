@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { parseAccountId } from "../src/account-id";
 import { challengeLifetime } from "../src/challenges";
 import { newSessionToken, type Caller } from "../src/sessions";
 import { Store } from "../src/store";
@@ -14,7 +15,10 @@ export async function newAccount(
   tier = "basic",
   now = Date.now(),
 ): Promise<{ account: string; token: string; caller: Caller }> {
-  const account = crypto.randomUUID();
+  const account = parseAccountId(crypto.randomUUID());
+  if (account === undefined) {
+    throw new Error("crypto.randomUUID gives a lowercase UUID");
+  }
   const { token, caller } = await newSessionToken();
   const made = await store.makeAccount(
     { id: account, appleSub: `test.${account}`, sealedRefreshToken: new Uint8Array(), tier },

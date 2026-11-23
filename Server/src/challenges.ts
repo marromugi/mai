@@ -4,9 +4,10 @@ import { base64url } from "./sessions";
 /**
  * A challenge is `<expires>.<random>.<mac>`: when it expires in milliseconds since 1970, 16 random
  * bytes, and an HMAC-SHA-256 of the two under the Worker's `CHALLENGE_KEY`, both in base64url. The
- * server keeps nothing when it gives one out, and keeps a used one in `used_challenges` until it
- * expires. The app gives Apple the challenge's SHA-256 in lowercase hex as the Sign in with Apple
- * nonce, so that is the `nonce` the ID token carries.
+ * server keeps nothing when it gives one out, and keeps a used one in `used_challenges` until
+ * `Store.sweep` removes it, `usedChallengeMargin` past its expiry. The app gives Apple the
+ * challenge's SHA-256 in lowercase hex as the Sign in with Apple nonce, so that is the `nonce` the
+ * ID token carries.
  */
 
 export const challengeLifetime = 5 * 60 * 1000;

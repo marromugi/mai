@@ -42,7 +42,8 @@ CREATE TABLE sessions (
 CREATE INDEX sessions_account ON sessions (account_id);
 CREATE INDEX sessions_last_used ON sessions (last_used);
 
--- A Sign in with Apple challenge (src/challenges.ts) once used, kept until it expires. claim tells
+-- A Sign in with Apple challenge (src/challenges.ts) once used, kept an hour past its expiry
+-- (usedChallengeMargin in src/store.ts). claim tells
 -- the request that used it from one that came after.
 CREATE TABLE used_challenges (
   value TEXT PRIMARY KEY,

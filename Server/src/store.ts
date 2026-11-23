@@ -7,6 +7,7 @@ import {
   type Revision,
   type WritingId,
 } from "./envelope";
+import { parseAccountId, type AccountId } from "./account-id";
 import type { Challenge } from "./challenges";
 import { lastUsedResolution, sessionLifetime, type Caller } from "./sessions";
 
@@ -29,8 +30,7 @@ export type Saved = { saved: boolean; revision: Revision | null };
 export type Read = { revision: Revision; bytes: ArrayBuffer } | undefined;
 
 export type NewAccount = {
-  /** The UUID the app made, in lowercase. */
-  readonly id: string;
+  readonly id: AccountId;
   readonly appleSub: string;
   /** Apple's refresh token as `RefreshTokens.seal` sealed it for this account. */
   readonly sealedRefreshToken: Uint8Array;
@@ -42,7 +42,7 @@ export type NewAccount = {
 export type Made = "made" | "challenge-used" | "taken";
 
 export type SignedIn =
-  | { signedIn: true; account: string }
+  | { signedIn: true; account: AccountId }
   | { signedIn: false; reason: "challenge-used" | "no-account" };
 
 /** What a request counts against its plan's daily limits, beside the request itself. */
@@ -186,8 +186,9 @@ export class Store {
   }
 
   /**
-   * Makes the account and its first session, using up `challenge`. Nothing is written when the
-   * challenge was used before, or when the account's ID or Apple user already has an account.
+   * Makes the account and its first session, using up `challenge`. No account or session is
+   * written when the challenge was used before or has expired, or when the account's ID or Apple
+   * user already has an account; the challenge is used up all the same.
    */
   async makeAccount(
     account: NewAccount,
@@ -249,7 +250,7 @@ export class Store {
     }
     return {
       signedIn: true,
-      account: stored(parseWritingId, row["id"]),
+      account: stored(parseAccountId, row["id"]),
     };
   }
 

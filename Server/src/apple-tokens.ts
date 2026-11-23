@@ -43,20 +43,23 @@ export class AppleTokens {
       code,
       grant_type: "authorization_code",
     });
-    let response: Response | undefined;
-    let body: unknown;
+    let response: Response;
     try {
       response = await this.post(appleTokenUrl, { method: "POST", body: form });
+    } catch (error) {
+      // fetch rejects with a TypeError when the network fails.
+      if (error instanceof TypeError) {
+        return { ok: false, failure: "unavailable" };
+      }
+      throw error;
+    }
+    let body: unknown;
+    try {
       body = await response.json();
     } catch (error) {
-      if (error instanceof TypeError || error instanceof SyntaxError) {
-        body = undefined;
-      } else {
+      if (!(error instanceof SyntaxError)) {
         throw error;
       }
-    }
-    if (response === undefined) {
-      return { ok: false, failure: "unavailable" };
     }
     const answer = isJson(body) ? body : {};
     const clientError = response.status >= 400 && response.status < 500;

@@ -1,7 +1,7 @@
 import { verifyIdentityToken, type AppleSignInKeys, type SignInFailure } from "./apple-sign-in";
 import type { AppleTokens } from "./apple-tokens";
 import type { Challenge, Challenges } from "./challenges";
-import { parseWritingId } from "./envelope";
+import { parseAccountId } from "./account-id";
 import { isJson, text, type Json } from "./jws";
 import type { RefreshTokens } from "./refresh-tokens";
 import { newSessionToken } from "./sessions";
@@ -39,7 +39,7 @@ export async function makeAccount(
   now: number,
 ): Promise<Response> {
   const body = await jsonBody(request);
-  const account = parseWritingId(text(body?.["account"]) ?? "");
+  const account = parseAccountId(text(body?.["account"]) ?? "");
   const code = text(body?.["authorizationCode"]);
   if (account === undefined || code === undefined) {
     return problem(400, "an account is made from its UUID, a challenge, an ID token and a code");

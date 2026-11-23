@@ -8,7 +8,8 @@ import { issueChallenge, makeAccount, problem, startSession, type SignIn } from 
 import { Store, type Answer, type Refusal } from "./store";
 
 /**
- * The server keeps only sealed writings, and knows of each only its ID, updated time and size.
+ * The server keeps only sealed writings, and knows of each only its ID, updated time and size;
+ * of each account, its Apple user, Apple's refresh token (sealed), and its own key check.
  * Routes are listed in `Server/README.md`.
  */
 export default {

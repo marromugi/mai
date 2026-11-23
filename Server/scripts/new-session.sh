@@ -1,7 +1,7 @@
 #!/bin/bash
 # Makes an account with one session in a local database file, before `turso dev --db-file` serves
-# it, and prints the session's token. Writes the rows Store.makeAccount writes, with no Apple user
-# or refresh token behind them; for local runs, which don't reach Apple.
+# it, and prints the session's token. Writes an account and a session as Store.makeAccount does,
+# with no Apple user or refresh token behind them; for local runs, which don't reach Apple.
 # Usage: new-session.sh <database file> [plan]
 set -euo pipefail
 
