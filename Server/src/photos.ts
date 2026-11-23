@@ -25,6 +25,11 @@ export function photoKey(upload: Upload): string {
   return `${upload.account}/${upload.id}/${upload.part}/${upload.upload}`;
 }
 
+/** The upload's own ID, from a key `photoKey` made. */
+export function uploadOfKey(key: string): string {
+  return key.slice(key.lastIndexOf("/") + 1);
+}
+
 export type Sized =
   | { ok: true; size: number; body: ReadableStream }
   | { ok: false; status: number; reason: string };

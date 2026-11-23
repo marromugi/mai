@@ -87,11 +87,14 @@ type Server = {
   bucket?: R2Bucket;
   /** Replaces what the routes reach Turso through. */
   store?: (store: Store) => Store;
+  /** Where what the Worker keeps alive past the request goes, unawaited, when given. */
+  kept?: Promise<unknown>[];
 };
 
 /**
  * Answers `sent` as the Worker does, with Apple's revoke endpoint faked and R2 reached through
- * `bucket`; what the Worker keeps alive past the request is awaited before this answers.
+ * `bucket`; what the Worker keeps alive past the request is awaited before this answers, unless
+ * `kept` takes it.
  */
 async function serveWith(sent: Request, server: Server = {}): Promise<Response> {
   const signed: SignIn = signInOf(
@@ -100,12 +103,14 @@ async function serveWith(sent: Request, server: Server = {}): Promise<Response> 
     await caches.open(crypto.randomUUID()),
   );
   const signIn = { ...signed, store: server.store?.(signed.store) ?? signed.store };
-  const kept: Promise<unknown>[] = [];
+  const kept = server.kept ?? [];
   const answer = await serve(sent, signIn, {
     bucket: server.bucket ?? env.PHOTOS,
     keepAlive: (work) => kept.push(work),
   });
-  await Promise.all(kept);
+  if (server.kept === undefined) {
+    await Promise.all(kept);
+  }
   return answer;
 }
 
@@ -243,13 +248,66 @@ describe("deleting an account", () => {
     expect((await deleteAccount(one.token)).status).toBe(401);
   });
 
-  it("deletes more objects than R2 lists at once", async () => {
+  it("empties R2 of more objects than it lists at once before the rows go", async () => {
     const { account, token } = await fullAccount();
     await Promise.all(
       Array.from({ length: 1100 }, (_, index) => env.PHOTOS.put(`${account}/extra/${index}`, "x")),
     );
-    expect((await deleteAccount(token)).status).toBe(204);
+    let leftBeforeRows: number | undefined;
+    const answer = await deleteAccount(token, {
+      store: (store) =>
+        storeWith(store, async (...args) => {
+          leftBeforeRows = (await env.PHOTOS.list({ prefix: `${account}/` })).objects.length;
+          return store.deleteAccount(...args);
+        }),
+    });
+    expect(answer.status).toBe(204);
+    expect(leftBeforeRows).toBe(0);
     expect(await keysOf(account)).toEqual([]);
+  });
+
+  it("deletes nothing for a token with the session's ID and another secret, or an expired one", async () => {
+    const one = await fullAccount();
+    const [, session] = one.token.split(".");
+    const forged = `s1.${session}.${"A".repeat(43)}`;
+    expect((await deleteAccount(forged)).status).toBe(401);
+
+    const old = await fullAccount();
+    await database.execute({
+      sql: "UPDATE sessions SET last_used = ? WHERE account_id = ?",
+      args: [Date.now() - 181 * 24 * 60 * 60 * 1000, old.account],
+    });
+    expect((await deleteAccount(old.token)).status).toBe(401);
+
+    for (const account of [one, old]) {
+      expect(await rowsOf(account.account)).toEqual(everyRow);
+      expect(await keysOf(account.account)).toHaveLength(2);
+    }
+  });
+
+  it("leaves the photos of an account made again with the same ID before R2 is swept again", async () => {
+    const one = await fullAccount();
+    // The second sweep's list waits until the account is made again.
+    let lists = 0;
+    const madeAgain = Promise.withResolvers<void>();
+    const bucket = bucketWith("list", async (options?: R2ListOptions) => {
+      lists += 1;
+      if (lists === 2) await madeAgain.promise;
+      return env.PHOTOS.list(options);
+    });
+    const kept: Promise<unknown>[] = [];
+    expect((await deleteAccount(one.token, { bucket, kept })).status).toBe(204);
+
+    // The purchase's appAccountToken makes the account again with the same ID.
+    const again = await newAccount(undefined, Date.now(), undefined, one.account);
+    const photo = crypto.randomUUID();
+    const put = request("PUT", `/photos/${photo}`, again.token, new Uint8Array(20).fill(7));
+    expect((await serveWith(put)).status).toBe(201);
+
+    madeAgain.resolve();
+    await Promise.all(kept);
+    expect(lists).toBe(2);
+    expect((await serveWith(request("GET", `/photos/${photo}`, again.token))).status).toBe(200);
   });
 
   it("deletes a lapsed account, and one past its day's requests", async () => {
@@ -317,12 +375,39 @@ describe("a deletion that fails partway", () => {
 
   it("deletes nothing when Apple refuses the Worker's own request", async () => {
     const one = await fullAccount();
-    const apple = fakeApple(() => Response.json({ error: "invalid_client" }, { status: 400 }));
-    await expect(deleteAccount(one.token, { apple })).rejects.toThrow(
-      /revoke endpoint answered 400/,
-    );
-    expect(await rowsOf(one.account)).toEqual(everyRow);
-    expect(await keysOf(one.account)).toHaveLength(2);
+    for (const error of ["invalid_client", "invalid_grant"]) {
+      const apple = fakeApple(() => Response.json({ error }, { status: 400 }));
+      await expect(deleteAccount(one.token, { apple })).rejects.toThrow(
+        `revoke endpoint answered 400 to the Worker: ${error}`,
+      );
+      expect(await rowsOf(one.account)).toEqual(everyRow);
+      expect(await keysOf(one.account)).toHaveLength(2);
+    }
+  });
+
+  it("answers 204 when R2 fails after the rows go, the failure going to the runtime", async () => {
+    const one = await fullAccount();
+    const late = `${one.account}/late/photo/upload`;
+    let deletes = 0;
+    const bucket = bucketWith("delete", async (keys: string | string[]) => {
+      deletes += 1;
+      if (deletes > 1) throw new Error("R2 is unavailable");
+      return env.PHOTOS.delete(keys);
+    });
+    const kept: Promise<unknown>[] = [];
+    const answer = await deleteAccount(one.token, {
+      bucket,
+      kept,
+      store: (store) =>
+        storeWith(store, async (...args) => {
+          await env.PHOTOS.put(late, "x");
+          return store.deleteAccount(...args);
+        }),
+    });
+    expect(answer.status).toBe(204);
+    expect(await rowsOf(one.account)).toEqual(noRow);
+    await expect(Promise.all(kept)).rejects.toThrow(/R2 is unavailable/);
+    expect(await keysOf(one.account)).toEqual([late]);
   });
 
   it("keeps every row when R2 fails, and finishes when called again", async () => {

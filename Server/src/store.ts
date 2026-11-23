@@ -569,6 +569,18 @@ export class Store {
     };
   }
 
+  /** Which of `uploads` have a row in `photos`, in any state. */
+  async heldUploads(uploads: readonly string[]): Promise<Set<string>> {
+    if (uploads.length === 0) {
+      return new Set();
+    }
+    const { rows } = await this.#client.execute({
+      sql: `SELECT upload FROM photos WHERE upload IN (SELECT value FROM json_each(:uploads))`,
+      args: { uploads: JSON.stringify(uploads) },
+    });
+    return new Set(rows.map((row) => stored((upload) => upload, row["upload"])));
+  }
+
   /**
    * Deletes every row of the caller's account `account`, its sessions last, in one batch, while
    * the caller's session is live. False when it wasn't, and nothing was deleted.
