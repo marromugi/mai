@@ -76,8 +76,8 @@ enum ServerContract: CaseIterable, Sendable {
       await #expect {
         try await stranger.save(ownKey.seal(first), over: nil)
       } throws: { error in
-        guard case ServerError.refused(status: 401, _) = error else { return false }
-        return true
+        guard case ServerError.refused(status: 401, let reason) = error else { return false }
+        return !reason.isEmpty
       }
       #expect(try await server.read(first.id) == nil)
     }
