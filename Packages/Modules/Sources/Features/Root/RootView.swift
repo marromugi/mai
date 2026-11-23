@@ -12,6 +12,7 @@ public struct RootView: View {
   /// The last save that failed, until it is shown and dismissed.
   @State private var unsaved: UnsavedWriting?
   @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting.standard
+  @AppStorage(ColorTheme.key) private var theme = ColorTheme.system
 
   /// The writings kept on the device.
   public init() {
@@ -76,6 +77,7 @@ public struct RootView: View {
     } message: { unsaved in
       Text(verbatim: unsaved.localizedDescription)
     }
+    .colorTheme(theme)
   }
 
   /// Makes `change` to the writing with `id` and saves it.

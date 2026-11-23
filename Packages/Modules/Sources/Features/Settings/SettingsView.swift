@@ -4,12 +4,14 @@ internal import Typesetting
 /// The app's settings in a sheet, closed by the button at the top trailing corner.
 struct SettingsView: View {
   @AppStorage(StoredBodySetting.key) private var stored = StoredBodySetting.standard
+  @AppStorage(ColorTheme.key) private var theme = ColorTheme.system
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     NavigationStack {
       SettingsForm(
-        defaultSetting: Binding(get: { stored.setting }, set: { stored = StoredBodySetting($0) })
+        defaultSetting: Binding(get: { stored.setting }, set: { stored = StoredBodySetting($0) }),
+        theme: $theme
       )
       .navigationTitle("設定")
       .navigationBarTitleDisplayMode(.inline)
@@ -23,9 +25,11 @@ struct SettingsView: View {
 }
 
 /// iOS's grouped list of settings. Its 「フォント」 section steps `defaultSetting`, the body setting
-/// a writing is set in until its own is adjusted, over a sample set in it.
+/// a writing is set in until its own is adjusted, over a sample set in it; its 「カラーテーマ」
+/// section chooses `theme`.
 struct SettingsForm: View {
   @Binding var defaultSetting: BodySetting
+  @Binding var theme: ColorTheme
 
   var body: some View {
     Form {
@@ -49,6 +53,13 @@ struct SettingsForm: View {
         Text("フォント")
       } footer: {
         Text("原稿はそれぞれ「組版を調整」で変えるまで、この設定で組まれます。")
+      }
+      Section("カラーテーマ") {
+        Picker("カラーテーマ", selection: $theme) {
+          ForEach(ColorTheme.allCases) { Text($0.title) }
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
       }
     }
   }

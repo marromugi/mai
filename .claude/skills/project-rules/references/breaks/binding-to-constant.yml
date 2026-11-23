@@ -1,0 +1,12 @@
+id: binding-to-constant
+language: Swift
+rule:
+  pattern: $B
+  kind: simple_identifier
+  regex: '^\$[A-Za-z_][A-Za-z0-9_]*$'
+transform:
+  NAME:
+    substring:
+      source: $B
+      startChar: 1
+fix: .constant($NAME)
