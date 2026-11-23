@@ -1,21 +1,23 @@
 import SwiftUI
 internal import Typesetting
 
-/// The writings, in the order given, under the page heading 「執筆」.
+/// The writings, most recently updated first, under the page heading 「執筆」.
 public struct WritingListView: View {
   private let rows: [WritingRow]
+  private let now: Date
   private let open: (WritingRow) -> Void
 
-  /// `open` is called with the row tapped.
-  public init(rows: [WritingRow], open: @escaping (WritingRow) -> Void) {
+  /// Each row says how long before `now` it was updated. `open` is called with the row tapped.
+  public init(rows: [WritingRow], now: Date, open: @escaping (WritingRow) -> Void) {
     self.rows = rows
+    self.now = now
     self.open = open
   }
 
   public var body: some View {
     GeometryReader { proxy in
       ScrollView {
-        WritingListPage(rows: rows, width: proxy.size.width, open: open)
+        WritingListPage(rows: rows, now: now, width: proxy.size.width, open: open)
       }
     }
   }
@@ -24,6 +26,7 @@ public struct WritingListView: View {
 /// The list laid out across a screen `width` wide: text on the type area's margins, rules past them.
 struct WritingListPage: View {
   let rows: [WritingRow]
+  let now: Date
   let width: CGFloat
   var open: (WritingRow) -> Void = { _ in }
   @EnvironmentTypeScale private var scale
@@ -34,11 +37,11 @@ struct WritingListPage: View {
       Text("執筆")
         .textStyle(.heading)
         .padding(.bottom, scale.space(.m))
-      ForEach(rows) { row in
+      ForEach(rows.newestFirst()) { row in
         Button {
           open(row)
         } label: {
-          WritingRowView(row: row)
+          WritingRowView(row: row, now: now)
             .padding(.vertical, scale.space(.s))
             .contentShape(.rect)
         }
@@ -77,5 +80,5 @@ private struct DottedRule: View {
 }
 
 #Preview {
-  WritingListView(rows: WritingRow.samples) { _ in }
+  WritingListView(rows: WritingRow.samples(now: .now, calendar: .current), now: .now) { _ in }
 }
