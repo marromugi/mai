@@ -1,0 +1,5 @@
+id: drop-disabled
+language: Swift
+rule:
+  pattern: $V.disabled($C)
+fix: $V

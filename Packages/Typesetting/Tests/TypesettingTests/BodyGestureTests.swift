@@ -209,6 +209,16 @@ struct BodyGestureTests {
     }
   }
 
+  /// From the far end, so the distance to `Int.max` or `Int.min` would overflow unclamped.
+  @Test func movingToAnyValueFromAnEndStopsAtTheOther() throws {
+    let low = try #require(BodySetting(base: 12, lineHeight: 16, tracking: -50))
+    let high = try #require(BodySetting(base: 24, lineHeight: 44, tracking: 200))
+    for adjustment in BodyAdjustment.allCases {
+      #expect(low.moving(adjustment, to: .max)[adjustment] == adjustment.range.upperBound)
+      #expect(high.moving(adjustment, to: .min)[adjustment] == adjustment.range.lowerBound)
+    }
+  }
+
   @Test func aDiagonalPinchStartsNothing() {
     #expect(BodyPinch(CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 200), from: standard) == nil)
   }

@@ -12,6 +12,13 @@ struct RootTests {
       WritingRow.samples(now: .now, calendar: .current).first { $0.title == "書きかけ" })
     assertRoot(remembering: "20 36 50", path: [row])
   }
+
+  /// 「書きかけ」 in the standard setting, with nothing remembered.
+  @Test func aWritingNeverAdjustedIsSetInTheStandardSettingWithNothingRemembered() throws {
+    let row = try #require(
+      WritingRow.samples(now: .now, calendar: .current).first { $0.title == "書きかけ" })
+    assertRoot(remembering: nil, path: [row])
+  }
 }
 
 /// The app's screen in a 402 × 874 window, reading from a store holding only `remembered` under
