@@ -7,10 +7,16 @@ import Testing
 
 /// Buys the plans of `StoreKit/Mai.storekit` through StoreKit's local testing. Hosted in the app,
 /// since StoreKit refuses a test bundle with no app around it. The suites share one StoreKit, so
-/// they run one at a time.
-@Suite(.serialized)
-struct PlanPurchaseTests {
+/// they run one at a time. Each test leaves StoreKit's local testing in its default state, so the
+/// app run afterwards shows the purchase sheet.
+///
+/// On the first run after the app is installed, the first purchase stops at an Apple Account
+/// sign-in, which this suite never fills in: that test fails on the time limit, the app is launched
+/// again, and the tests after it pass.
+@Suite(.serialized, .timeLimit(.minutes(1)))
+final class PlanPurchaseTests {
   private let session: SKTestSession
+  private let suite = "PlanPurchaseTests.\(UUID().uuidString)"
   private let kept: KeptAccountID
 
   init() async throws {
@@ -22,11 +28,16 @@ struct PlanPurchaseTests {
     session.resetToDefaultState()
     session.disableDialogs = true
     session.clearTransactions()
-    let suite = "PlanPurchaseTests.\(UUID().uuidString)"
     guard let defaults = UserDefaults(suiteName: suite) else {
       preconditionFailure("The defaults suite \(suite) can't be opened.")
     }
     kept = KeptAccountID(defaults: defaults)
+  }
+
+  isolated deinit {
+    session.clearTransactions()
+    session.resetToDefaultState()
+    kept.defaults.removePersistentDomain(forName: suite)
   }
 
   @Test func eachPlanIsOnTheAppStore() async throws {
