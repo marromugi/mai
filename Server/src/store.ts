@@ -1,0 +1,277 @@
+import { createClient, LibsqlError } from "@libsql/client/web";
+import type { Client, InStatement, InValue, ResultSet } from "@libsql/client/web";
+import {
+  parseRevision,
+  parseWritingId,
+  type Envelope,
+  type Revision,
+  type WritingId,
+} from "./envelope";
+import { lastUsedResolution, sessionLifetime, type Caller } from "./sessions";
+
+/**
+ * The only file that speaks to Turso. Every request is one `batch()`, so one round trip and one
+ * transaction: it checks the caller, does the work only when the caller may, and counts it.
+ * The tables are in `Server/schema.sql`.
+ */
+
+export type Listed = { id: WritingId; revision: Revision; updated: number; size: number };
+
+/** Why a caller was turned away: no live session, or a limit of its plan reached. */
+export type Refusal = "session" | Limit;
+export type Limit = "requests" | "lists" | "saves" | "storage";
+
+export type Answer<T> = { ok: true; value: T } | { ok: false; refusal: Refusal };
+
+export type Saved = { saved: boolean; revision: Revision | null };
+
+export type Read = { revision: Revision; bytes: ArrayBuffer } | undefined;
+
+/** What a request counts against its plan's daily limits, beside the request itself. */
+type Counted = "list" | "save" | "other";
+
+type Statement = { sql: string; args?: Record<string, InValue> };
+
+const day = 24 * 60 * 60 * 1000;
+
+export class Store {
+  readonly #client: Client;
+
+  constructor(client: Client) {
+    this.#client = client;
+  }
+
+  static open(url: string, authToken: string): Store {
+    return new Store(createClient(authToken === "" ? { url } : { url, authToken }));
+  }
+
+  async list(caller: Caller, now: number): Promise<Answer<Listed[]>> {
+    const answer = await this.#run(caller, now, "list", (account, allowed) => [
+      {
+        sql: `SELECT id, revision, updated, size FROM writings
+              WHERE account_id = ${account} AND ${allowed}`,
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    return {
+      ok: true,
+      value: (answer.value[0]?.rows ?? []).map((row) => ({
+        id: stored(parseWritingId, row["id"]),
+        revision: stored(parseRevision, row["revision"]),
+        updated: Number(row["updated"]),
+        size: Number(row["size"]),
+      })),
+    };
+  }
+
+  async read(caller: Caller, id: WritingId, now: number): Promise<Answer<Read>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT revision, envelope FROM writings
+              WHERE account_id = ${account} AND id = :id AND ${allowed}`,
+        args: { id },
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    const row = answer.value[0]?.rows[0];
+    if (row === undefined) {
+      return { ok: true, value: undefined };
+    }
+    const envelope = row["envelope"];
+    if (!(envelope instanceof ArrayBuffer)) {
+      throw new Error("writings.envelope is a BLOB, but came back as something else");
+    }
+    return {
+      ok: true,
+      value: { revision: stored(parseRevision, row["revision"]), bytes: envelope },
+    };
+  }
+
+  /** Saves `envelope` only when `base` is the writing's current revision, null for none yet. */
+  async save(
+    caller: Caller,
+    envelope: Envelope,
+    base: Revision | null,
+    now: number,
+  ): Promise<Answer<Saved>> {
+    const writing = {
+      id: envelope.id,
+      revision: envelope.revision,
+      updated: envelope.updated,
+      size: envelope.bytes.byteLength,
+      envelope: envelope.bytes,
+    };
+    let answer;
+    try {
+      answer = await this.#run(caller, now, "save", (account, allowed) => [
+        base === null
+          ? {
+              sql: `INSERT INTO writings (account_id, id, revision, updated, size, envelope)
+                    SELECT ${account}, :id, :revision, :updated, :size, :envelope WHERE ${allowed}
+                    ON CONFLICT (account_id, id) DO NOTHING`,
+              args: writing,
+            }
+          : {
+              sql: `UPDATE writings
+                    SET revision = :revision, updated = :updated, size = :size, envelope = :envelope
+                    WHERE account_id = ${account} AND id = :id AND revision = :base AND ${allowed}`,
+              args: { ...writing, base },
+            },
+        {
+          sql: `SELECT revision FROM writings WHERE account_id = ${account} AND id = :id`,
+          args: { id: envelope.id },
+        },
+      ]);
+    } catch (error) {
+      if (error instanceof LibsqlError && error.message.includes("mai: over the plan's storage")) {
+        return { ok: false, refusal: "storage" };
+      }
+      throw error;
+    }
+    if (!answer.ok) {
+      return answer;
+    }
+    const [written, current] = answer.value;
+    const revision = current?.rows[0]?.["revision"];
+    return {
+      ok: true,
+      value: {
+        saved: written?.rowsAffected === 1,
+        revision: revision === undefined ? null : stored(parseRevision, revision),
+      },
+    };
+  }
+
+  /** Makes an account on `tier`, which must be a row of `plans`. */
+  async makeAccount(id: string, tier: string, now: number): Promise<void> {
+    const made = await this.#client.execute({
+      sql: `INSERT INTO accounts (id, tier, created) SELECT :id, tier, :now FROM plans WHERE tier = :tier`,
+      args: { id, tier, now },
+    });
+    if (made.rowsAffected !== 1) {
+      throw new Error(`there is no plan named ${tier}`);
+    }
+  }
+
+  async startSession(account: string, caller: Caller, now: number): Promise<void> {
+    await this.#client.execute({
+      sql: `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
+            VALUES (:session, :account, :hash, :now, :now)`,
+      args: { session: caller.session, account, hash: caller.secretSha256, now },
+    });
+  }
+
+  /** Removes what has expired by `now`; run by the Worker's cron trigger. */
+  async sweep(now: number): Promise<void> {
+    await this.#client.batch(
+      [
+        {
+          sql: "DELETE FROM sessions WHERE last_used <= :expired",
+          args: { expired: now - sessionLifetime },
+        },
+        { sql: "DELETE FROM usage WHERE day < :today", args: { today: Math.floor(now / day) } },
+      ],
+      "write",
+    );
+  }
+
+  /**
+   * Runs `work` for the caller in one batch: first what the caller may do, then `work`, whose
+   * statements must hold `allowed` in their WHERE so they do nothing for a caller turned away,
+   * then the count against the plan. Answers the results of `work`'s statements.
+   */
+  async #run(
+    caller: Caller,
+    now: number,
+    counted: Counted,
+    work: (account: string, allowed: string) => Statement[],
+  ): Promise<Answer<ResultSet[]>> {
+    const args: Record<string, InValue> = {
+      session: caller.session,
+      hash: caller.secretSha256,
+      now,
+      alive: now - sessionLifetime,
+      stale: now - lastUsedResolution,
+      day: Math.floor(now / day),
+      list: counted === "list" ? 1 : 0,
+      save: counted === "save" ? 1 : 0,
+    };
+    const callerRows = `FROM sessions s
+      JOIN accounts a ON a.id = s.account_id
+      JOIN plans p ON p.tier = a.tier
+      LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
+      WHERE s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive`;
+    const left = {
+      requests: "coalesce(u.requests, 0) < p.requests_per_day",
+      lists: "(:list = 0 OR coalesce(u.lists, 0) < p.lists_per_day)",
+      saves: "(:save = 0 OR coalesce(u.saves, 0) < p.saves_per_day)",
+    };
+    const allowed = `EXISTS (SELECT 1 ${callerRows}
+      AND ${left.requests} AND ${left.lists} AND ${left.saves})`;
+    const account = "(SELECT account_id FROM sessions WHERE id = :session)";
+    const statements = work(account, allowed);
+
+    const results = await this.#client.batch(
+      [
+        {
+          sql: `SELECT ${left.requests} AS requests, ${left.lists} AS lists,
+                ${left.saves} AS saves ${callerRows}`,
+        },
+        ...statements,
+        {
+          sql: `INSERT INTO usage (account_id, day, requests, lists, saves)
+                SELECT ${account}, :day, 1, :list, :save WHERE ${allowed}
+                ON CONFLICT (account_id, day) DO UPDATE SET requests = requests + 1,
+                  lists = lists + excluded.lists, saves = saves + excluded.saves`,
+        },
+        {
+          sql: `UPDATE sessions SET last_used = :now
+                WHERE id = :session AND token_sha256 = :hash
+                  AND last_used > :alive AND last_used <= :stale`,
+        },
+      ].map((statement: Statement) => bind(statement.sql, { ...args, ...statement.args })),
+      "write",
+    );
+
+    const gate = results[0]?.rows[0];
+    if (gate === undefined) {
+      return { ok: false, refusal: "session" };
+    }
+    for (const limit of ["requests", "lists", "saves"] as const) {
+      if (Number(gate[limit]) !== 1) {
+        return { ok: false, refusal: limit };
+      }
+    }
+    return { ok: true, value: results.slice(1, 1 + statements.length) };
+  }
+}
+
+/** A value read back from a column only this file writes, which holds only valid values. */
+function stored<T>(parse: (text: string) => T | undefined, value: unknown): T {
+  const parsed = typeof value === "string" ? parse(value) : undefined;
+  if (parsed === undefined) {
+    throw new Error(`the database holds ${String(value)} where this file wrote a valid value`);
+  }
+  return parsed;
+}
+
+/** `sql` with the values of the parameters it names, since the server refuses any others. */
+function bind(sql: string, values: Record<string, InValue>): InStatement {
+  const names = new Set(Array.from(sql.matchAll(/:(\w+)/g), (match) => match[1] ?? ""));
+  return {
+    sql,
+    args: Object.fromEntries(
+      Array.from(names, (name) => {
+        const value = values[name];
+        if (value === undefined) {
+          throw new Error(`the statement names :${name} but is given no value for it`);
+        }
+        return [name, value];
+      }),
+    ),
+  };
+}

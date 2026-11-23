@@ -1,13 +1,17 @@
-import { env, reset } from "cloudflare:test";
+import { createScheduledController, env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { afterEach, describe, expect, it } from "vitest";
+import { createClient } from "@libsql/client/web";
+import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
+import { newAccount, store } from "./accounts";
 
-afterEach(async () => {
-  await reset();
+/** The session token of a new account made for each test. */
+let token: string;
+
+beforeEach(async () => {
+  ({ token } = await newAccount());
 });
 
-const token = "test-token";
 const id = "6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
 const otherId = "00000000-0000-0000-0000-000000000001";
 /** SHA-256 of `envelope()`, and of the one saved after it, worked out apart from the Worker. */
@@ -65,16 +69,23 @@ async function listed(): Promise<unknown> {
 
 describe("who may call", () => {
   it.each([
-    ["no Authorization header", null],
-    ["another token", "Bearer another-token"],
-    ["the token without Bearer", token],
+    ["no Authorization header", () => null],
+    ["a session nobody started", () => `Bearer s1.${otherId}.${"A".repeat(43)}`],
+    [
+      "the token's session with another secret",
+      () => `Bearer ${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`,
+    ],
+    ["the token without Bearer", () => token],
+    ["the token one character short", () => `Bearer ${token.slice(0, -1)}`],
+    ["a token of another form", () => "Bearer test-token"],
   ])("refuses %s", async (_, authorization) => {
     const response = await request(`/writings/${id}`, {
       method: "PUT",
       body: envelope(),
-      authorization,
+      authorization: authorization(),
     });
     expect(response.status).toBe(401);
+    expect(await response.json()).toHaveProperty("error");
     expect(await listed()).toEqual({ writings: [] });
   });
 });
@@ -228,28 +239,189 @@ describe("a write not of the one shape", () => {
   });
 });
 
-async function listedWith(secret: string): Promise<Response> {
-  return worker.fetch(
-    new Request("https://mai.test/writings", { headers: { Authorization: `Bearer ${token}` } }),
-    { ...env, ACCESS_TOKEN_SHA256: secret },
-  );
+describe("one account and another", () => {
+  it("can't read or write each other's writings", async () => {
+    const saved = await request(`/writings/${id}`, { method: "PUT", body: envelope() });
+    expect(saved.status).toBe(200);
+    const other = `Bearer ${(await newAccount()).token}`;
+
+    expect(await (await request("/writings", { authorization: other })).json()).toEqual({
+      writings: [],
+    });
+    expect((await request(`/writings/${id}`, { authorization: other })).status).toBe(404);
+
+    const overTheFirst = await request(`/writings/${id}`, {
+      method: "PUT",
+      body: envelope({ updated: 1_790_000_001_000n, contentsLength: 20 }),
+      base: first,
+      authorization: other,
+    });
+    expect(overTheFirst.status).toBe(409);
+    expect(await overTheFirst.json()).toEqual({ revision: null });
+
+    const ownUnderTheSameId = await request(`/writings/${id}`, {
+      method: "PUT",
+      body: envelope({ updated: 1_790_000_001_000n, contentsLength: 20 }),
+      authorization: other,
+    });
+    expect(ownUnderTheSameId.status).toBe(200);
+
+    expect(await listed()).toEqual({
+      writings: [{ id, revision: first, updated: 1_790_000_000_123, size: 126 }],
+    });
+    const read = await request(`/writings/${id}`);
+    expect(read.headers.get("Mai-Revision")).toBe(first);
+    expect(new Uint8Array(await read.arrayBuffer())).toEqual(envelope());
+  });
+});
+
+/** A new account on the plan `test-daily` (test/sqld.ts): 4 requests a day, 2 lists, 2 saves. */
+async function onTheDailyPlan(): Promise<string> {
+  return `Bearer ${(await newAccount("test-daily")).token}`;
 }
 
-describe("the server's own token", () => {
-  // SHA-256 of "test-token", as the tests' binding holds it.
-  const digest = "4c5dc9b7708905f77f5e5d16316b5dfb425e68cb326dcd55a860e90a7707031e";
+describe("a plan's daily limits", () => {
+  it("answers 429 once the day's requests are used up", async () => {
+    const authorization = await onTheDailyPlan();
+    for (let used = 0; used < 4; used += 1) {
+      expect((await request(`/writings/${id}`, { authorization })).status).toBe(404);
+    }
+    const refused = await request(`/writings/${id}`, { authorization });
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toHaveProperty("error");
+    expect((await request("/writings", { authorization })).status).toBe(429);
+  });
 
-  it.each([
-    ["missing", ""],
-    ["one digit long", `${digest}0`],
-    ["one digit short", digest.slice(1)],
-  ])("answers 500 to everything when the secret is %s", async (_, secret) => {
-    const response = await listedWith(secret);
-    expect(response.status).toBe(500);
+  it("answers 429 once the day's lists are used up, and doesn't count what it refused", async () => {
+    const authorization = await onTheDailyPlan();
+    expect((await request("/writings", { authorization })).status).toBe(200);
+    expect((await request("/writings", { authorization })).status).toBe(200);
+    expect((await request("/writings", { authorization })).status).toBe(429);
+    expect((await request("/writings", { authorization })).status).toBe(429);
+    // Two requests counted so far, so two more of another kind pass.
+    expect((await request(`/writings/${id}`, { authorization })).status).toBe(404);
+    expect((await request(`/writings/${id}`, { authorization })).status).toBe(404);
+    expect((await request(`/writings/${id}`, { authorization })).status).toBe(429);
+  });
+
+  it("answers 429 once the day's saves are used up, a refused save among them", async () => {
+    const authorization = await onTheDailyPlan();
+    const save = (base: string): Promise<Response> =>
+      request(`/writings/${id}`, { method: "PUT", body: envelope(), base, authorization });
+    expect((await save("none")).status).toBe(200);
+    expect((await save("none")).status).toBe(409);
+    const refused = await save(first);
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toHaveProperty("error");
+  });
+
+  it("starts again the next day", async () => {
+    const now = Date.now();
+    const { caller } = await newAccount("test-daily", now);
+    expect((await store.list(caller, now)).ok).toBe(true);
+    expect((await store.list(caller, now)).ok).toBe(true);
+    expect(await store.list(caller, now)).toEqual({ ok: false, refusal: "lists" });
+    expect((await store.list(caller, now + 24 * 60 * 60 * 1000)).ok).toBe(true);
+  });
+});
+
+describe("a plan's storage", () => {
+  // The plan `test-storage` (test/sqld.ts) holds 2 writings and 300 bytes; envelope() is 126.
+  let authorization: string;
+
+  beforeEach(async () => {
+    authorization = `Bearer ${(await newAccount("test-storage")).token}`;
+  });
+
+  it("refuses a writing past the plan's number of writings", async () => {
+    for (const writing of [id, otherId]) {
+      const saved = await request(`/writings/${writing}`, {
+        method: "PUT",
+        body: envelope({ writing }),
+        authorization,
+      });
+      expect(saved.status).toBe(200);
+    }
+    const third = "00000000-0000-0000-0000-000000000002";
+    const refused = await request(`/writings/${third}`, {
+      method: "PUT",
+      body: envelope({ writing: third }),
+      authorization,
+    });
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toHaveProperty("error");
+    expect((await request(`/writings/${third}`, { authorization })).status).toBe(404);
+  });
+
+  it("refuses a save that grows the writings past the plan's bytes, and keeps the writing", async () => {
+    await request(`/writings/${id}`, { method: "PUT", body: envelope(), authorization });
+    await request(`/writings/${otherId}`, {
+      method: "PUT",
+      body: envelope({ writing: otherId }),
+      authorization,
+    });
+
+    // 126 + 175 = 301 bytes.
+    const grown = await request(`/writings/${id}`, {
+      method: "PUT",
+      body: envelope({ updated: 1_790_000_001_000n, contentsLength: 59 }),
+      base: first,
+      authorization,
+    });
+    expect(grown.status).toBe(429);
+    const kept = await request(`/writings/${id}`, { authorization });
+    expect(kept.headers.get("Mai-Revision")).toBe(first);
+
+    // 126 + 174 = 300 bytes.
+    const filled = await request(`/writings/${id}`, {
+      method: "PUT",
+      body: envelope({ updated: 1_790_000_001_000n, contentsLength: 58 }),
+      base: first,
+      authorization,
+    });
+    expect(filled.status).toBe(200);
+  });
+});
+
+const lifetime = 180 * 24 * 60 * 60 * 1000;
+
+describe("a session", () => {
+  it("ends 180 days after it was last used", async () => {
+    const { token: ended } = await newAccount("basic", Date.now() - lifetime);
+    const response = await request("/writings", { authorization: `Bearer ${ended}` });
+    expect(response.status).toBe(401);
     expect(await response.json()).toHaveProperty("error");
   });
 
-  it("takes the secret in capitals too", async () => {
-    expect((await listedWith(digest.toUpperCase())).status).toBe(200);
+  it("lasts 180 days from its last use", async () => {
+    const now = Date.now();
+    const { token: nearlyEnded, caller } = await newAccount("basic", now - lifetime + 60_000);
+    const used = await request("/writings", { authorization: `Bearer ${nearlyEnded}` });
+    expect(used.status).toBe(200);
+    expect((await store.list(caller, now + 120_000)).ok).toBe(true);
+    expect(await store.list(caller, now + lifetime + 60_000)).toEqual({
+      ok: false,
+      refusal: "session",
+    });
+  });
+});
+
+describe("the cron trigger", () => {
+  it("removes ended sessions and past days' counts", async () => {
+    const now = Date.now();
+    const longAgo = now - lifetime - 24 * 60 * 60 * 1000;
+    const ended = await newAccount("basic", longAgo);
+    expect((await store.list(ended.caller, longAgo)).ok).toBe(true);
+    const alive = await newAccount("basic", now);
+    expect((await store.list(alive.caller, now)).ok).toBe(true);
+
+    await worker.scheduled(createScheduledController(), env);
+
+    expect(await store.list(ended.caller, longAgo)).toEqual({ ok: false, refusal: "session" });
+    const counted = await createClient({ url: env.TURSO_URL }).execute({
+      sql: "SELECT account_id FROM usage WHERE account_id IN (?, ?)",
+      args: [ended.account, alive.account],
+    });
+    expect(counted.rows.map((row) => row["account_id"])).toEqual([alive.account]);
   });
 });

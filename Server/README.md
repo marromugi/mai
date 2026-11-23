@@ -1,6 +1,6 @@
 # サーバー
 
-暗号化した文書だけを置き、端末どうしの同期に使う Cloudflare Worker(#25)。文書は 1 つの Durable Object(SQLite)に置く。サーバーが分かるのは、文書ごとの ID・更新時刻・大きさだけ。保存どうしを見分けるリビジョンは暗号化した文書の SHA-256 で、暗号文から誰でも出せるもの。
+暗号化した文書だけを置き、端末どうしの同期に使う Cloudflare Worker(#25)。データは Turso の 1 つのデータベースに置き、アカウントのデータはどの表でもアカウント ID の列で分ける(#22 の設計、#43)。表は `schema.sql`、Turso に触るのは `src/store.ts` だけで、1 リクエストを 1 つの `batch()`(1 往復・1 トランザクション)にする。サーバーが分かるのは、文書ごとの ID・更新時刻・大きさだけ。保存どうしを見分けるリビジョンは暗号化した文書の SHA-256 で、暗号文から誰でも出せるもの。
 
 ## 暗号化した文書の形
 
@@ -14,13 +14,13 @@
 | 28   | 60     | 文書の鍵を自分の鍵で封じたもの。nonce 12・暗号文 32・タグ 16                      |
 | 88   | 28 + n | 本文を文書の鍵で封じたもの。nonce 12・暗号文 n・タグ 16                           |
 
-どちらも AES-256-GCM で、先頭の 28 バイトを認証付きデータにする。文書の鍵は保存のたびに作り直す。全体は 116 バイトから 1,900,000 バイトまで(Durable Object の 1 行の上限 8 MB より十分小さくしてある)。
+どちらも AES-256-GCM で、先頭の 28 バイトを認証付きデータにする。文書の鍵は保存のたびに作り直す。全体は 116 バイトから 1,900,000 バイトまで。
 
 `test/fixtures/sealed-writing.json` はアプリが封じた文書で、両方のテストがこの形で読む。
 
 ## 経路
 
-どれも `Authorization: Bearer <token>` が要る。token の SHA-256 が秘密の値 `ACCESS_TOKEN_SHA256` と合わなければ 401。アプリは自分の鍵から token を作る(`OwnKey.accessToken`)。
+どれも `Authorization: Bearer <セッションのトークン>` が要る。トークンは `s1.<セッション ID>.<秘密>`(秘密は 32 バイトの base64url)で、サーバーは秘密(base64url の文字列)の SHA-256 だけを `sessions` に置く。知らないトークン、形の違うトークン、最後に使ってから 180 日たったセッションは 401。セッションを作る経路(Sign in with Apple)はまだない(#22 の S3)。それまでは `Store.makeAccount` と `Store.startSession` で作る(テストと `scripts/server-contract-test.sh`)。
 
 | 経路                 | 内容                                                                                                                                                                                                                                      |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -28,19 +28,37 @@
 | `GET /writings/<ID>` | 暗号化した文書(`application/octet-stream`)。リビジョンは `Mai-Revision` に。無ければ 404                                                                                                                                                  |
 | `PUT /writings/<ID>` | 暗号化した文書を `application/octet-stream` で送り、最後に読んだリビジョンを `Mai-Base-Revision` に(新しい文書は `none`)。合えば 200 と新しいリビジョン、合わなければ 409 と今のリビジョン(無ければ null)。形が違えば 400、型が違えば 415 |
 
+文書の ID はアカウントごとに分かれ、ほかのアカウントの文書は読めず、書けず、一覧にも出ない。
+
 `PUT` は `Specs/ReadMode` のモデルの `Save` のうち文書そのものを置く部分にあたる。モデルには断られる保存がないので、#26 は受けられた保存にだけ写しを送る。`GET` は文書を取るもので、モデルは文書の中身を扱わない。モデルの `Sync` が取り込む設定は #26 が足す。
+
+### プランの上限
+
+アカウントはプラン(`plans` 表の `basic`・`plus`・`pro`)に入っている。上限に届いた要求は 429 で、何も書かず、数えもしない。
+
+- 1 日(UTC)のリクエスト数、そのうちの一覧(`GET /writings`)と保存(`PUT`、409 になったものも数える)の数。`usage` 表で数える。
+- 文書の合計の大きさと本数。`writings` のトリガーが `accounts` に足し、超えた保存は batch ごと戻る。大きさの減る保存は断らない。
+
+上限の値は #22 の設計の案で、プランと値段の答え(#22 の質問)で変わりうる。変えるときは `plans` の行を書き換える。
+
+### 期限の掃除
+
+Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` を消す(`Store.sweep`)。#26 の写しと読み取りモードの期限もここに足す。
 
 ## 手元で動かす
 
+テストは手元の libSQL サーバー `sqld`(`turso dev` が中で動かすもの)を空のデータベースで立て、`schema.sql` を入れてから走る。ログインは要らない。
+
 ```sh
+brew install tursodatabase/tap/turso libsql/sqld/sqld
 pnpm install
-pnpm test          # Worker のテスト(Miniflare の上で動く)
+pnpm test          # Worker のテスト(Miniflare の上で動き、sqld につなぐ)
 pnpm typecheck
 pnpm lint          # oxlint
 pnpm fmt:check     # oxfmt
 ```
 
-アプリの同期の部品(`Packages/Sync`)を `wrangler dev` の Worker に通して確かめる。
+アプリの同期の部品(`Packages/Sync`)を、`turso dev` と `wrangler dev` の Worker に通して確かめる。
 
 ```sh
 scripts/server-contract-test.sh
@@ -48,9 +66,18 @@ scripts/server-contract-test.sh
 
 ## デプロイ
 
-まだしていない。するときは、Cloudflare にログインして次を実行する(Worker と Durable Object が作られる)。
+まだしていない。するときは、次のものが作られる。
+
+- Turso: データベース `mai` 1 つ(`schema.sql` の表とトリガー、`plans` の 3 行)と、それに書ける認証トークン 1 つ
+- Cloudflare: Worker `mai-server` 1 つ(`workers.dev` の URL つき)、その毎分の Cron Trigger、秘密 `TURSO_URL` と `TURSO_TOKEN`
+
+Turso と Cloudflare にログインして、`Server/` で次を実行する。最初のデプロイは、`secrets.required` の秘密をデプロイと一緒に渡す(`--secrets-file`)。
 
 ```sh
-pnpm exec wrangler deploy
-printf '%s' "<自分の鍵から作った token>" | shasum -a 256 | cut -d ' ' -f 1 | pnpm exec wrangler secret put ACCESS_TOKEN_SHA256
+turso db create mai
+turso db shell mai < schema.sql
+secrets="$(mktemp)"
+printf 'TURSO_URL=%s\nTURSO_TOKEN=%s\n' "$(turso db show mai --url)" "$(turso db tokens create mai)" > "$secrets"
+pnpm exec wrangler deploy --secrets-file "$secrets"
+rm "$secrets"
 ```
