@@ -26,6 +26,15 @@ final class HostedPage {
     controller.view.layoutIfNeeded()
   }
 
+  /// Waits until `done` holds, or until three seconds have passed. Waiting, unlike `settle()`, lets
+  /// the main actor run the tasks queued on it.
+  func settle(until done: () -> Bool) async throws {
+    let deadline = Date(timeIntervalSinceNow: 3)
+    while !done(), Date() < deadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+  }
+
   /// The window as it is drawn now.
   func image() -> UIImage {
     UIGraphicsImageRenderer(bounds: window.bounds).image { context in

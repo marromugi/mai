@@ -18,6 +18,11 @@ struct WritingPageTests {
     assertPage(.accessibility5, .light)
   }
 
+  /// Where there is no camera, as on the simulator, its button is dimmed.
+  @Test func pageWithNoCamera() {
+    assertPage(.large, .light, camera: .none)
+  }
+
   @Test(arguments: [DynamicTypeSize.large, .accessibility5])
   func untitledPageKeepsTheTitleLine(_ size: DynamicTypeSize) {
     #expect(pageHeight(title: "", size: size) == pageHeight(title: "朝", size: size))
@@ -114,13 +119,14 @@ private func assertHeader(
     column: column)
 }
 
-/// The page with its button on a 402 × 874 screen, as the mock shows it, or shrunk to a sheet in
+/// The page with its bottom row on a 402 × 874 screen, as the mock shows it, or shrunk to a sheet in
 /// the typesetting mode.
 private func assertPage(
   _ size: DynamicTypeSize,
   _ colorScheme: ColorScheme,
   body: BodySetting = .standard,
   typesetting: Bool = false,
+  camera: Camera = .standIn(taking: nil),
   fileID: StaticString = #fileID,
   file: StaticString = #filePath,
   testName: String = #function,
@@ -130,7 +136,8 @@ private func assertPage(
   assertSnapshot(
     of: WritingScreen(
       writing: Writing(title: "間合いの調整", body: Writing.sampleBody), setting: .constant(body),
-      typesetting: .constant(typesetting)
+      typesetting: .constant(typesetting), takingPhoto: .constant(false), camera: camera,
+      photoTaken: { _ in }
     )
     .frame(width: 402, height: 874)
     .background(Color(.systemBackground))
