@@ -3,7 +3,7 @@ import { exports } from "cloudflare:workers";
 import { createClient } from "@libsql/client/web";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index";
-import { newAccount, store } from "./accounts";
+import { newAccount, products, store } from "./accounts";
 
 /** The session token of a new account made for each test. */
 let token: string;
@@ -456,7 +456,7 @@ describe("a plan's storage", () => {
 
   it("lets an account over its plan shrink a writing, and doesn't hold it against another", async () => {
     const before = await newAccount("test-storage");
-    const over = await newAccount("basic");
+    const over = await newAccount(products.basic);
     const writings = [id, otherId, "00000000-0000-0000-0000-000000000002"];
     for (const writing of writings) {
       const saved = await request(`/writings/${writing}`, {
@@ -541,7 +541,7 @@ const lifetime = 180 * 24 * 60 * 60 * 1000;
 
 describe("a session", () => {
   it("ends 180 days after it was last used", async () => {
-    const { token: ended, caller } = await newAccount("basic", Date.now() - lifetime);
+    const { token: ended, caller } = await newAccount(products.basic, Date.now() - lifetime);
     const response = await request("/writings", { authorization: `Bearer ${ended}` });
     expect(response.status).toBe(401);
     expect(await response.json()).toHaveProperty("error");
@@ -550,7 +550,10 @@ describe("a session", () => {
 
   it("isn't kept alive by a request with another secret", async () => {
     const now = Date.now();
-    const { token: nearlyEnded, caller } = await newAccount("basic", now - lifetime + 60_000);
+    const { token: nearlyEnded, caller } = await newAccount(
+      products.basic,
+      now - lifetime + 60_000,
+    );
     const wrong = `Bearer ${nearlyEnded.slice(0, -1)}${nearlyEnded.endsWith("A") ? "B" : "A"}`;
     expect((await request("/writings", { authorization: wrong })).status).toBe(401);
     expect(await store.list(caller, now + 120_000)).toEqual({ ok: false, refusal: "session" });
@@ -558,7 +561,10 @@ describe("a session", () => {
 
   it("lasts 180 days from its last use", async () => {
     const now = Date.now();
-    const { token: nearlyEnded, caller } = await newAccount("basic", now - lifetime + 60_000);
+    const { token: nearlyEnded, caller } = await newAccount(
+      products.basic,
+      now - lifetime + 60_000,
+    );
     const used = await request("/writings", { authorization: `Bearer ${nearlyEnded}` });
     expect(used.status).toBe(200);
     expect((await store.list(caller, now + 120_000)).ok).toBe(true);
@@ -573,9 +579,9 @@ describe("the cron trigger", () => {
   it("removes ended sessions and past days' counts", async () => {
     const now = Date.now();
     const longAgo = now - lifetime - 24 * 60 * 60 * 1000;
-    const ended = await newAccount("basic", longAgo);
+    const ended = await newAccount(products.basic, longAgo);
     expect((await store.list(ended.caller, longAgo)).ok).toBe(true);
-    const alive = await newAccount("basic", now);
+    const alive = await newAccount(products.basic, now);
     expect((await store.list(alive.caller, now)).ok).toBe(true);
 
     await worker.scheduled(createScheduledController(), env);

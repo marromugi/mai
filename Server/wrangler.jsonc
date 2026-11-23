@@ -4,6 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "triggers": { "crons": ["* * * * *"] },
+  // Whose purchases this Worker takes: Production, Sandbox, or both (Server/README.md).
+  "vars": { "APP_STORE_ENVIRONMENTS": "Production" },
   "secrets": {
     "required": [
       "TURSO_URL",

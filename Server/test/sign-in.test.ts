@@ -10,8 +10,17 @@ import { newSessionToken } from "../src/sessions";
 import { readCompactJws } from "../src/jws";
 import { RefreshTokens } from "../src/refresh-tokens";
 import type { SignIn } from "../src/sign-in";
-import { store } from "./accounts";
-import { base64url, jwks, makeSignInKey, signIdentityToken, type SignInKey } from "./apple-fakes";
+import { products, store } from "./accounts";
+import {
+  base64url,
+  jwks,
+  makeChain,
+  makeSignInKey,
+  signAppStore,
+  signIdentityToken,
+  type SignInKey,
+} from "./apple-fakes";
+import { appStoreRoot, day, signedTransaction } from "./purchases";
 
 const database = createClient({ url: env.TURSO_URL });
 
@@ -58,6 +67,8 @@ function fakeApple(
     /** Milliseconds each endpoint waits before it answers. */
     delay?: number;
     keysAnswer?: () => Response;
+    /** The Worker's `APP_STORE_ENVIRONMENTS`, `wrangler.jsonc`'s when left out. */
+    environments?: string;
   } = {},
 ) {
   const codes = new Map<string, Grant>();
@@ -97,11 +108,21 @@ function fakeApple(
       ),
     });
   };
-  const signIn: Promise<SignIn> = caches
-    .open(crypto.randomUUID())
-    .then((cache) =>
-      signInOf({ ...env, APPLE_SIGN_IN_KEY: options.key ?? clientKeyPem }, send, cache),
-    );
+  const signIn: Promise<SignIn> = Promise.all([
+    caches.open(crypto.randomUUID()),
+    appStoreRoot(),
+  ]).then(([cache, root]) =>
+    signInOf(
+      {
+        ...env,
+        APPLE_SIGN_IN_KEY: options.key ?? clientKeyPem,
+        APP_STORE_ENVIRONMENTS: options.environments ?? env.APP_STORE_ENVIRONMENTS,
+      },
+      send,
+      cache,
+      root,
+    ),
+  );
   return { codes, asked, signIn };
 }
 
@@ -176,11 +197,15 @@ function newSub(): string {
   return `001234.${crypto.randomUUID().replaceAll("-", "")}.0123`;
 }
 
-/** Makes an account through `POST /account`, as the app does after the purchase. */
+/**
+ * Makes an account through `POST /account`, as the app does after the purchase: by default, a
+ * month of Basic bought for it.
+ */
 async function makeAccount(
   apple: ReturnType<typeof fakeApple>,
   sub = newSub(),
   account: string = crypto.randomUUID(),
+  transaction?: string,
 ) {
   const code = `code-${crypto.randomUUID()}`;
   const refreshToken = `refresh-${crypto.randomUUID()}`;
@@ -191,6 +216,7 @@ async function makeAccount(
     challenge: fresh,
     identityToken: await identityToken(sub, fresh),
     authorizationCode: code,
+    transaction: transaction ?? (await signedTransaction(account)),
   });
   return { account, sub, code, refreshToken, answer };
 }
@@ -282,6 +308,18 @@ describe("making an account", () => {
     expect(await rowsOf(first.account, first.sub)).toEqual({ sessions: 1, accounts: 1 });
   });
 
+  it("answers a retry with the account's own purchase as the account being there", async () => {
+    const apple = fakeApple();
+    const account = crypto.randomUUID();
+    const purchase = await signedTransaction(account);
+    const first = await makeAccount(apple, newSub(), account, purchase);
+    const retry = await makeAccount(apple, first.sub, account, purchase);
+    expect(retry.answer.status).toBe(409);
+    expect(await retry.answer.json()).toEqual({
+      error: "this Apple user or this account ID has an account; sign in instead",
+    });
+  });
+
   it("makes one account when two requests for the same Apple user come at once", async () => {
     const apple = fakeApple();
     const sub = newSub();
@@ -301,11 +339,13 @@ describe("making an account", () => {
   it("asks Apple for nothing when the challenge or the ID token doesn't hold", async () => {
     const apple = fakeApple();
     const fresh = await challenge(apple.signIn);
+    const account = crypto.randomUUID();
     const answer = await call(apple.signIn, "/account", {
-      account: crypto.randomUUID(),
+      account,
       challenge: fresh,
       identityToken: await identityToken(newSub(), await challenge(apple.signIn)),
       authorizationCode: "code",
+      transaction: await signedTransaction(account),
     });
     expect(answer.status).toBe(401);
     expect(apple.asked.some((asked) => asked.url === appleTokenUrl)).toBe(false);
@@ -324,11 +364,17 @@ describe("making an account", () => {
       challenge: fresh,
       identityToken: await identityToken(sub, fresh),
       authorizationCode: code,
+      transaction: await signedTransaction(first.account),
     });
 
     expect(answer.status).toBe(409);
     expect(await accountRow(first.account)).toMatchObject({ apple_sub: first.sub });
     expect(await rowsOf(first.account, sub)).toEqual({ sessions: 1, accounts: 0 });
+    const { rows } = await database.execute({
+      sql: "SELECT count(*) AS count FROM subscriptions WHERE account_id = ?",
+      args: [first.account],
+    });
+    expect(Number(rows[0]?.["count"])).toBe(1);
   });
 
   it("refuses a code Apple turns down, and a code for another Apple user", async () => {
@@ -341,6 +387,7 @@ describe("making an account", () => {
       challenge: fresh,
       identityToken: await identityToken(sub, fresh),
       authorizationCode: "a code Apple never gave",
+      transaction: await signedTransaction(account),
     });
     expect(unknown.status).toBe(401);
 
@@ -351,6 +398,7 @@ describe("making an account", () => {
       challenge: fresh,
       identityToken: await identityToken(sub, fresh),
       authorizationCode: "someone else's",
+      transaction: await signedTransaction(account),
     });
     expect(another.status).toBe(401);
     expect(await accountRow(account)).toBeUndefined();
@@ -425,18 +473,189 @@ describe("making an account", () => {
     ["an account ID with something before it", { account: `x${crypto.randomUUID()}` }],
     ["an account ID with something after it", { account: `${crypto.randomUUID()}x` }],
     ["no authorization code", { authorizationCode: undefined }],
+    ["no transaction", { transaction: undefined }],
   ])("refuses a request with %s", async (_, change) => {
     const apple = fakeApple();
     const sub = newSub();
     const fresh = await challenge(apple.signIn);
+    const account = crypto.randomUUID();
     const answer = await call(apple.signIn, "/account", {
-      account: crypto.randomUUID(),
+      account,
       challenge: fresh,
       identityToken: await identityToken(sub, fresh),
       authorizationCode: "code",
+      transaction: await signedTransaction(account),
       ...change,
     });
     expect(answer.status).toBe(400);
+  });
+});
+
+/** The account's plan, when it is paid until, and its subscriptions' IDs. */
+async function paidFor(account: string) {
+  const { rows } = await database.execute({
+    sql: `SELECT tier, paid_until,
+            (SELECT group_concat(original_transaction_id) FROM subscriptions
+             WHERE account_id = accounts.id) AS subscriptions
+          FROM accounts WHERE id = ?`,
+    args: [account],
+  });
+  return rows[0];
+}
+
+describe("the purchase an account is made with", () => {
+  it.each([
+    ["Basic", products.basic, "basic"],
+    ["Plus", products.plus, "plus"],
+    ["Pro", products.pro, "pro"],
+  ])("puts the account on %s, paid until the purchase expires", async (_, product, tier) => {
+    const apple = fakeApple();
+    const account = crypto.randomUUID();
+    const original = crypto.randomUUID();
+    const expires = Date.now() + 30 * day;
+    const { answer } = await makeAccount(
+      apple,
+      newSub(),
+      account,
+      await signedTransaction(account, {
+        productId: product,
+        originalTransactionId: original,
+        expiresDate: expires,
+      }),
+    );
+    expect(answer.status).toBe(201);
+    expect(await paidFor(account)).toMatchObject({
+      tier,
+      paid_until: expires,
+      subscriptions: original,
+    });
+  });
+
+  // The last column: whether the Worker asks Apple's token endpoint before it refuses.
+  it.each([
+    ["for another account", 409, () => ({ appAccountToken: crypto.randomUUID() }), false],
+    ["for no account", 409, () => ({ appAccountToken: undefined }), false],
+    ["that has expired", 402, () => ({ expiresDate: Date.now() - 1000 }), false],
+    ["that was refunded", 402, () => ({ revocationDate: Date.now() - 1000 }), false],
+    ["from the Sandbox", 403, () => ({ environment: "Sandbox" }), false],
+    ["of another app", 400, () => ({ bundleId: "com.example.other" }), false],
+    ["with no expiry", 400, () => ({ expiresDate: undefined, type: "Non-Consumable" }), false],
+    ["of a product no plan is sold as", 400, () => ({ productId: "com.marromugi.mai.x" }), true],
+  ])("refuses a purchase %s, making nothing", async (_, status, change, asksApple) => {
+    const apple = fakeApple();
+    const sub = newSub();
+    const account = crypto.randomUUID();
+    const { answer } = await makeAccount(
+      apple,
+      sub,
+      account,
+      await signedTransaction(account, change()),
+    );
+    expect(answer.status).toBe(status);
+    expect(await rowsOf(account, sub)).toEqual({ sessions: 0, accounts: 0 });
+    expect(await paidFor(account)).toBeUndefined();
+    expect(apple.asked.some((asked) => asked.url === appleTokenUrl)).toBe(asksApple);
+  });
+
+  it.each([
+    [
+      "has expired",
+      { expiresDate: Date.now() - 1000 },
+      "the purchase has expired; buy the plan again",
+    ],
+    ["was refunded", { revocationDate: Date.now() - 1000 }, "the purchase was refunded or revoked"],
+  ])("tells a purchase that %s from the other", async (_, change, error) => {
+    const account = crypto.randomUUID();
+    const { answer } = await makeAccount(
+      fakeApple(),
+      newSub(),
+      account,
+      await signedTransaction(account, change),
+    );
+    expect(await answer.json()).toEqual({ error });
+  });
+
+  it("answers 401 for an ID token that doesn't hold, before it looks at the purchase", async () => {
+    const apple = fakeApple();
+    const account = crypto.randomUUID();
+    const answer = await call(apple.signIn, "/account", {
+      account,
+      challenge: await challenge(apple.signIn),
+      identityToken: await identityToken(newSub(), await challenge(apple.signIn)),
+      authorizationCode: "code",
+      transaction: await signedTransaction(account, { expiresDate: Date.now() - 1000 }),
+    });
+    expect(answer.status).toBe(401);
+  });
+
+  it("keeps the environment of the purchase on a Worker that takes the Sandbox", async () => {
+    const account = crypto.randomUUID();
+    const { answer } = await makeAccount(
+      fakeApple({ environments: "Sandbox" }),
+      newSub(),
+      account,
+      await signedTransaction(account, { environment: "Sandbox" }),
+    );
+    expect(answer.status).toBe(201);
+    const { rows } = await database.execute({
+      sql: "SELECT environment FROM subscriptions WHERE account_id = ?",
+      args: [account],
+    });
+    expect(rows[0]?.["environment"]).toBe("Sandbox");
+  });
+
+  it("refuses a purchase signed under a root other than the one it was given", async () => {
+    const apple = fakeApple();
+    const sub = newSub();
+    const account = crypto.randomUUID();
+    const now = Date.now();
+    const forged = await signAppStore(
+      {
+        transactionId: "1",
+        originalTransactionId: crypto.randomUUID(),
+        bundleId: env.APPLE_CLIENT_ID,
+        productId: products.pro,
+        purchaseDate: now,
+        expiresDate: now + 30 * day,
+        type: "Auto-Renewable Subscription",
+        appAccountToken: account,
+        signedDate: now,
+        environment: "Production",
+      },
+      await makeChain(),
+    );
+    const { answer } = await makeAccount(apple, sub, account, forged);
+    expect(answer.status).toBe(400);
+    expect(await rowsOf(account, sub)).toEqual({ sessions: 0, accounts: 0 });
+  });
+
+  it("refuses a purchase another account was made with", async () => {
+    const apple = fakeApple();
+    const first = crypto.randomUUID();
+    const original = crypto.randomUUID();
+    expect(
+      (
+        await makeAccount(
+          apple,
+          newSub(),
+          first,
+          await signedTransaction(first, { originalTransactionId: original }),
+        )
+      ).answer.status,
+    ).toBe(201);
+
+    const sub = newSub();
+    const second = crypto.randomUUID();
+    const { answer } = await makeAccount(
+      apple,
+      sub,
+      second,
+      await signedTransaction(second, { originalTransactionId: original }),
+    );
+    expect(answer.status).toBe(409);
+    expect(await answer.json()).toEqual({ error: "the purchase is another account's" });
+    expect(await rowsOf(second, sub)).toEqual({ sessions: 0, accounts: 0 });
+    expect(await paidFor(first)).toMatchObject({ subscriptions: original });
   });
 });
 
@@ -461,6 +680,7 @@ describe("a challenge", () => {
       identityToken: await identityToken(otherSub, fresh),
       account: otherAccount,
       authorizationCode: code,
+      transaction: await signedTransaction(otherAccount),
     });
     expect(again.status).toBe(401);
     expect(await rowsOf(otherAccount, otherSub)).toEqual({ sessions: 0, accounts: 0 });
@@ -494,6 +714,7 @@ describe("a challenge", () => {
       challenge: nearlyExpired,
       identityToken: await identityToken(sub, nearlyExpired),
       authorizationCode: code,
+      transaction: await signedTransaction(account),
     });
     expect(answer.status).toBe(401);
     expect(await accountRow(account)).toBeUndefined();
@@ -516,11 +737,13 @@ describe("a challenge", () => {
     const fresh = await challenge(apple.signIn);
     const code = `code-${crypto.randomUUID()}`;
     apple.codes.set(code, { sub: first.sub, refreshToken: "refresh-z" });
+    const account = crypto.randomUUID();
     const body = {
-      account: crypto.randomUUID(),
+      account,
       challenge: fresh,
       identityToken: await identityToken(first.sub, fresh),
       authorizationCode: code,
+      transaction: await signedTransaction(account),
     };
     expect((await call(apple.signIn, "/account", body)).status).toBe(409);
 
