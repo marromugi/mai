@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// A writing's `photos`, oldest first, each as large as fits the screen over black, one to a page.
-/// It opens on the newest, pages sideways to the older ones, and its close button calls `close`.
+/// A writing's `photos`, oldest first, each as large as fits the screen over black, one to a page,
+/// paged sideways. `shown` is the photo on screen, by its `UIImage.id`; the close button calls
+/// `close`.
 struct PhotoViewer: View {
   let photos: [UIImage]
+  @Binding var shown: ObjectIdentifier?
   let close: () -> Void
 
   var body: some View {
@@ -21,7 +23,7 @@ struct PhotoViewer: View {
     }
     .scrollTargetBehavior(.paging)
     .scrollIndicators(.hidden)
-    .defaultScrollAnchor(.trailing, for: .initialOffset)
+    .scrollPosition(id: $shown)
     .overlay(alignment: .topTrailing) {
       Button(action: close) {
         Image(systemName: "xmark")
