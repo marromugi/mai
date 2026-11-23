@@ -23,6 +23,16 @@ struct WritingPageTests {
     assertPage(.large, .dark, writing: pageNamingNightDesk, others: [nightDesk])
   }
 
+  /// A link to a page outside the app is set in the text's colour under a solid line, beside a
+  /// title link's dotted one.
+  @Test func pageWithALink() {
+    assertPage(.large, .light, writing: pageWithALinkAndAMention, others: [nightDesk])
+  }
+
+  @Test func pageWithALinkInDarkMode() {
+    assertPage(.large, .dark, writing: pageWithALinkAndAMention, others: [nightDesk])
+  }
+
   @Test func pageAtTheLargestSize() {
     assertPage(.accessibility5, .light)
   }
@@ -97,6 +107,13 @@ private let nightDesk = Writing(
 
 private let pageNamingNightDesk = Writing(
   title: "間合いの調整", body: Writing.sampleBody + "\n" + Writing.sampleMention)
+
+/// The page naming 夜の机に向かう, with its first line's 「小さなパン」 linked.
+private let pageWithALinkAndAMention = Writing(
+  title: "間合いの調整", body: pageNamingNightDesk.body,
+  links: [
+    BodyLink(range: 3..<8, url: URL(string: "https://example.com/bread") ?? URL(filePath: "/"))
+  ])
 
 private func pageHeight(title: String, size: DynamicTypeSize) -> CGFloat {
   let page = WritingPage(

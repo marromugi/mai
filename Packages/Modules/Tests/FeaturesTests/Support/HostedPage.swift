@@ -63,10 +63,24 @@ final class HostedPage {
   }
 
   var textViews: [UITextView] {
-    var found: [UITextView] = []
+    views(UITextView.self)
+  }
+
+  /// The text fields in the window, a sheet's included.
+  var textFields: [UITextField] {
+    views(UITextField.self)
+  }
+
+  /// The view controller presented over the view, such as a sheet, if any.
+  var presented: UIViewController? {
+    controller.presentedViewController
+  }
+
+  private func views<T: UIView>(_ type: T.Type) -> [T] {
+    var found: [T] = []
     var pending: [UIView] = [window]
     while let view = pending.popLast() {
-      if let textView = view as? UITextView { found.append(textView) }
+      if let match = view as? T { found.append(match) }
       pending.append(contentsOf: view.subviews)
     }
     return found

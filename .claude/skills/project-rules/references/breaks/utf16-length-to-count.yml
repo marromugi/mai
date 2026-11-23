@@ -1,0 +1,5 @@
+id: utf16-length-to-count
+language: Swift
+rule:
+  pattern: ($S as NSString).length
+fix: $S.count

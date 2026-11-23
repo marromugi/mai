@@ -1,0 +1,5 @@
+id: drop-super-call
+language: Swift
+rule:
+  pattern: super.$M($$$A)
+fix: ""

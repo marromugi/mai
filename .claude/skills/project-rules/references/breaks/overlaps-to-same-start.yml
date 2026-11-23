@@ -1,0 +1,5 @@
+id: overlaps-to-same-start
+language: Swift
+rule:
+  pattern: $A.overlaps($B)
+fix: $A.lowerBound == $B.lowerBound
