@@ -228,17 +228,10 @@ struct WritingPage: View {
       VStack(alignment: .leading, spacing: 0) {
         Group {
           if editing {
-            TextStyleEditor(role: .heading, text: writing.title, oneLine: true) { title in
+            TextStyleEditor(
+              role: .heading, text: writing.title, placeholder: "タイトル", oneLine: true
+            ) { title in
               edit { $0.title = title }
-            }
-            .overlay(alignment: .topLeading) {
-              if writing.title.isEmpty {
-                Text(verbatim: "タイトル")
-                  .textStyle(.heading)
-                  .foregroundStyle(.tertiary)
-                  .allowsHitTesting(false)
-                  .accessibilityHidden(true)
-              }
             }
           } else {
             // An untitled writing keeps its line: an ideographic space is one heading line box tall.

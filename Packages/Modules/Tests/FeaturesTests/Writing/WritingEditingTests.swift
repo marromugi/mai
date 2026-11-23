@@ -1,6 +1,7 @@
 import SnapshotTesting
 import SwiftUI
 import Testing
+import Typesetting
 import UIKit
 
 @testable import Features
@@ -22,14 +23,14 @@ struct WritingEditingTests {
     #expect(edits.writing.body == "朝の机\n二行目追記")
   }
 
-  /// A line break typed into the title is dropped, so the title on screen is the one saved.
-  @Test func aLineBreakTypedIntoTheTitleIsDropped() throws {
+  /// A line break typed into the title is refused, so the title on screen is the one saved.
+  @Test func aLineBreakTypedIntoTheTitleIsRefused() throws {
     let edits = Edits()
     let page = HostedPage(screen(editing: true, edits: edits))
-    let title = try #require(page.textViews.first { $0.text == "朝" })
+    let title = try focusedTitle(in: page, holding: "朝")
     title.selectedRange = NSRange(location: 1, length: 0)
-    title.insertText("\n")
-    title.insertText("夕")
+    type("\n", into: title)
+    type("夕", into: title)
     #expect(title.text == "朝夕")
     #expect(edits.writing.title == "朝夕")
   }
@@ -38,11 +39,60 @@ struct WritingEditingTests {
   @Test func aLineBreakInTextPutIntoTheTitleIsDropped() throws {
     let edits = Edits()
     let page = HostedPage(screen(editing: true, edits: edits))
-    let title = try #require(page.textViews.first { $0.text == "朝" })
+    let title = try focusedTitle(in: page, holding: "朝")
     title.selectedRange = NSRange(location: 0, length: 1)
-    title.insertText("夜の\n机")
+    type("夜の\n机", into: title)
     #expect(title.text == "夜の机")
     #expect(edits.writing.title == "夜の机")
+  }
+
+  /// Undo after a refused line break takes back what was typed before it, and only that.
+  @Test(arguments: [0, 2])
+  func undoAfterARefusedLineBreakTakesBackTheTyping(_ caret: Int) throws {
+    let edits = Edits(writing: Writing(title: "朝昼", body: "本文"))
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let title = try focusedTitle(in: page, holding: "朝昼")
+    title.selectedRange = NSRange(location: caret, length: 0)
+    type("夕", into: title)
+    page.settle()
+    type("\n", into: title)
+    page.settle()
+    let undo = try #require(title.undoManager)
+    while undo.canUndo {
+      undo.undo()
+      page.settle()
+    }
+    #expect(title.text == "朝昼")
+    #expect(edits.writing.title == "朝昼")
+  }
+
+  /// The placeholder goes as soon as text is being composed into an empty title.
+  @Test func composingIntoAnEmptyTitleHidesThePlaceholder() throws {
+    let page = HostedPage(
+      screen(editing: true, edits: Edits(writing: Writing(title: "", body: "本文"))))
+    let title = try focusedTitle(in: page, holding: "")
+    let line = title.convert(title.bounds, to: nil)
+    // Past the first character, where only the placeholder's later characters would be.
+    let pastFirst = CGRect(
+      x: line.minX + 40, y: line.minY, width: 160, height: TypeScale.standard.lineHeight(.heading))
+    #expect(try darkPixels(in: page.image(), within: pastFirst) > 0)
+    title.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0))
+    page.settle()
+    #expect(try darkPixels(in: page.image(), within: pastFirst) == 0)
+  }
+
+  /// Text still being composed when editing ends is kept.
+  @Test func textBeingComposedWhenEditingEndsIsKept() async throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = NSRange(location: (body.text as NSString).length, length: 0)
+    body.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0))
+    page.show(screen(editing: false, edits: edits))
+    try await page.settle { edits.writing.body.hasSuffix("かな") }
+    #expect(edits.writing.body == "朝の机\n二行目かな")
   }
 
   /// While an input method composes text, nothing is edited; the text it settles on is.
@@ -120,8 +170,8 @@ private func drawn(editing: Bool, _ size: DynamicTypeSize) -> UIImage {
   ).image()
 }
 
-/// The runs of pixel rows in `image` that hold any dark pixel, top to bottom.
-private func inkBands(_ image: UIImage) throws -> [ClosedRange<Int>] {
+/// `image` in grey, one byte a pixel, top row first.
+private func greyPixels(_ image: UIImage) throws -> (pixels: [UInt8], width: Int, height: Int) {
   let cgImage = try #require(image.cgImage)
   let width = cgImage.width
   let height = cgImage.height
@@ -134,6 +184,24 @@ private func inkBands(_ image: UIImage) throws -> [ClosedRange<Int>] {
   }
   try #require(drawn != nil)
   drawn?.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+  return (pixels, width, height)
+}
+
+/// How many pixels in `rect` (in points) are darker than the background, the tertiary colour
+/// included.
+private func darkPixels(in image: UIImage, within rect: CGRect) throws -> Int {
+  let (pixels, width, height) = try greyPixels(image)
+  let scale = image.scale
+  let columns = max(0, Int(rect.minX * scale))..<min(width, Int(rect.maxX * scale))
+  let rows = max(0, Int(rect.minY * scale))..<min(height, Int(rect.maxY * scale))
+  return rows.reduce(0) { count, row in
+    count + columns.count { pixels[row * width + $0] < 230 }
+  }
+}
+
+/// The runs of pixel rows in `image` that hold any dark pixel, top to bottom.
+private func inkBands(_ image: UIImage) throws -> [ClosedRange<Int>] {
+  let (pixels, width, height) = try greyPixels(image)
   var bands: [ClosedRange<Int>] = []
   for row in 0..<height
   where pixels[(row * width)..<((row + 1) * width)].contains(where: { $0 < 128 }) {
@@ -171,6 +239,26 @@ private func screen(editing: Bool, edits: Edits) -> some View {
 extension Writing {
   fileprivate mutating func apply(_ change: (inout Writing) -> Void) {
     change(&self)
+  }
+}
+
+/// The text view holding the title, found by its text, ready for typing as the keyboard types.
+@MainActor
+private func focusedTitle(in page: HostedPage, holding title: String) throws -> UITextView {
+  let view = try #require(page.textViews.first { $0.text == title })
+  view.becomeFirstResponder()
+  page.settle()
+  return view
+}
+
+/// Puts `text` in place of `view`'s selection as the keyboard or a paste does: only if its
+/// delegate lets it.
+@MainActor
+private func type(_ text: String, into view: UITextView) {
+  if view.delegate?.textView?(view, shouldChangeTextIn: view.selectedRange, replacementText: text)
+    ?? true
+  {
+    view.insertText(text)
   }
 }
 
