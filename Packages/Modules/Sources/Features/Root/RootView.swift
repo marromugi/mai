@@ -20,7 +20,7 @@ public struct RootView: View {
   }
 
   /// Opened on the writings in `path`, the last one on top. `sync` defaults to the own key in
-  /// iCloud Keychain, which nothing reads until a server's URL is set.
+  /// iCloud Keychain, read when a sync runs or the 同期 page opens.
   init(store: any WritingStore, sync: WritingSync? = nil, path: [Writing.ID] = []) {
     self.store = store
     _sync = State(initialValue: sync ?? .onDevice(store: store))

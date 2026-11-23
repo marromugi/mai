@@ -91,3 +91,11 @@ run_step testRestoresTheOwnKeyAndReceivesTheWriting
 
 echo "Requests the Worker answered:"
 grep -E '(GET|PUT) /writings' "$work/wrangler.log" || true
+
+# The one writing saved, and none of the samples, was sent, and sent once.
+lowercase_id="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
+puts="$(grep -E 'PUT /writings/' "$work/wrangler.log" || true)"
+if [ "$(printf '%s\n' "$puts" | grep -c .)" -ne 1 ] || ! printf '%s' "$puts" | grep -q "PUT /writings/$lowercase_id 200"; then
+  echo "Expected one PUT of $lowercase_id answered 200, and no other." >&2
+  exit 1
+fi
