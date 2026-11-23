@@ -1,0 +1,5 @@
+id: drop-content-shape
+language: Swift
+rule:
+  pattern: $V.contentShape($S)
+fix: $V

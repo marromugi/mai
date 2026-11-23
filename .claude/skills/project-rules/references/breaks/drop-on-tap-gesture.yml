@@ -1,0 +1,5 @@
+id: drop-on-tap-gesture
+language: Swift
+rule:
+  pattern: $V.onTapGesture { $$$B }
+fix: $V
