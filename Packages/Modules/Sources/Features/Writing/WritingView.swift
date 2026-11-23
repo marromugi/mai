@@ -1,26 +1,39 @@
 import SwiftUI
 internal import Typesetting
 
-/// A writing's page: its title and body on the type area, under a back mark, with the
-/// 「組版を調整」 button held at the bottom trailing corner. The button enters the typesetting
-/// mode; a tap leaves it.
+/// A writing's page: its title, body, and `photos` on the type area, under a back mark, over the
+/// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap leaves it; its camera
+/// takes a photo with `camera` and hands it to `photoTaken`.
 struct WritingView: View {
   let writing: Writing
+  let photos: [UIImage]
   @Binding var setting: BodySetting
+  let camera: Camera
+  let photoTaken: (UIImage) -> Void
   @State private var typesetting = false
+  @State private var takingPhoto = false
 
   var body: some View {
-    WritingScreen(writing: writing, setting: $setting, typesetting: $typesetting)
+    WritingScreen(
+      writing: writing, photos: photos, setting: $setting, typesetting: $typesetting,
+      takingPhoto: $takingPhoto, camera: camera, photoTaken: photoTaken)
   }
 }
 
-/// The writing's page in or out of the typesetting mode. As the title scrolls off the top, the
+/// The writing's page, with its `photos`, in or out of the typesetting mode. As the title scrolls
+/// off the top, the
 /// header fades in to stand in for it. In the mode the page shrinks to a sheet on the desk and stops
-/// scrolling, the typesetting gestures over it step `setting`, and a tap leaves the mode.
+/// scrolling, the typesetting gestures over it step `setting`, and a tap leaves the mode. The bottom
+/// row's camera sets `takingPhoto`, which covers the page with `camera`'s screen until it takes a
+/// photo or is cancelled.
 struct WritingScreen: View {
   let writing: Writing
+  let photos: [UIImage]
   @Binding var setting: BodySetting
   @Binding var typesetting: Bool
+  @Binding var takingPhoto: Bool
+  let camera: Camera
+  let photoTaken: (UIImage) -> Void
   @State private var titleCutOff: CGFloat = 0
   @Environment(\.dismiss) private var dismiss
 
@@ -28,7 +41,7 @@ struct WritingScreen: View {
     GeometryReader { proxy in
       ScrollView {
         WritingPage(
-          writing: writing, width: proxy.size.width, back: { dismiss() },
+          writing: writing, photos: photos, width: proxy.size.width, back: { dismiss() },
           titleCutOff: { titleCutOff = $0 })
       }
       .scrollDisabled(typesetting)
@@ -45,13 +58,14 @@ struct WritingScreen: View {
       }
       .safeAreaInset(edge: .bottom, spacing: 0) {
         // Hidden, not removed: the inset keeps its height so the scroll offset isn't clamped.
-        let button = AdjustTypesettingButton(width: proxy.size.width) {
-          withAnimation { typesetting = true }
-        }
+        let row = BottomRow(
+          width: proxy.size.width, cameraAvailable: camera.isAvailable,
+          takePhoto: { takingPhoto = true },
+          adjustTypesetting: { withAnimation { typesetting = true } })
         if typesetting {
-          button.hidden()
+          row.hidden()
         } else {
-          button
+          row
         }
       }
       .accessibilityHidden(typesetting)
@@ -78,6 +92,14 @@ struct WritingScreen: View {
       }
     }
     .background(Color(.secondarySystemBackground), ignoresSafeAreaEdges: .all)
+    .fullScreenCover(isPresented: $takingPhoto) {
+      camera.screen(
+        { photo in
+          takingPhoto = false
+          photoTaken(photo)
+        },
+        { takingPhoto = false })
+    }
     .environment(\.bodySetting, setting)
     .toolbar(.hidden, for: .navigationBar)
   }
@@ -86,29 +108,45 @@ struct WritingScreen: View {
   static let sheetScale: CGFloat = 0.85
 }
 
-/// The underlined 「組版を調整」 at the bottom trailing corner, on the type area's margin.
-private struct AdjustTypesettingButton: View {
+/// The camera at the bottom leading corner and the underlined 「組版を調整」 at the trailing one,
+/// both on the type area's margins. The camera is dimmed where there is none.
+private struct BottomRow: View {
   let width: CGFloat
-  let action: () -> Void
+  let cameraAvailable: Bool
+  let takePhoto: () -> Void
+  let adjustTypesetting: () -> Void
   @EnvironmentTypeScale private var scale
 
   var body: some View {
-    Button(action: action) {
-      ButtonLabel("組版を調整")
+    let margin = scale.typeArea(width: width).margin
+    HStack(spacing: 0) {
+      Button(action: takePhoto) {
+        Image(systemName: "camera")
+      }
+      .buttonStyle(.text)
+      .disabled(!cameraAvailable)
+      .accessibilityLabel("写真を撮る")
+      // Its 44-point tap area centred on the margin line, as the header's chevron is, unless that
+      // would push it past the screen's edge.
+      .padding(.leading, max(0, margin - TextButtonStyle.minimumSide / 2))
+      Spacer(minLength: 0)
+      Button(action: adjustTypesetting) {
+        ButtonLabel("組版を調整")
+      }
+      .buttonStyle(.text)
+      .underline()
+      .padding(.trailing, margin)
     }
-    .buttonStyle(.text)
-    .underline()
-    .frame(maxWidth: .infinity, alignment: .trailing)
-    .padding(.trailing, scale.typeArea(width: width).margin)
     .background(Color(.systemBackground))
   }
 }
 
-/// The page laid out across a screen `width` wide: the back mark, then the title and body on the
-/// type area. `titleCutOff` hears how much of the title has scrolled above the scroll view's top,
-/// from 0 to 1.
+/// The page laid out across a screen `width` wide: the back mark, then the title, the body, and
+/// the photos after its last paragraph, piled as one stack, on the type area. `titleCutOff` hears
+/// how much of the title has scrolled above the scroll view's top, from 0 to 1.
 struct WritingPage: View {
   let writing: Writing
+  let photos: [UIImage]
   let width: CGFloat
   let back: () -> Void
   let titleCutOff: (CGFloat) -> Void
@@ -143,6 +181,9 @@ struct WritingPage: View {
           .padding(.bottom, scale.space(.m))
         Text(body: writing.body)
           .textStyle(.body)
+        if !photos.isEmpty {
+          PhotoStack(photos: photos, lineLength: area.lineLength)
+        }
       }
       .frame(width: area.lineLength, alignment: .leading)
       .padding(.horizontal, area.margin)
@@ -233,6 +274,7 @@ private struct BackMark: Shape {
   @Previewable @State var setting = BodySetting.standard
   NavigationStack {
     WritingView(
-      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), setting: $setting)
+      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: [],
+      setting: $setting, camera: .device, photoTaken: { _ in })
   }
 }

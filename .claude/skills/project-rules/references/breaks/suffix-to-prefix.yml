@@ -1,0 +1,5 @@
+id: suffix-to-prefix
+language: Swift
+rule:
+  pattern: $C.suffix($N)
+fix: $C.prefix($N)
