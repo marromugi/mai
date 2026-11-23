@@ -4,6 +4,7 @@
  */
 
 import { hex } from "./hex";
+import { lowercaseUuid } from "./uuid";
 
 export const magic = [0x6d, 0x61, 0x69, 0x01] as const;
 const headerLength = 28;
@@ -22,7 +23,7 @@ export function parseWritingId(text: string): WritingId | undefined {
 }
 
 function isWritingId(text: string): text is WritingId {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(text);
+  return lowercaseUuid.test(text);
 }
 
 /** SHA-256 of a sealed writing, in lowercase hex: what tells one save from another. */
