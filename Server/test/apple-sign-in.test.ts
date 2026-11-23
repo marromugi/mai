@@ -213,6 +213,39 @@ describe("Apple's keys", () => {
     expect(await keys.key(signer.kid, now)).toEqual({ ok: false, failure: "keys-unavailable" });
   });
 
+  it("aren't fetched again sooner than the gap after a fetch that failed", async () => {
+    let up = true;
+    const { keys, asked } = await freshKeys(async () => {
+      if (!up) {
+        throw new TypeError("Network connection lost.");
+      }
+      return jwks([signer]);
+    });
+    await keys.key(signer.kid, now);
+    up = false;
+
+    for (const at of [now + refetchGap, now + refetchGap + 1, now + 2 * refetchGap - 1]) {
+      expect(await keys.key(other.kid, at)).toEqual({ ok: false, failure: "unknown-key" });
+    }
+    expect(asked).toHaveLength(2);
+    expect((await keys.key(signer.kid, now + 2 * refetchGap)).ok).toBe(true);
+    await keys.key(other.kid, now + 2 * refetchGap);
+    expect(asked).toHaveLength(3);
+  });
+
+  it("are unavailable when the key a token names won't import", async () => {
+    const body = JSON.stringify({
+      keys: [{ kty: "RSA", alg: "RS256", kid: signer.kid, n: "!!!", e: "AQAB" }],
+    });
+    const { keys } = await freshKeys(async () => body);
+    const token = await signIdentityToken(claims(), signer);
+
+    expect(await verifyIdentityToken(token, { bundleId, nonce }, keys, now)).toEqual({
+      ok: false,
+      failure: "keys-unavailable",
+    });
+  });
+
   it("leave out keys that aren't RS256", async () => {
     const body: unknown = JSON.parse(await jwks([signer]));
     const listed = isJson(body) && Array.isArray(body["keys"]) ? body["keys"] : [];

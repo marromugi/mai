@@ -92,6 +92,10 @@ export async function verifyTransaction(
   return { ok: true, value: transaction.value };
 }
 
+/**
+ * Renewal info names no app: a caller ties it to a verified transaction of this app by
+ * `originalTransactionId`, as `verifyNotification` does by its outer `bundleId`.
+ */
 export async function verifyRenewalInfo(
   jws: string,
   expected: ExpectedSigner,

@@ -92,7 +92,15 @@ export async function verifyIdentityToken(
   return { ok: true, value: { sub } };
 }
 
-type KeySet = { readonly keys: ReadonlyMap<string, JsonWebKey>; readonly fetched: number };
+type KeySet = {
+  readonly keys: ReadonlyMap<string, JsonWebKey>;
+  /** The JWKS as Apple sent it. */
+  readonly body: string;
+  /** When Apple sent it. */
+  readonly fetched: number;
+  /** When Apple was last asked, whether or not it answered. */
+  readonly tried: number;
+};
 
 /**
  * Apple's JWKS, kept in a Cache for `keysLifetime`. `fetchKeys` is `fetch` outside the tests; the
@@ -106,8 +114,9 @@ export class AppleSignInKeys {
 
   async key(kid: string, now: number): Promise<Checked<CryptoKey, SignInFailure>> {
     let set = (await this.kept(now)) ?? (await this.fetched(now));
-    if (set !== undefined && !set.keys.has(kid) && now - set.fetched >= refetchGap) {
-      set = await this.fetched(now);
+    if (set !== undefined && !set.keys.has(kid) && now - set.tried >= refetchGap) {
+      // A failed fetch is kept as tried too, so it holds off the next one as a good one would.
+      set = (await this.fetched(now)) ?? (await this.keep({ ...set, tried: now }));
     }
     if (set === undefined) {
       return { ok: false, failure: "keys-unavailable" };
@@ -116,23 +125,36 @@ export class AppleSignInKeys {
     if (jwk === undefined) {
       return { ok: false, failure: "unknown-key" };
     }
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      jwk,
-      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-      false,
-      ["verify"],
-    );
-    return { ok: true, value: key };
+    try {
+      const key = await crypto.subtle.importKey(
+        "jwk",
+        jwk,
+        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+        false,
+        ["verify"],
+      );
+      return { ok: true, value: key };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "DataError") {
+        return { ok: false, failure: "keys-unavailable" };
+      }
+      throw error;
+    }
   }
 
   private async kept(now: number): Promise<KeySet | undefined> {
     const response = await this.cache.match(appleKeysUrl);
     const fetched = Number(response?.headers.get("Mai-Fetched"));
-    if (response === undefined || !Number.isSafeInteger(fetched) || now - fetched >= keysLifetime) {
+    const tried = Number(response?.headers.get("Mai-Tried") ?? fetched);
+    if (
+      response === undefined ||
+      !Number.isSafeInteger(fetched) ||
+      !Number.isSafeInteger(tried) ||
+      now - fetched >= keysLifetime
+    ) {
       return undefined;
     }
-    return keySet(await response.text(), fetched);
+    return keySet(await response.text(), fetched, tried);
   }
 
   /** Apple's keys fetched now and kept, or undefined when Apple didn't answer with them. */
@@ -150,25 +172,28 @@ export class AppleSignInKeys {
       }
       throw error;
     }
-    const set = keySet(body, now);
-    if (set !== undefined) {
-      await this.cache.put(
-        appleKeysUrl,
-        new Response(body, {
-          headers: {
-            "Content-Type": "application/json",
-            "Cache-Control": `max-age=${keysLifetime / 1000}`,
-            "Mai-Fetched": String(now),
-          },
-        }),
-      );
-    }
+    const set = keySet(body, now, now);
+    return set === undefined ? undefined : this.keep(set);
+  }
+
+  private async keep(set: KeySet): Promise<KeySet> {
+    await this.cache.put(
+      appleKeysUrl,
+      new Response(set.body, {
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": `max-age=${keysLifetime / 1000}`,
+          "Mai-Fetched": String(set.fetched),
+          "Mai-Tried": String(set.tried),
+        },
+      }),
+    );
     return set;
   }
 }
 
 /** The RS256 RSA keys of a JWKS by key ID; keys of any other kind are left out. */
-function keySet(body: string, fetched: number): KeySet | undefined {
+function keySet(body: string, fetched: number, tried: number): KeySet | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -194,5 +219,5 @@ function keySet(body: string, fetched: number): KeySet | undefined {
       keys.set(kid, { kty: "RSA", alg: "RS256", n, e });
     }
   }
-  return { keys, fetched };
+  return { keys, body, fetched, tried };
 }

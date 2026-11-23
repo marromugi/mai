@@ -112,7 +112,17 @@ function timeOf(element: Element | undefined): number | undefined {
     .slice(1)
     .map(Number);
   const fullYear = element.tag === tags.utcTime ? (year < 50 ? 2000 : 1900) + year : year;
-  return Date.UTC(fullYear, month - 1, day, hour, minute, second);
+  const time = Date.UTC(fullYear, month - 1, day, hour, minute, second);
+  const read = new Date(time);
+  // Date.UTC rolls an impossible date such as month 13 over into a real one.
+  return read.getUTCFullYear() === fullYear &&
+    read.getUTCMonth() === month - 1 &&
+    read.getUTCDate() === day &&
+    read.getUTCHours() === hour &&
+    read.getUTCMinutes() === minute &&
+    read.getUTCSeconds() === second
+    ? time
+    : undefined;
 }
 
 export const oids = {

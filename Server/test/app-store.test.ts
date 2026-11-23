@@ -8,7 +8,14 @@ import {
   type ExpectedSigner,
 } from "../src/app-store";
 import { readCompactJws, type Json } from "../src/jws";
-import { base64url, makeCertificate, makeChain, signAppStore, type Chain } from "./apple-fakes";
+import {
+  base64url,
+  certificateOf,
+  makeCertificate,
+  makeChain,
+  signAppStore,
+  type Chain,
+} from "./apple-fakes";
 
 const bundleId = "dev.mai.app";
 const accountId = "6f1c2b9e-3d4a-4b5c-8d6e-7f8091a2b3c4";
@@ -20,7 +27,7 @@ let expected: ExpectedSigner;
 
 beforeAll(async () => {
   chain = await makeChain();
-  expected = { root: chain.root.certificate, bundleId };
+  expected = { root: certificateOf(chain.root), bundleId };
 });
 
 function transaction(changes: Record<string, unknown> = {}) {
@@ -210,6 +217,7 @@ describe("a signed transaction", () => {
       { leaf: { notAfter: signedDate - 2 * 60_000 } },
     ],
     ["a leaf not yet valid when it was signed", { leaf: { notBefore: signedDate + 2 * 60_000 } }],
+    ["a leaf valid from a day no calendar has", { leaf: { notBeforeText: "991399999999Z" } }],
     [
       "an intermediate whose validity ended before it was signed",
       { intermediate: { notAfter: signedDate - 2 * 60_000 } },

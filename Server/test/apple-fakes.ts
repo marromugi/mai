@@ -91,7 +91,6 @@ function buffer(exported: ArrayBuffer | JsonWebKey): ArrayBuffer {
 
 export type Issued = {
   readonly der: Uint8Array;
-  readonly certificate: Certificate;
   readonly name: string;
   readonly keys: CryptoKeyPair;
   readonly curve: Curve;
@@ -106,6 +105,8 @@ export type CertificateOptions = {
   readonly extensions?: readonly string[];
   readonly notBefore?: number;
   readonly notAfter?: number;
+  /** A UTCTime written as is in place of `notBefore`, to make one no calendar has. */
+  readonly notBeforeText?: string;
 };
 
 const year = 365 * 24 * 60 * 60 * 1000;
@@ -130,7 +131,12 @@ export async function makeCertificate(options: CertificateOptions): Promise<Issu
     integer(crypto.getRandomValues(new Uint8Array(8))),
     algorithm,
     name(issuerName),
-    sequence(time(options.notBefore ?? now - year), time(options.notAfter ?? now + year)),
+    sequence(
+      options.notBeforeText === undefined
+        ? time(options.notBefore ?? now - year)
+        : tlv(0x17, new TextEncoder().encode(options.notBeforeText)),
+      time(options.notAfter ?? now + year),
+    ),
     name(options.name),
     new Uint8Array(buffer(await crypto.subtle.exportKey("spki", keys.publicKey))),
     ...(extensions.length > 0 ? [tlv(0xa3, sequence(...extensions))] : []),
@@ -141,11 +147,16 @@ export async function makeCertificate(options: CertificateOptions): Promise<Issu
   const half = signingCurve === "P-256" ? 32 : 48;
   const signature = sequence(integer(raw.subarray(0, half)), integer(raw.subarray(half)));
   const der = sequence(signed, algorithm, tlv(0x03, Uint8Array.of(0), signature));
-  const certificate = readCertificate(der);
+  return { der, name: options.name, keys, curve: options.curve };
+}
+
+/** The certificate as the server reads it, for a test certificate made to be readable. */
+export function certificateOf(issued: Issued): Certificate {
+  const certificate = readCertificate(issued.der);
   if (certificate === undefined) {
-    throw new Error(`the test certificate ${options.name} reads back`);
+    throw new Error(`the test certificate ${issued.name} reads back`);
   }
-  return { der, certificate, name: options.name, keys, curve: options.curve };
+  return certificate;
 }
 
 export type Chain = { readonly root: Issued; readonly intermediate: Issued; readonly leaf: Issued };
