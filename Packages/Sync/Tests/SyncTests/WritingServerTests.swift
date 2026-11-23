@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Sync
 import SyncFakes
@@ -29,6 +30,41 @@ struct WritingServerTests {
   @Test func twoDevicesSyncThroughTheFake() async throws {
     let server = server()
     try await TwoDevices(server: { server }, ownKey: ownKey).checkAWritingAndItsEditTravelBothWays()
+  }
+
+  /// The copy's ID is a version-8 UUID from the SHA-256 of the writing's ID, the edit's updated
+  /// time in milliseconds (big-endian), and its contents, so each edit's copy is its own.
+  @Test(arguments: [
+    (Data("c".utf8), 3_000.0), (Data("c".utf8), 3_000.001), (Data("d".utf8), 3_000.0),
+  ])
+  func aKeptBothCopysIDIsMadeFromTheEdit(contents: Data, secondsSince1970: Double) async throws {
+    let server = server()
+    let devices = try TwoDevices(server: { server }, ownKey: ownKey)
+    let id = UUID()
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 1_000), contents: Data("a".utf8)))
+    _ = try await devices.first.synchronizer.sync()
+    _ = try await devices.second.synchronizer.sync()
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 2_000), contents: Data("b".utf8)))
+    try devices.second.writings.save(
+      PlainWriting(
+        id: id, updated: .init(timeIntervalSince1970: secondsSince1970), contents: contents))
+    _ = try await devices.first.synchronizer.sync()
+    let report = try await devices.second.synchronizer.sync()
+
+    var hash = SHA256()
+    withUnsafeBytes(of: id.uuid) { hash.update(bufferPointer: $0) }
+    withUnsafeBytes(of: UInt64((secondsSince1970 * 1000).rounded()).bigEndian) {
+      hash.update(bufferPointer: $0)
+    }
+    hash.update(data: contents)
+    var bytes = Array(hash.finalize().prefix(16))
+    bytes[6] = bytes[6] & 0x0f | 0x80
+    bytes[8] = bytes[8] & 0x3f | 0x80
+    let expected = bytes.withUnsafeBytes { UUID(uuid: $0.load(as: uuid_t.self)) }
+    #expect(report.keptBoth[id] == expected)
+    #expect(Array(expected.uuidString)[14] == "8")
   }
 
   @Test func aWritingChangedOnBothDevicesIsKeptTwice() async throws {
