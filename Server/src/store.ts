@@ -7,6 +7,8 @@ import {
   type Revision,
   type WritingId,
 } from "./envelope";
+import { parseAccountId, type AccountId } from "./account-id";
+import type { Challenge } from "./challenges";
 import { lastUsedResolution, sessionLifetime, type Caller } from "./sessions";
 
 /**
@@ -27,12 +29,43 @@ export type Saved = { saved: boolean; revision: Revision | null };
 
 export type Read = { revision: Revision; bytes: ArrayBuffer } | undefined;
 
+export type NewAccount = {
+  readonly id: AccountId;
+  readonly appleSub: string;
+  /** Apple's refresh token as `RefreshTokens.seal` sealed it for this account. */
+  readonly sealedRefreshToken: Uint8Array;
+  /** A row of `plans`. */
+  readonly tier: string;
+};
+
+/** `taken`: the account's ID or its Apple user has an account already. */
+export type Made = "made" | "challenge-used" | "taken";
+
+export type SignedIn =
+  | { signedIn: true; account: AccountId }
+  | { signedIn: false; reason: "challenge-used" | "no-account" };
+
 /** What a request counts against its plan's daily limits, beside the request itself. */
 type Counted = "list" | "save" | "other";
 
 type Statement = { sql: string; args?: Record<string, InValue> };
 
 const day = 24 * 60 * 60 * 1000;
+
+/**
+ * Uses up a challenge, inserting it only when no request used it before and it hasn't expired by
+ * the time of the write; see `#claiming`.
+ */
+const claimStatement = `INSERT INTO used_challenges (value, expires, claim)
+  SELECT :challenge, :expires, :claim WHERE :expires > :now
+  ON CONFLICT (value) DO NOTHING`;
+
+/**
+ * A used challenge is swept this long after it expires, so a request that claims one just before
+ * it expires still finds it there, however late its batch reaches the database.
+ */
+export const usedChallengeMargin = 60 * 60 * 1000;
+const claimed = `EXISTS (SELECT 1 FROM used_challenges WHERE value = :challenge AND claim = :claim)`;
 
 export class Store {
   readonly #client: Client;
@@ -152,23 +185,104 @@ export class Store {
     return answer.ok ? { ok: true, value: undefined } : answer;
   }
 
-  /** Makes an account on `tier`, which must be a row of `plans`. */
-  async makeAccount(id: string, tier: string, now: number): Promise<void> {
-    const made = await this.#client.execute({
-      sql: `INSERT INTO accounts (id, tier, created) SELECT :id, tier, :now FROM plans WHERE tier = :tier`,
-      args: { id, tier, now },
-    });
-    if (made.rowsAffected !== 1) {
-      throw new Error(`there is no plan named ${tier}`);
+  /**
+   * Makes the account and its first session, using up `challenge`. No account or session is
+   * written when the challenge was used before or has expired, or when the account's ID or Apple
+   * user already has an account; the challenge is used up all the same.
+   */
+  async makeAccount(
+    account: NewAccount,
+    challenge: Challenge,
+    session: Caller,
+    now: number,
+  ): Promise<Made> {
+    const results = await this.#claiming(
+      now,
+      challenge,
+      [
+        `INSERT INTO accounts (id, apple_sub, apple_refresh_token, tier, created)
+         SELECT :id, :sub, :refresh, tier, :now FROM plans WHERE tier = :tier AND ${claimed}
+           AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = :id OR apple_sub = :sub)`,
+        `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
+         SELECT :session, id, :hash, :now, :now FROM accounts
+         WHERE id = :id AND apple_sub = :sub AND apple_refresh_token = :refresh AND ${claimed}`,
+      ],
+      {
+        id: account.id,
+        sub: account.appleSub,
+        refresh: account.sealedRefreshToken,
+        tier: account.tier,
+        session: session.session,
+        hash: session.secretSha256,
+        now,
+      },
+    );
+    if (results === undefined) {
+      return "challenge-used";
     }
+    return results[0]?.rowsAffected === 1 ? "made" : "taken";
   }
 
-  async startSession(account: string, caller: Caller, now: number): Promise<void> {
-    await this.#client.execute({
-      sql: `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
-            VALUES (:session, :account, :hash, :now, :now)`,
-      args: { session: caller.session, account, hash: caller.secretSha256, now },
+  /** Starts a session on the Apple user's account, using up `challenge`. */
+  async signIn(
+    appleSub: string,
+    challenge: Challenge,
+    session: Caller,
+    now: number,
+  ): Promise<SignedIn> {
+    const results = await this.#claiming(
+      now,
+      challenge,
+      [
+        `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
+         SELECT :session, id, :hash, :now, :now FROM accounts WHERE apple_sub = :sub AND ${claimed}`,
+        `SELECT id FROM accounts WHERE apple_sub = :sub AND ${claimed}`,
+      ],
+      { sub: appleSub, session: session.session, hash: session.secretSha256, now },
+    );
+    if (results === undefined) {
+      return { signedIn: false, reason: "challenge-used" };
+    }
+    const [started, account] = results;
+    const row = account?.rows[0];
+    if (started?.rowsAffected !== 1 || row === undefined) {
+      return { signedIn: false, reason: "no-account" };
+    }
+    return {
+      signedIn: true,
+      account: stored(parseAccountId, row["id"]),
+    };
+  }
+
+  /** Ends the caller's session; false when it had no live session to end. */
+  async endSession(caller: Caller, now: number): Promise<boolean> {
+    const ended = await this.#client.execute({
+      sql: `DELETE FROM sessions WHERE id = :session AND token_sha256 = :hash AND last_used > :alive`,
+      args: { session: caller.session, hash: caller.secretSha256, alive: now - sessionLifetime },
     });
+    return ended.rowsAffected === 1;
+  }
+
+  /**
+   * Keeps `check` as the account's own key check when it has none. Answers whether the account's
+   * check is now `check`: false means another own key was made first.
+   */
+  async keepOwnKeyCheck(caller: Caller, check: Uint8Array, now: number): Promise<Answer<boolean>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `UPDATE accounts SET own_key_check = :check
+              WHERE id = ${account} AND own_key_check IS NULL AND ${allowed}`,
+        args: { check },
+      },
+      {
+        sql: `SELECT own_key_check = :check AS same FROM accounts WHERE id = ${account}`,
+        args: { check },
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    return { ok: true, value: Number(answer.value[1]?.rows[0]?.["same"]) === 1 };
   }
 
   /** Removes what has expired by `now`; run by the Worker's cron trigger. */
@@ -180,9 +294,39 @@ export class Store {
           args: { expired: now - sessionLifetime },
         },
         { sql: "DELETE FROM usage WHERE day < :today", args: { today: Math.floor(now / day) } },
+        {
+          sql: "DELETE FROM used_challenges WHERE expires <= :swept",
+          args: { swept: now - usedChallengeMargin },
+        },
       ],
       "write",
     );
+  }
+
+  /**
+   * Uses up `challenge` and runs `statements` in one batch. The statements hold `claimed` in
+   * their WHERE, so they do nothing when another request used the challenge first, or it expired
+   * by `now`; then this
+   * answers undefined, and otherwise the statements' results.
+   */
+  async #claiming(
+    now: number,
+    challenge: Challenge,
+    statements: string[],
+    values: Record<string, InValue>,
+  ): Promise<ResultSet[] | undefined> {
+    const all = {
+      ...values,
+      now,
+      challenge: challenge.value,
+      expires: challenge.expires,
+      claim: crypto.randomUUID(),
+    };
+    const [used, ...results] = await this.#client.batch(
+      [claimStatement, ...statements].map((sql) => bind(sql, all)),
+      "write",
+    );
+    return used?.rowsAffected === 1 ? results : undefined;
   }
 
   /**

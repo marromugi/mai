@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
@@ -28,7 +29,19 @@ export default defineConfig(async () => {
     plugins: [
       cloudflareTest({
         wrangler: { configPath: "./wrangler.jsonc" },
-        miniflare: { bindings: { TURSO_URL: `http://127.0.0.1:${port}`, TURSO_TOKEN: "" } },
+        miniflare: {
+          bindings: {
+            TURSO_URL: `http://127.0.0.1:${port}`,
+            TURSO_TOKEN: "",
+            CHALLENGE_KEY: randomBytes(32).toString("base64"),
+            REFRESH_TOKEN_KEY: randomBytes(32).toString("base64"),
+            APPLE_CLIENT_ID: "com.marromugi.mai",
+            APPLE_TEAM_ID: "TESTTEAM00",
+            APPLE_SIGN_IN_KEY_ID: "TESTKEY000",
+            // Each test that signs in makes its own key (test/sign-in.test.ts).
+            APPLE_SIGN_IN_KEY: "",
+          },
+        },
       }),
     ],
   };
