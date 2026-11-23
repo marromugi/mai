@@ -38,7 +38,7 @@ extension AttributedString {
   /// Undetermined, not `ja`: Japanese also turns on the text system's own spacing, which sets
   /// brackets half wide and moves characters off the type area's columns.
   /// `Locale.Language` and `typesettingLanguage` drop the `lb` keyword; `languageIdentifier` keeps it.
-  private static let bodyLanguage = "und-u-lb-strict"
+  static let bodyLanguage = "und-u-lb-strict"
 }
 
 private struct TextStyleModifier: ViewModifier {
@@ -46,17 +46,23 @@ private struct TextStyleModifier: ViewModifier {
   @EnvironmentTypeScale private var scale
 
   func body(content: Content) -> some View {
-    let size = scale.size(role)
-    let lineHeight = scale.lineHeight(role)
-    // `.exact` puts the baseline `size` below the top of the line box, so the em box starts
-    // `emBoxDescent × size` below it. This moves it to the middle.
-    let shift = (lineHeight - size) / 2 - BundledFonts.emBoxDescent * size
+    let shift = scale.emBoxShift(role)
     content
       .font(Font(scale.font(role)))
-      .lineHeight(.exact(points: lineHeight))
+      .lineHeight(.exact(points: scale.lineHeight(role)))
       .tracking(scale.tracking(role))
       .offset(y: shift)
       .alignmentGuide(.firstTextBaseline) { $0[.firstTextBaseline] + shift }
       .alignmentGuide(.lastTextBaseline) { $0[.lastTextBaseline] + shift }
+  }
+}
+
+extension TypeScale {
+  /// How far down `role`'s text is moved to centre its em box in the line box. `.exact` puts the
+  /// baseline `size` below the top of the line box, so the em box starts `emBoxDescent × size`
+  /// below it.
+  func emBoxShift(_ role: TextRole) -> CGFloat {
+    let size = size(role)
+    return (lineHeight(role) - size) / 2 - BundledFonts.emBoxDescent * size
   }
 }
