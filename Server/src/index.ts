@@ -174,7 +174,7 @@ const refusals: Record<Refusal, { status: number; reason: string }> = {
   session: { status: 401, reason: "the session token is unknown, or its session has ended" },
   lapsed: {
     status: 402,
-    reason: "the account's subscription has lapsed; its writings are read but not written",
+    reason: "the account's subscription has lapsed; it is read but not written",
   },
   requests: { status: 429, reason: "the plan's requests for today are used up" },
   lists: { status: 429, reason: "the plan's listings for today are used up" },

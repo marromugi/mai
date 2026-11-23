@@ -681,7 +681,7 @@ describe("a lapsed account", () => {
     );
     expect(answer.status).toBe(402);
     expect(await answer.json()).toEqual({
-      error: "the account's subscription has lapsed; its writings are read but not written",
+      error: "the account's subscription has lapsed; it is read but not written",
     });
     const { rows } = await database.execute({
       sql: "SELECT saves FROM usage WHERE account_id = ?",
@@ -701,8 +701,8 @@ describe("a lapsed account", () => {
     expect((await accountOf(account)).paidUntil).toBe(lapsedAt);
   });
 
-  it("may still keep its own key check", async () => {
-    const { token } = await lapsed();
+  it("is refused keeping its own key check with 402, and keeps none", async () => {
+    const { account, token } = await lapsed();
     const answer = await exports.default.fetch(
       new Request("https://mai.test/account/own-key-check", {
         method: "PUT",
@@ -710,7 +710,12 @@ describe("a lapsed account", () => {
         body: new Uint8Array(32).fill(7),
       }),
     );
-    expect(answer.status).toBe(204);
+    expect(answer.status).toBe(402);
+    const { rows } = await database.execute({
+      sql: "SELECT own_key_check FROM accounts WHERE id = ?",
+      args: [account],
+    });
+    expect(rows[0]?.["own_key_check"]).toBeNull();
   });
 });
 

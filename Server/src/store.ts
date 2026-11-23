@@ -71,8 +71,11 @@ export type SignedIn =
   | { signedIn: true; account: AccountId }
   | { signedIn: false; reason: "challenge-used" | "no-account" };
 
-/** What a request counts against its plan's daily limits, beside the request itself. */
-type Counted = "list" | "save" | "other";
+/**
+ * What a request counts against its plan's daily limits, beside the request itself. `save` and
+ * `write` write the account's data, which only a paid-for account may do; only `save` is counted.
+ */
+type Counted = "list" | "save" | "write" | "other";
 
 type Statement = { sql: string; args?: Record<string, InValue> };
 
@@ -363,7 +366,7 @@ export class Store {
    * check is now `check`: false means another own key was made first.
    */
   async keepOwnKeyCheck(caller: Caller, check: Uint8Array, now: number): Promise<Answer<boolean>> {
-    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+    const answer = await this.#run(caller, now, "write", (account, allowed) => [
       {
         sql: `UPDATE accounts SET own_key_check = :check
               WHERE id = ${account} AND own_key_check IS NULL AND ${allowed}`,
@@ -444,14 +447,15 @@ export class Store {
       day: Math.floor(now / day),
       list: counted === "list" ? 1 : 0,
       save: counted === "save" ? 1 : 0,
+      write: counted === "save" || counted === "write" ? 1 : 0,
     };
     const callerRows = `FROM sessions s
       JOIN accounts a ON a.id = s.account_id
       JOIN plans p ON p.tier = a.tier
       LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
       WHERE s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive`;
-    // A save is a write, and an account writes only while its subscription is paid for.
-    const paid = "(:save = 0 OR a.paid_until > :now)";
+    // An account writes only while its subscription is paid for.
+    const paid = "(:write = 0 OR a.paid_until > :now)";
     const left = {
       requests: "coalesce(u.requests, 0) < p.requests_per_day",
       lists: "(:list = 0 OR coalesce(u.lists, 0) < p.lists_per_day)",
