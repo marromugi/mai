@@ -26,9 +26,9 @@ INSERT INTO plans VALUES
 -- to make the own key. tier and paid_until follow the account's subscriptions: tier is the plan of
 -- the one paid for longest, and paid_until the latest time any of them is paid until. Past
 -- paid_until the account has lapsed: it is read but not written, and 90 days past it the cron
--- trigger deletes it (lapsedKept in src/store.ts). deleting is 1 from when the cron trigger starts
--- deleting it; from then on its subscriptions no longer change paid_until or tier, so a
--- resubscription comes too late.
+-- trigger deletes it (lapsedKept in src/store.ts). deleting is 1 once the cron trigger has revoked
+-- its Apple token and before it touches R2; from then on its subscriptions no longer change
+-- paid_until or tier, so a resubscription comes too late.
 CREATE TABLE accounts (
   id TEXT PRIMARY KEY,
   apple_sub TEXT NOT NULL UNIQUE,

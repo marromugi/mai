@@ -37,12 +37,12 @@ export default {
   },
 
   async scheduled(_controller, env, ctx): Promise<void> {
-    const signIn = signInOf(env, (url, init) => fetch(url, init), caches.default);
+    const store = Store.open(env.TURSO_URL, env.TURSO_TOKEN);
     const now = Date.now();
-    await signIn.store.sweep(now);
-    await sweepUploads(signIn.store, env.PHOTOS, now);
+    await store.sweep(now);
+    await sweepUploads(store, env.PHOTOS, now);
     await deleteLapsedAccounts(
-      signIn,
+      signInOf(env, (url, init) => fetch(url, init), caches.default),
       { bucket: env.PHOTOS, keepAlive: (work) => ctx.waitUntil(work) },
       now,
     );
