@@ -236,6 +236,11 @@ describe("a write not of the one shape", () => {
     },
   );
 
+  it("is refused at a path past a writing it has", async () => {
+    await request(`/writings/${id}`, { method: "PUT", body: envelope() });
+    expect((await request(`/writings/${id}/x`)).status).toBe(404);
+  });
+
   it("is accepted at exactly 1,900,000 bytes", async () => {
     const response = await request(`/writings/${id}`, {
       method: "PUT",
@@ -344,6 +349,23 @@ describe("a plan's daily limits", () => {
     expect(await refused.json()).toHaveProperty("error");
   });
 
+  it("does the last save and list the day allows, and nothing past them", async () => {
+    const authorization = await onTheDailyPlan();
+    const next = envelope({ updated: 1_790_000_001_000n, contentsLength: 20 });
+    const put = (body: Uint8Array<ArrayBuffer>, base: string): Promise<Response> =>
+      request(`/writings/${id}`, { method: "PUT", body, base, authorization });
+    expect((await put(envelope(), "none")).status).toBe(200);
+    expect((await put(next, first)).status).toBe(200);
+    expect((await put(envelope({ updated: 1_790_000_002_000n }), second)).status).toBe(429);
+
+    const read = await request(`/writings/${id}`, { authorization });
+    expect(read.headers.get("Mai-Revision")).toBe(second);
+    expect(new Uint8Array(await read.arrayBuffer())).toEqual(next);
+    expect(await (await request("/writings", { authorization })).json()).toEqual({
+      writings: [{ id, revision: second, updated: 1_790_000_001_000, size: 136 }],
+    });
+  });
+
   it("starts again the next day", async () => {
     const now = Date.now();
     const { caller } = await newAccount("test-daily", now);
@@ -355,7 +377,8 @@ describe("a plan's daily limits", () => {
 });
 
 describe("a plan's storage", () => {
-  // The plan `test-storage` (test/sqld.ts) holds 2 writings and 300 bytes; envelope() is 126.
+  // The plan `test-storage` (test/sqld.ts) holds 300 bytes, and `test-count` 2 writings;
+  // envelope() is 126 bytes.
   let authorization: string;
 
   beforeEach(async () => {
@@ -363,6 +386,7 @@ describe("a plan's storage", () => {
   });
 
   it("refuses a writing past the plan's number of writings", async () => {
+    authorization = `Bearer ${(await newAccount("test-count")).token}`;
     for (const writing of [id, otherId]) {
       const saved = await request(`/writings/${writing}`, {
         method: "PUT",
@@ -410,16 +434,97 @@ describe("a plan's storage", () => {
     });
     expect(filled.status).toBe(200);
   });
+
+  it("takes a new writing up to the plan's bytes and refuses one past them", async () => {
+    // 126 + 174 = 300 bytes.
+    await request(`/writings/${id}`, { method: "PUT", body: envelope(), authorization });
+    const filling = await request(`/writings/${otherId}`, {
+      method: "PUT",
+      body: envelope({ writing: otherId, contentsLength: 58 }),
+      authorization,
+    });
+    expect(filling.status).toBe(200);
+
+    const third = "00000000-0000-0000-0000-000000000002";
+    const refused = await request(`/writings/${third}`, {
+      method: "PUT",
+      body: envelope({ writing: third, contentsLength: 0 }),
+      authorization,
+    });
+    expect(refused.status).toBe(429);
+  });
+
+  it("lets an account over its plan shrink a writing, and doesn't hold it against another", async () => {
+    const before = await newAccount("test-storage");
+    const over = await newAccount("basic");
+    const writings = [id, otherId, "00000000-0000-0000-0000-000000000002"];
+    for (const writing of writings) {
+      const saved = await request(`/writings/${writing}`, {
+        method: "PUT",
+        body: envelope({ writing, contentsLength: 30 }),
+        authorization: `Bearer ${over.token}`,
+      });
+      expect(saved.status).toBe(200);
+    }
+    // 3 × 146 = 438 bytes, over `test-storage`'s 300.
+    await createClient({ url: env.TURSO_URL }).execute({
+      sql: "UPDATE accounts SET tier = 'test-storage' WHERE id = ?",
+      args: [over.account],
+    });
+    const after = await newAccount("test-storage");
+
+    const read = await request(`/writings/${id}`, { authorization: `Bearer ${over.token}` });
+    const overBase = read.headers.get("Mai-Revision") ?? "";
+    const shrunk = await request(`/writings/${id}`, {
+      method: "PUT",
+      body: envelope({ updated: 1_790_000_001_000n }),
+      base: overBase,
+      authorization: `Bearer ${over.token}`,
+    });
+    expect(shrunk.status).toBe(200);
+    const grown = await request(`/writings/${id}`, {
+      method: "PUT",
+      body: envelope({ updated: 1_790_000_002_000n, contentsLength: 11 }),
+      base: (await shrunk.json<{ revision: string }>()).revision,
+      authorization: `Bearer ${over.token}`,
+    });
+    expect(grown.status).toBe(429);
+
+    for (const other of [before, after]) {
+      const saved = await request(`/writings/${id}`, {
+        method: "PUT",
+        body: envelope({ contentsLength: 58 }),
+        authorization: `Bearer ${other.token}`,
+      });
+      expect(saved.status).toBe(200);
+      // 300 bytes with the one above.
+      const filled = await request(`/writings/${otherId}`, {
+        method: "PUT",
+        body: envelope({ writing: otherId }),
+        authorization: `Bearer ${other.token}`,
+      });
+      expect(filled.status).toBe(200);
+    }
+  });
 });
 
 const lifetime = 180 * 24 * 60 * 60 * 1000;
 
 describe("a session", () => {
   it("ends 180 days after it was last used", async () => {
-    const { token: ended } = await newAccount("basic", Date.now() - lifetime);
+    const { token: ended, caller } = await newAccount("basic", Date.now() - lifetime);
     const response = await request("/writings", { authorization: `Bearer ${ended}` });
     expect(response.status).toBe(401);
     expect(await response.json()).toHaveProperty("error");
+    expect(await store.list(caller, Date.now())).toEqual({ ok: false, refusal: "session" });
+  });
+
+  it("isn't kept alive by a request with another secret", async () => {
+    const now = Date.now();
+    const { token: nearlyEnded, caller } = await newAccount("basic", now - lifetime + 60_000);
+    const wrong = `Bearer ${nearlyEnded.slice(0, -1)}${nearlyEnded.endsWith("A") ? "B" : "A"}`;
+    expect((await request("/writings", { authorization: wrong })).status).toBe(401);
+    expect(await store.list(caller, now + 120_000)).toEqual({ ok: false, refusal: "session" });
   });
 
   it("lasts 180 days from its last use", async () => {
@@ -447,6 +552,7 @@ describe("the cron trigger", () => {
     await worker.scheduled(createScheduledController(), env);
 
     expect(await store.list(ended.caller, longAgo)).toEqual({ ok: false, refusal: "session" });
+    expect((await store.list(alive.caller, now)).ok).toBe(true);
     const counted = await createClient({ url: env.TURSO_URL }).execute({
       sql: "SELECT account_id FROM usage WHERE account_id IN (?, ?)",
       args: [ended.account, alive.account],
