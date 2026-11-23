@@ -83,6 +83,25 @@ struct WritingTests {
     }
   }
 
+  @Test func aWritingInAFileNotNamedByItsIDNamesTheFile() throws {
+    try withEmptyStore { store throws in
+      let writing = Writing(title: "朝", body: "古い")
+      try store.save(writing)
+      try FileManager.default.copyItem(
+        at: store.file(for: writing.id), to: store.directory.appending(path: "copy.json"))
+      #expect {
+        try store.all()
+      } throws: { error in
+        (error as? UnreadableWriting)?.file.lastPathComponent == "copy.json"
+          && error.localizedDescription.contains(writing.id.uuidString)
+      }
+    }
+  }
+
+  @Test func sampleIDsDifferPastThirtyTwoBits() {
+    #expect(UUID(sample: 4_294_967_297) != UUID(sample: 1))
+  }
+
   @Test func filesOtherThanJSONAreLeftAlone() throws {
     try withEmptyStore { store throws in
       let writing = Writing(title: "朝", body: "", updated: Date(timeIntervalSince1970: 1))

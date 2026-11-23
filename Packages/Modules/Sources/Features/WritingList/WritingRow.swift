@@ -93,7 +93,7 @@ extension WritingRow {
 extension UUID {
   /// A fixed ID for sample `number`, so samples keep their IDs across launches and devices.
   init(sample number: Int) {
-    guard let uuid = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", number))
+    guard let uuid = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012ld", number))
     else { preconditionFailure("\(number) doesn't fit in a sample ID.") }
     self = uuid
   }

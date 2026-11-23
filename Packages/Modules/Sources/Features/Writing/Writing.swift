@@ -1,6 +1,6 @@
 import Foundation
 
-/// A writing as it is kept on the device.
+/// A writing: what the store keeps and its page shows.
 nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
   let id: UUID
   var title: String

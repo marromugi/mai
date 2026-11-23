@@ -38,11 +38,16 @@ struct FileWritingStore: WritingStore {
       return []
     }
     return try files.filter { $0.pathExtension == "json" }.map { file in
+      let writing: Writing
       do {
-        return try JSONDecoder().decode(Writing.self, from: Data(contentsOf: file))
+        writing = try JSONDecoder().decode(Writing.self, from: Data(contentsOf: file))
       } catch {
         throw UnreadableWriting(file: file, reason: error)
       }
+      guard file.lastPathComponent == self.file(for: writing.id).lastPathComponent else {
+        throw UnreadableWriting(file: file, reason: MisnamedWriting(id: writing.id))
+      }
+      return writing
     }
   }
 
@@ -65,5 +70,15 @@ struct UnreadableWriting: LocalizedError {
 
   var errorDescription: String? {
     "\(file.lastPathComponent) を文書として読めませんでした。\(reason.localizedDescription)"
+  }
+}
+
+/// A file holding a writing whose ID is not the file's name, so saving that writing would not
+/// replace it.
+struct MisnamedWriting: LocalizedError {
+  let id: Writing.ID
+
+  var errorDescription: String? {
+    "中の文書の ID は \(id.uuidString) です。"
   }
 }

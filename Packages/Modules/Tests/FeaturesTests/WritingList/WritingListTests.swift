@@ -154,6 +154,16 @@ struct WritingListTests {
     assertRoot(remembering: ["writingListOrder": "characterCount"])
   }
 
+  /// The rows are the stored writings, not the samples.
+  @Test func rootShowsTheStoredWritings() {
+    assertRoot(
+      remembering: [:],
+      writings: [
+        Writing(title: "保存した文書", body: "本文", updated: .now),
+        Writing(title: "もうひとつ", body: "", updated: .now),
+      ])
+  }
+
   /// An untitled row, a row updated after `now`, and one updated long enough ago that its label is
   /// wider than the column, given oldest first.
   @Test func rowsWithUnusualValues() {
@@ -213,9 +223,11 @@ private func width(of view: some View) -> CGFloat {
     .sizeThatFits(in: CGSize(width: 2000, height: 2000)).width
 }
 
-/// The app's first screen, reading what is remembered from a store holding only `remembered`.
+/// The app's first screen, reading what is remembered from a store holding only `remembered`,
+/// and writings from a store holding only `writings` (seeded with the samples when there are none).
 private func assertRoot(
   remembering remembered: [String: String],
+  writings: [Writing] = [],
   testName: String = #function
 ) {
   let suite = "WritingListTests.\(testName)"
@@ -226,8 +238,19 @@ private func assertRoot(
   for (key, value) in remembered {
     store.set(value, forKey: key)
   }
+  let directory = FileManager.default.temporaryDirectory.appending(
+    path: "WritingListTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let writingStore = FileWritingStore(directory: directory)
+  for writing in writings {
+    do {
+      try writingStore.save(writing)
+    } catch {
+      preconditionFailure("A writing can't be saved to \(directory): \(error)")
+    }
+  }
   assertSnapshot(
-    of: RootView().defaultAppStorage(store)
+    of: RootView(store: writingStore).defaultAppStorage(store)
       .frame(width: 402, height: 874).background(Color(.systemBackground)),
     as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
     testName: testName)
