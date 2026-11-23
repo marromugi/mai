@@ -13,23 +13,27 @@ export default {
       return problem(401, "the Authorization header doesn't hold a session token");
     }
 
-    const path = new URL(request.url).pathname.split("/").slice(1);
-    if (path[0] !== "writings" || path.length > 2) {
-      return problem(404, "the only routes are /writings and /writings/<ID>");
-    }
     const store = Store.open(env.TURSO_URL, env.TURSO_TOKEN);
     const now = Date.now();
+    /** A request turned down for its own shape, answered so once its session is let in. */
+    const turnedDown = async (status: number, reason: string): Promise<Response> =>
+      answered(await store.admit(caller, now), () => problem(status, reason));
+
+    const path = new URL(request.url).pathname.split("/").slice(1);
+    if (path[0] !== "writings" || path.length > 2) {
+      return turnedDown(404, "the only routes are /writings and /writings/<ID>");
+    }
 
     if (path.length === 1) {
       if (request.method !== "GET") {
-        return problem(405, "/writings is only read, with GET");
+        return turnedDown(405, "/writings is only read, with GET");
       }
       return answered(await store.list(caller, now), (writings) => Response.json({ writings }));
     }
 
     const id = parseWritingId(path[1] ?? "");
     if (id === undefined) {
-      return problem(404, "a writing's ID is a UUID");
+      return turnedDown(404, "a writing's ID is a UUID");
     }
     switch (request.method) {
       case "GET": {
@@ -46,25 +50,25 @@ export default {
       }
       case "PUT": {
         if (request.headers.get("Content-Type") !== "application/octet-stream") {
-          return problem(415, "a sealed writing is sent as application/octet-stream");
+          return turnedDown(415, "a sealed writing is sent as application/octet-stream");
         }
         const base = parseBase(request.headers.get("Mai-Base-Revision"));
         if (!base.ok) {
-          return problem(400, base.reason);
+          return turnedDown(400, base.reason);
         }
         const envelope = await parseEnvelope(await request.arrayBuffer());
         if (!envelope.ok) {
-          return problem(400, envelope.reason);
+          return turnedDown(400, envelope.reason);
         }
         if (envelope.value.id !== id) {
-          return problem(400, "the sealed writing's ID is not the one in the path");
+          return turnedDown(400, "the sealed writing's ID is not the one in the path");
         }
         return answered(await store.save(caller, envelope.value, base.value, now), (saved) =>
           Response.json({ revision: saved.revision }, { status: saved.saved ? 200 : 409 }),
         );
       }
       default:
-        return problem(405, "a writing is read with GET and saved with PUT");
+        return turnedDown(405, "a writing is read with GET and saved with PUT");
     }
   },
 

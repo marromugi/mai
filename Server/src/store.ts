@@ -146,6 +146,12 @@ export class Store {
     };
   }
 
+  /** Checks the caller and counts the request, for a request that does nothing else. */
+  async admit(caller: Caller, now: number): Promise<Answer<undefined>> {
+    const answer = await this.#run(caller, now, "other", () => []);
+    return answer.ok ? { ok: true, value: undefined } : answer;
+  }
+
   /** Makes an account on `tier`, which must be a row of `plans`. */
   async makeAccount(id: string, tier: string, now: number): Promise<void> {
     const made = await this.#client.execute({

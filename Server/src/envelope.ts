@@ -8,7 +8,7 @@ const headerLength = 28;
 const sealedKeyLength = 12 + 32 + 16;
 const sealedContentsOverhead = 12 + 16;
 export const smallestEnvelope = headerLength + sealedKeyLength + sealedContentsOverhead;
-/** See the Decisions of PR #37 for why not more, and of the PR for #43 for Turso. */
+/** See the Decisions of PR #37 for why not more; Turso takes it in one batch (PR #46). */
 export const largestEnvelope = 1_900_000;
 
 /** A writing ID in the lowercase text form, which is how the server names writings. */

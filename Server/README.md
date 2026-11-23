@@ -20,7 +20,7 @@
 
 ## 経路
 
-どれも `Authorization: Bearer <セッションのトークン>` が要る。トークンは `s1.<セッション ID>.<秘密>`(秘密は 32 バイトの base64url)で、サーバーは秘密(base64url の文字列)の SHA-256 だけを `sessions` に置く。知らないトークン、形の違うトークン、最後に使ってから 180 日たったセッションは 401。セッションを作る経路(Sign in with Apple)はまだない(#22 の S3)。それまでは `Store.makeAccount` と `Store.startSession` で作る(テストと `scripts/server-contract-test.sh`)。
+どれも `Authorization: Bearer <セッションのトークン>` が要る。トークンは `s1.<セッション ID>.<秘密>`(秘密は 32 バイトの base64url)で、サーバーは秘密(base64url の文字列)の SHA-256 だけを `sessions` に置く。知らないトークン、形の違うトークン、最後に使ってから 180 日たったセッションは、経路や中身を見る前に 401。セッションを作る経路(Sign in with Apple)はまだない(#22 の S3)。それまでは、テストは `Store.makeAccount` と `Store.startSession` で、手元で動かすときは `scripts/new-session.sh` で、同じ行を書いて作る。
 
 | 経路                 | 内容                                                                                                                                                                                                                                      |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -56,6 +56,15 @@ pnpm test          # Worker のテスト(Miniflare の上で動き、sqld につ
 pnpm typecheck
 pnpm lint          # oxlint
 pnpm fmt:check     # oxfmt
+```
+
+手元で Worker を動かすときは、データベースのファイルに表とセッションを作ってから `turso dev` で出す。`new-session.sh` がトークンを出す。
+
+```sh
+sqlite3 /private/tmp/mai.db < schema.sql
+scripts/new-session.sh /private/tmp/mai.db        # 2 つ目の引数でプランを選べる(既定は basic)
+turso dev --db-file /private/tmp/mai.db --port 8080
+pnpm exec wrangler dev --var TURSO_URL:http://127.0.0.1:8080 --var TURSO_TOKEN:
 ```
 
 アプリの同期の部品(`Packages/Sync`)を、`turso dev` と `wrangler dev` の Worker に通して確かめる。

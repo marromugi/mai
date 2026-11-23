@@ -24,7 +24,8 @@ struct WritingServerContractTests {
   func workerKeepsTheContract(_ contract: ServerContract) async throws {
     let token = try #require(token, "MAI_SERVER_TOKEN is the local Worker's token")
     try await contract.check(
-      server: server(token: token), stranger: server(token: "not-\(token)"),
+      server: server(token: token),
+      stranger: server(token: String(token.dropLast()) + (token.hasSuffix("A") ? "B" : "A")),
       ownKey: OwnKey.generate())
   }
 

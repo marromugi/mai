@@ -88,6 +88,35 @@ describe("who may call", () => {
     expect(await response.json()).toHaveProperty("error");
     expect(await listed()).toEqual({ writings: [] });
   });
+
+  it.each([
+    ["at a path that isn't a route", "/copies", {}],
+    ["at a path that isn't a writing's ID", "/writings/notes", {}],
+    ["as POST /writings", "/writings", { method: "POST" }],
+    ["as DELETE of a writing", `/writings/${id}`, { method: "DELETE" }],
+    [
+      "sent as JSON",
+      `/writings/${id}`,
+      { method: "PUT", body: envelope(), contentType: "application/json" },
+    ],
+    ["with no base revision", `/writings/${id}`, { method: "PUT", body: envelope(), base: null }],
+    ["of a writing too short", `/writings/${id}`, { method: "PUT", body: envelope().slice(0, 1) }],
+    ["of another writing", `/writings/${otherId}`, { method: "PUT", body: envelope() }],
+  ])("refuses a session nobody started before a request %s", async (_, path, options) => {
+    const response = await request(path, {
+      ...options,
+      authorization: `Bearer s1.${otherId}.${"A".repeat(43)}`,
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it("counts a request turned down for its shape against the day's requests", async () => {
+    const authorization = await onTheDailyPlan();
+    for (let used = 0; used < 4; used += 1) {
+      expect((await request("/copies", { authorization })).status).toBe(404);
+    }
+    expect((await request("/copies", { authorization })).status).toBe(429);
+  });
 });
 
 describe("saving", () => {
