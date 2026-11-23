@@ -87,12 +87,12 @@ struct WritingListTests {
     let rows = [
       WritingRow(id: 1, title: "", characterCount: 10, updated: now),
       WritingRow(
-        id: 2, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+        id: 5, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
       WritingRow(
         id: 6, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -1))),
       WritingRow(id: 3, title: "", characterCount: 0, updated: now),
       WritingRow(
-        id: 5, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+        id: 2, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
       WritingRow(
         id: 4, title: "", characterCount: 99999, updated: movedFromNow(DateComponents(year: -1))),
     ]
@@ -135,10 +135,13 @@ struct WritingListTests {
     #expect(abs(rowWidth - expected) < 0.5)
   }
 
+  /// With nothing remembered, newest first.
   @Test func rootShowsTheWritingList() {
-    assertSnapshot(
-      of: RootView().frame(width: 402, height: 874).background(Color(.systemBackground)),
-      as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
+    assertRoot(remembering: [:])
+  }
+
+  @Test func rootShowsTheRememberedOrder() {
+    assertRoot(remembering: ["writingListOrder": "characterCount"])
   }
 
   /// An untitled row, a row updated after `now`, and one updated long enough ago that its label is
@@ -198,6 +201,26 @@ private func height(of row: WritingRow, size: DynamicTypeSize) -> CGFloat {
 private func width(of view: some View) -> CGFloat {
   UIHostingController(rootView: view.fixedSize())
     .sizeThatFits(in: CGSize(width: 2000, height: 2000)).width
+}
+
+/// The app's first screen, reading what is remembered from a store holding only `remembered`.
+private func assertRoot(
+  remembering remembered: [String: String],
+  testName: String = #function
+) {
+  let suite = "WritingListTests.\(testName)"
+  guard let store = UserDefaults(suiteName: suite) else {
+    preconditionFailure("The defaults suite \(suite) can't be opened.")
+  }
+  store.removePersistentDomain(forName: suite)
+  for (key, value) in remembered {
+    store.set(value, forKey: key)
+  }
+  assertSnapshot(
+    of: RootView().defaultAppStorage(store)
+      .frame(width: 402, height: 874).background(Color(.systemBackground)),
+    as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
+    testName: testName)
 }
 
 /// The sample list on a 402-wide screen, as tall as it needs to be.

@@ -68,17 +68,14 @@ private struct OrderMenu: View {
   var body: some View {
     Menu {
       Picker("並べ替え", selection: $order) {
-        ForEach(WritingListOrder.allCases) { Text(verbatim: $0.title) }
+        ForEach(WritingListOrder.allCases) { Text(LocalizedStringKey($0.title)) }
       }
     } label: {
       ButtonLabel(
         LocalizedStringKey(order.title),
         trailingIcon: Image(systemName: "chevron.up.chevron.down"))
     }
-    .menuStyle(.button)
     .buttonStyle(.text)
-    .accessibilityLabel("並べ替え")
-    .accessibilityValue(order.title)
   }
 }
 
