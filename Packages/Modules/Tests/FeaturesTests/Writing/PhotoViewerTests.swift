@@ -11,8 +11,8 @@ struct PhotoViewerTests {
   @Test func itOpensOnTheNewest() throws {
     let page = HostedPage(PhotoViewer(photos: [.portrait, .landscape, .dusk], close: {}))
     let scrollView = try #require(page.scrollViews.first)
-    #expect(scrollView.contentSize.width.rounded() == 402 * 3)
-    #expect(scrollView.contentOffset.x.rounded() == 402 * 2)
+    #expect(Int(scrollView.contentSize.width.rounded()) == 402 * 3)
+    #expect(Int(scrollView.contentOffset.x.rounded()) == 402 * 2)
   }
 
   /// The newest photo as large as fits, over black, under the close button.
