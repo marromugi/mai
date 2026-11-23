@@ -50,6 +50,7 @@ struct WritingPhotoStackTests {
       let page = HostedPage(
         WritingView(
           writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [], open: { _ in },
+          edit: { _ in },
           photos: photos,
           setting: .constant(.standard), camera: .standIn(taking: nil), photoTaken: { _ in }))
       return try #require(page.scrollViews.first).contentSize.height

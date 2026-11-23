@@ -9,6 +9,8 @@ public struct RootView: View {
   @State private var photos = WritingPhotos()
   @State private var opened = Date.now
   @State private var showingSettings = false
+  /// The last save that failed, until it is shown and dismissed.
+  @State private var unsaved: UnsavedWriting?
   @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting.standard
   @AppStorage(ColorTheme.key) private var theme = ColorTheme.system
 
@@ -52,6 +54,7 @@ public struct RootView: View {
             writing: writing,
             others: writings.filter { $0.id != id },
             open: { path.append($0.id) },
+            edit: { edit(id, $0) },
             photos: photos[id],
             setting: $settings[id, default: defaultSetting.setting],
             camera: .device,
@@ -67,7 +70,34 @@ public struct RootView: View {
     .sheet(isPresented: $showingSettings) {
       SettingsView()
     }
+    .alert(
+      "保存できませんでした", isPresented: Binding(get: { unsaved != nil }, set: { _ in unsaved = nil }),
+      presenting: unsaved
+    ) { _ in
+    } message: { unsaved in
+      Text(verbatim: unsaved.localizedDescription)
+    }
     .colorTheme(theme)
+  }
+
+  /// Makes `change` to the writing with `id` and saves it.
+  private func edit(_ id: Writing.ID, _ change: (inout Writing) -> Void) {
+    guard case .success(var all) = writings else { return }
+    do {
+      try store.edit(id, in: &all, at: .now, change)
+    } catch {
+      unsaved = UnsavedWriting(reason: error)
+    }
+    writings = .success(all)
+  }
+}
+
+/// A save that failed: the edit is on screen but not on the device.
+private struct UnsavedWriting: LocalizedError {
+  let reason: any Error
+
+  var errorDescription: String? {
+    "この編集は画面に出ていますが、端末には残っていません。\(reason.localizedDescription)"
   }
 }
 

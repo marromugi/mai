@@ -61,4 +61,14 @@ final class HostedPage {
     }
     return found
   }
+
+  var textViews: [UITextView] {
+    var found: [UITextView] = []
+    var pending: [UIView] = [window]
+    while let view = pending.popLast() {
+      if let textView = view as? UITextView { found.append(textView) }
+      pending.append(contentsOf: view.subviews)
+    }
+    return found
+  }
 }

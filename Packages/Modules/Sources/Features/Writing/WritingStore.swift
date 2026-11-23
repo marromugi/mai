@@ -9,7 +9,7 @@ protocol WritingStore {
 
 extension WritingStore {
   /// Every writing kept, with `samples` saved first when none are.
-  /// Stand-in until writings can be written (#29).
+  /// Stand-in until writings can be made.
   func all(seedingWhenEmpty samples: [Writing]) throws -> [Writing] {
     let writings = try all()
     guard writings.isEmpty else { return writings }
@@ -17,6 +17,19 @@ extension WritingStore {
       try save(sample)
     }
     return samples
+  }
+}
+
+extension WritingStore {
+  /// Makes `change` to the writing with `id` in `writings`, updated `now`, and saves it; saves
+  /// nothing when the change leaves it as it was. `writings` holds the edit even when the save
+  /// throws.
+  func edit(
+    _ id: Writing.ID, in writings: inout [Writing], at now: Date,
+    _ change: (inout Writing) -> Void
+  ) throws {
+    guard let edited = writings.edit(id, at: now, change) else { return }
+    try save(edited)
   }
 }
 

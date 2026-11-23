@@ -16,9 +16,24 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
   }
 }
 
+extension [Writing] {
+  /// Makes `change` to the writing with `id`, updated `now`, and returns it. Nil, and nothing
+  /// changed, when none has `id` or the change leaves its title and body as they were.
+  mutating func edit(_ id: Writing.ID, at now: Date, _ change: (inout Writing) -> Void) -> Writing?
+  {
+    guard let index = firstIndex(where: { $0.id == id }) else { return nil }
+    var edited = self[index]
+    change(&edited)
+    guard edited.title != self[index].title || edited.body != self[index].body else { return nil }
+    edited.updated = now
+    self[index] = edited
+    return edited
+  }
+}
+
 extension Writing {
   /// The sample rows as writings, each body `sampleBody` and `sampleMention` repeated to the row's
-  /// character count. Stand-in for the writings the developer will write (#29).
+  /// character count. Stand-in until writings can be made.
   static func samples(now: Date, calendar: Calendar) -> [Writing] {
     let paragraph = sampleBody + "\n" + sampleMention + "\n"
     return WritingRow.samples(now: now, calendar: calendar).map { row in
