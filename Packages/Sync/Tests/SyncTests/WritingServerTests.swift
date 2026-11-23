@@ -59,23 +59,37 @@ struct WritingServerTests {
       ].map(\.contents))
     #expect(Set(try devices.second.writings.all().map(\.contents)) == expected)
 
+    let kept = try #require(try devices.second.writings.all().first { $0.id == copy })
+    #expect(kept.updated == secondEdit.updated)
+
     #expect(try await devices.first.synchronizer.sync().received == [copy])
     #expect(try devices.first.writings.all().count == 2)
     #expect(Set(try devices.first.writings.all().map(\.contents)) == expected)
   }
 
-  @Test func theSameWritingOnBothDevicesIsKeptOnce() async throws {
+  /// The first device's writing is "同じ" at 1,000 s; the second's differs as given.
+  @Test(arguments: [
+    ("同じ", 1_000.0, false), ("同じ", 1_000.0004, false), ("違う", 1_000.0, true),
+    ("同じ", 1_000.001, true),
+  ])
+  func aWritingOnBothDevicesIsKeptOnceOnlyWhenItIsTheSame(
+    contents: String, secondsSince1970: Double, keptTwice: Bool
+  ) async throws {
     let server = server()
     let devices = try TwoDevices(server: { server }, ownKey: ownKey)
-    let same = PlainWriting(
-      id: UUID(), updated: .init(timeIntervalSince1970: 1_000), contents: Data("同じ".utf8))
-    try devices.first.writings.save(same)
-    try devices.second.writings.save(same)
+    let id = UUID()
+    try devices.first.writings.save(
+      PlainWriting(
+        id: id, updated: .init(timeIntervalSince1970: 1_000), contents: Data("同じ".utf8)))
+    try devices.second.writings.save(
+      PlainWriting(
+        id: id, updated: .init(timeIntervalSince1970: secondsSince1970),
+        contents: Data(contents.utf8)))
     _ = try await devices.first.synchronizer.sync()
 
     let report = try await devices.second.synchronizer.sync()
-    #expect(report.keptBoth.isEmpty)
-    #expect(try devices.second.writings.all() == [same])
+    #expect(report.keptBoth.isEmpty == !keptTwice)
+    #expect(try devices.second.writings.all().count == (keptTwice ? 2 : 1))
   }
 
   @Test func aSyncWithNothingChangedOnlyLists() async throws {
@@ -94,7 +108,7 @@ struct WritingServerTests {
   }
 
   @Test func twoSyncsAskedAtOnceRunOneAfterTheOther() async throws {
-    let server = server()
+    let server = server(transport: SlowListing(fake))
     let device = try TwoDevices(server: { server }, ownKey: ownKey).first
     try device.writings.save(
       PlainWriting(
@@ -149,25 +163,50 @@ struct WritingServerTests {
     #expect(try device.writings.all().map(\.id) == [given.id])
   }
 
-  @Test func aWritingThatFailsAloneLeavesTheOthersToSync() async throws {
-    let device = try TwoDevices(server: { server() }, ownKey: ownKey).first
-    let tooLarge = try PlainWriting(
-      id: #require(UUID(uuidString: "00000000-0000-0000-0000-000000000001")),
-      updated: .init(timeIntervalSince1970: 1_000), contents: Data(count: 1_900_000))
-    let small = try PlainWriting(
-      id: #require(UUID(uuidString: "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF")),
-      updated: .init(timeIntervalSince1970: 1_000), contents: Data("小".utf8))
+  @Test func writingsThatFailAloneLeaveTheOthersToSync() async throws {
+    let refused = UUID()
+    let device = try TwoDevices(
+      server: { server(transport: Refusing(fake, saveOf: refused, with: 400)) }, ownKey: ownKey
+    ).first
+    let tooLarge = PlainWriting(
+      id: UUID(), updated: .init(timeIntervalSince1970: 1_000), contents: Data(count: 1_900_000))
+    let small = PlainWriting(
+      id: UUID(), updated: .init(timeIntervalSince1970: 1_000), contents: Data("小".utf8))
+    let foreign = PlainWriting(
+      id: UUID(), updated: .init(timeIntervalSince1970: 1_000), contents: Data("他".utf8))
+    _ = try await server().save(OwnKey.generate().seal(foreign), over: nil)
     try device.writings.save(tooLarge)
     try device.writings.save(small)
+    try device.writings.save(
+      PlainWriting(id: refused, updated: .init(timeIntervalSince1970: 1_000), contents: Data()))
 
     await #expect {
       try await device.synchronizer.sync()
     } throws: { error in
-      guard let error = error as? SyncFailures else { return false }
-      return error.failures[tooLarge.id] is SealingError && error.failures.count == 1
+      guard let error = error as? SyncFailures,
+        case .refused(status: 400, _) = error.failures[refused] as? ServerError
+      else { return false }
+      return error.failures[tooLarge.id] is SealingError
+        && error.failures[foreign.id] is OpeningError && error.failures.count == 3
         && error.report.sent == [small.id]
     }
-    #expect(try await server().list().map(\.id) == [small.id])
+    #expect(Set(try await server().list().map(\.id)) == [small.id, foreign.id])
+  }
+
+  @Test func aWritingRefusedForTheTokenStopsTheSync() async throws {
+    let refused = UUID()
+    let device = try TwoDevices(
+      server: { server(transport: Refusing(fake, saveOf: refused, with: 401)) }, ownKey: ownKey
+    ).first
+    try device.writings.save(
+      PlainWriting(id: refused, updated: .init(timeIntervalSince1970: 1_000), contents: Data()))
+
+    await #expect {
+      try await device.synchronizer.sync()
+    } throws: { error in
+      guard case .refused(status: 401, _) = error as? ServerError else { return false }
+      return true
+    }
   }
 
   @Test func aKeptBothSyncCutOffBeforeTheCopyIsSentMakesNoSecondCopy() async throws {
@@ -284,5 +323,43 @@ private struct ReadInstead: HTTPTransport {
       request.url = url.deletingLastPathComponent().appending(path: given.uuidString.lowercased())
     }
     return try await next.send(request)
+  }
+}
+
+/// Answers the listing of writings late, so two syncs at once would both list before either saves.
+private struct SlowListing: HTTPTransport {
+  let next: any HTTPTransport
+
+  init(_ next: any HTTPTransport) {
+    self.next = next
+  }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    if request.url?.lastPathComponent == "writings" {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    return try await next.send(request)
+  }
+}
+
+/// Refuses every save of one writing with `status`.
+private struct Refusing: HTTPTransport {
+  let next: any HTTPTransport
+  let id: UUID
+  let status: Int
+
+  init(_ next: any HTTPTransport, saveOf id: UUID, with status: Int) {
+    self.next = next
+    self.id = id
+    self.status = status
+  }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    guard request.httpMethod == "PUT", let url = request.url,
+      url.lastPathComponent == id.uuidString.lowercased(),
+      let response = HTTPURLResponse(
+        url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])
+    else { return try await next.send(request) }
+    return (Data(#"{"error":"refused"}"#.utf8), response)
   }
 }

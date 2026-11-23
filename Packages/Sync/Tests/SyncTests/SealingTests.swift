@@ -122,6 +122,22 @@ struct SealingTests {
     }
   }
 
+  @Test func theEarliestTimeTheServerHoldsIsSealed() throws {
+    let updated = Date(timeIntervalSince1970: 0.001)
+    #expect(throws: Never.self) {
+      try ownKey.seal(PlainWriting(id: UUID(), updated: updated, contents: Data()))
+    }
+  }
+
+  @Test func anEnvelopeIsReadFromBytesCutOutOfLargerOnes() async throws {
+    let writing = PlainWriting(id: UUID(), updated: .now, contents: Data("切り出し".utf8))
+    let sent = try await bytes(of: ownKey.seal(writing))
+    let cut = (Data([0xff]) + sent).dropFirst()
+    let envelope = try Envelope(bytes: cut)
+    #expect(envelope.id == writing.id)
+    #expect(try ownKey.open(envelope).contents == writing.contents)
+  }
+
   @Test func theLatestTimeTheServerHoldsIsSealed() throws {
     let updated = Date(timeIntervalSince1970: 9_007_199_254_740.991)
     #expect(throws: Never.self) {

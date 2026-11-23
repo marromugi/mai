@@ -45,9 +45,7 @@ export class Writings extends DurableObject<Env> {
 
   list(): Listed[] {
     return this.ctx.storage.sql
-      .exec<Listed>(
-        "SELECT id, revision, updated, length(envelope) AS size FROM writings ORDER BY id",
-      )
+      .exec<Listed>("SELECT id, revision, updated, length(envelope) AS size FROM writings")
       .toArray();
   }
 

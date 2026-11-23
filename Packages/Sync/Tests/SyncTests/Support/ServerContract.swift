@@ -80,6 +80,12 @@ enum ServerContract: CaseIterable, Sendable {
         return !reason.isEmpty
       }
       #expect(try await server.read(first.id) == nil)
+      await #expect {
+        try await stranger.list()
+      } throws: { error in
+        guard case ServerError.refused(status: 401, _) = error else { return false }
+        return true
+      }
     }
   }
 }

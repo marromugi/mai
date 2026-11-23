@@ -1,6 +1,7 @@
-import { reset } from "cloudflare:test";
+import { env, reset } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { afterEach, describe, expect, it } from "vitest";
+import worker from "../src/index";
 
 afterEach(async () => {
   await reset();
@@ -163,6 +164,8 @@ describe("a write not of the one shape", () => {
     ["has a base revision in capitals", 400, { body: envelope(), base: first.toUpperCase() }],
     ["has a base revision one digit short", 400, { body: envelope(), base: first.slice(1) }],
     ["has a base revision that isn't hex", 400, { body: envelope(), base: "g".repeat(64) }],
+    ["has a base revision with a digit before it", 400, { body: envelope(), base: `0${first}` }],
+    ["has a base revision with a digit after it", 400, { body: envelope(), base: `${first}0` }],
   ])("is refused when it %s", async (_, status, options) => {
     const response = await request(`/writings/${id}`, { method: "PUT", ...options });
     expect(response.status).toBe(status);
@@ -185,10 +188,13 @@ describe("a write not of the one shape", () => {
     expect(await listed()).toEqual({ writings: [] });
   });
 
-  it.each(["/", "/writings/a/b", "/copies"])("is refused at %s", async (path) => {
-    const response = await request(path);
-    expect(response.status).toBe(404);
-  });
+  it.each(["/", "/writings/a/b", `/writings/${id}/copies`, "/copies"])(
+    "is refused at %s",
+    async (path) => {
+      const response = await request(path);
+      expect(response.status).toBe(404);
+    },
+  );
 
   it("is accepted at exactly 1,900,000 bytes", async () => {
     const response = await request(`/writings/${id}`, {
@@ -198,11 +204,52 @@ describe("a write not of the one shape", () => {
     expect(response.status).toBe(200);
   });
 
+  it.each([`x${id}`, `${id}0`, id.slice(1)])("is refused at /writings/%s", async (path) => {
+    const response = await request(`/writings/${path}`, { method: "PUT", body: envelope() });
+    expect(response.status).toBe(404);
+    expect(await listed()).toEqual({ writings: [] });
+  });
+
+  it("is accepted with the latest updated time the server holds", async () => {
+    const response = await request(`/writings/${id}`, {
+      method: "PUT",
+      body: envelope({ updated: 2n ** 53n - 1n }),
+    });
+    expect(response.status).toBe(200);
+    expect(await listed()).toMatchObject({ writings: [{ updated: 9_007_199_254_740_991 }] });
+  });
+
   it("is accepted with no contents", async () => {
     const response = await request(`/writings/${id}`, {
       method: "PUT",
       body: envelope({ contentsLength: 0 }),
     });
     expect(response.status).toBe(200);
+  });
+});
+
+async function listedWith(secret: string): Promise<Response> {
+  return worker.fetch(
+    new Request("https://mai.test/writings", { headers: { Authorization: `Bearer ${token}` } }),
+    { ...env, ACCESS_TOKEN_SHA256: secret },
+  );
+}
+
+describe("the server's own token", () => {
+  // SHA-256 of "test-token", as the tests' binding holds it.
+  const digest = "4c5dc9b7708905f77f5e5d16316b5dfb425e68cb326dcd55a860e90a7707031e";
+
+  it.each([
+    ["missing", ""],
+    ["one digit long", `${digest}0`],
+    ["one digit short", digest.slice(1)],
+  ])("answers 500 to everything when the secret is %s", async (_, secret) => {
+    const response = await listedWith(secret);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toHaveProperty("error");
+  });
+
+  it("takes the secret in capitals too", async () => {
+    expect((await listedWith(digest.toUpperCase())).status).toBe(200);
   });
 });

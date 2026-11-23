@@ -36,6 +36,9 @@ actor FakeWritingServer: HTTPTransport {
       return answer(
         request, 200, body: writing.bytes, headers: ["Mai-Revision": writing.revision])
     case ("PUT", 2):
+      guard request.value(forHTTPHeaderField: "Content-Type") == "application/octet-stream" else {
+        return answer(request, 415, json: ["error": "not application/octet-stream"])
+      }
       guard let id = path.last, let body = request.httpBody,
         let base = request.value(forHTTPHeaderField: "Mai-Base-Revision"),
         let envelope = try? Envelope(bytes: body), envelope.id.uuidString.lowercased() == id

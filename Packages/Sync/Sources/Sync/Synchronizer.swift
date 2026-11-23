@@ -67,7 +67,7 @@ public actor Synchronizer {
     var report = SyncReport()
     var failures: [UUID: any Error] = [:]
 
-    for id in Set(mine.keys).union(theirs.keys).sorted(by: { $0.uuidString < $1.uuidString }) {
+    for id in Set(mine.keys).union(theirs.keys) {
       do {
         try await sync(
           id, mine: mine[id], theirs: theirs[id], synced: &synced, reporting: &report)
