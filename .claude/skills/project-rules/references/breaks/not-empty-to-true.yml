@@ -1,0 +1,5 @@
+id: not-empty-to-true
+language: Swift
+rule:
+  pattern: "!$C.isEmpty"
+fix: "true"

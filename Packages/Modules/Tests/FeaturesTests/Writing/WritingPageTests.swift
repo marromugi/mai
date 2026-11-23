@@ -80,7 +80,8 @@ struct WritingPageTests {
 
 private func pageHeight(title: String, size: DynamicTypeSize) -> CGFloat {
   let page = WritingPage(
-    writing: Writing(title: title, body: "本文"), width: 402, back: {}, titleCutOff: { _ in }
+    writing: Writing(title: title, body: "本文"), photos: [], width: 402, back: {},
+    titleCutOff: { _ in }
   )
   .dynamicTypeSize(size)
   return UIHostingController(rootView: page)
@@ -135,7 +136,8 @@ private func assertPage(
 ) {
   assertSnapshot(
     of: WritingScreen(
-      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), setting: .constant(body),
+      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: [],
+      setting: .constant(body),
       typesetting: .constant(typesetting), takingPhoto: .constant(false), camera: camera,
       photoTaken: { _ in }
     )
