@@ -14,6 +14,10 @@ struct TypesettingBar: View {
       Text("組版の調整")
         .font(.subheadline.weight(.semibold))
         .tracking(0.6)
+        // One line at every size, shrunk where it would otherwise be cut: the bar keeps the
+        // bottom row's height.
+        .lineLimit(1)
+        .minimumScaleFactor(0.5)
         .accessibilityAddTraits(.isHeader)
       Button {
         showingGestures = true
@@ -37,26 +41,29 @@ struct TypesettingBar: View {
   }
 }
 
-/// The sheet that says how each typesetting gesture changes the body, with its icon.
+/// The sheet that says how each typesetting gesture changes the body, with its icon. It scrolls,
+/// and opens to the full height, where large text makes it longer than half the screen.
 struct TypesettingGestures: View {
   var body: some View {
-    VStack(alignment: .leading, spacing: 24) {
-      Text("組版のジェスチャー")
-        .font(.headline)
-        .accessibilityAddTraits(.isHeader)
-      GestureRow(
-        icon: "gesture-drag-base", name: "上下にドラッグ",
-        effect: "文字の大きさを変えます。上で大きく、下で小さくなります。")
-      GestureRow(
-        icon: "gesture-pinch-line-height", name: "縦にピンチ",
-        effect: "行間を変えます。広げると開き、つまむと詰まります。")
-      GestureRow(
-        icon: "gesture-pinch-tracking", name: "横にピンチ",
-        effect: "字間を変えます。広げると開き、つまむと詰まります。")
+    ScrollView {
+      VStack(alignment: .leading, spacing: 24) {
+        Text("組版のジェスチャー")
+          .font(.headline)
+          .accessibilityAddTraits(.isHeader)
+        GestureRow(
+          icon: "gesture-drag-base", name: "上下にドラッグ",
+          effect: "文字の大きさを変えます。上で大きく、下で小さくなります。")
+        GestureRow(
+          icon: "gesture-pinch-line-height", name: "縦にピンチ",
+          effect: "行間を変えます。広げると開き、つまむと詰まります。")
+        GestureRow(
+          icon: "gesture-pinch-tracking", name: "横にピンチ",
+          effect: "字間を変えます。広げると開き、つまむと詰まります。")
+      }
+      .padding(24)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .padding(24)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .presentationDetents([.medium])
+    .presentationDetents([.medium, .large])
     .presentationDragIndicator(.visible)
   }
 }
