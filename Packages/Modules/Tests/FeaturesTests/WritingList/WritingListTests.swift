@@ -154,6 +154,12 @@ struct WritingListTests {
     assertRoot(remembering: ["writingListOrder": "characterCount"])
   }
 
+  /// The page opened on a stored writing shows its stored title and body.
+  @Test func rootOpensAStoredWriting() {
+    let writing = Writing(title: "保存した文書", body: "保存した本文。\n二段落目。", updated: .now)
+    assertRoot(remembering: [:], writings: [writing], opening: [writing.id])
+  }
+
   /// The rows are the stored writings, not the samples.
   @Test func rootShowsTheStoredWritings() {
     assertRoot(
@@ -228,6 +234,7 @@ private func width(of view: some View) -> CGFloat {
 private func assertRoot(
   remembering remembered: [String: String],
   writings: [Writing] = [],
+  opening path: [Writing.ID] = [],
   testName: String = #function
 ) {
   let suite = "WritingListTests.\(testName)"
@@ -250,7 +257,7 @@ private func assertRoot(
     }
   }
   assertSnapshot(
-    of: RootView(store: writingStore).defaultAppStorage(store)
+    of: RootView(store: writingStore, path: path).defaultAppStorage(store)
       .frame(width: 402, height: 874).background(Color(.systemBackground)),
     as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
     testName: testName)

@@ -14,8 +14,10 @@ public struct RootView: View {
     self.init(store: FileWritingStore.onDevice)
   }
 
-  init(store: any WritingStore) {
+  /// Opened on the writings in `path`, the last one on top.
+  init(store: any WritingStore, path: [Writing.ID] = []) {
     self.store = store
+    _path = State(initialValue: path)
   }
 
   public var body: some View {
