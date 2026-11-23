@@ -80,15 +80,13 @@ public struct RootView: View {
 
   /// Makes `change` to the writing with `id` and saves it.
   private func edit(_ id: Writing.ID, _ change: (inout Writing) -> Void) {
-    guard case .success(var all) = writings,
-      let edited = all.edit(id, at: .now, change)
-    else { return }
-    writings = .success(all)
+    guard case .success(var all) = writings else { return }
     do {
-      try store.save(edited)
+      try store.edit(id, in: &all, at: .now, change)
     } catch {
       unsaved = UnsavedWriting(reason: error)
     }
+    writings = .success(all)
   }
 }
 

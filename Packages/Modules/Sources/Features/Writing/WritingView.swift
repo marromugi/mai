@@ -61,7 +61,6 @@ struct WritingScreen: View {
       }
       .environment(\.openURL, .opening(mentions, with: open))
       .task(id: editing ? nil : MentionSource(body: writing.body, others: others)) {
-        guard !editing else { return }
         mentions = writing.body.titleMentions(of: others)
       }
       .scrollDisabled(typesetting)

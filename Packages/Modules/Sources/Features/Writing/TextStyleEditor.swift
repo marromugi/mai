@@ -38,23 +38,18 @@ private struct StyledTextView: UIViewRepresentable {
 
   func makeUIView(context: Context) -> PlaceholderTextView {
     let view = PlaceholderTextView(usingTextLayoutManager: true)
+    // The page scrolls; the editor is as tall as its text.
     view.isScrollEnabled = false
-    view.backgroundColor = .clear
     view.textContainerInset = .zero
     view.textContainer.lineFragmentPadding = 0
-    view.adjustsFontForContentSizeCategory = false
     view.delegate = context.coordinator
-    view.setContentHuggingPriority(.required, for: .vertical)
     return view
   }
 
   func updateUIView(_ view: PlaceholderTextView, context: Context) {
     context.coordinator.changed = changed
-    context.coordinator.oneLine = oneLine
     // Never while composing: replacing the text ends the input method's composition.
-    guard view.markedTextRange == nil,
-      context.coordinator.scale != scale || view.text != text
-        || view.placeholder.text != placeholder
+    guard view.markedTextRange == nil, context.coordinator.scale != scale || view.text != text
     else { return }
     context.coordinator.scale = scale
     let attributes = scale.attributes(role)
@@ -70,7 +65,6 @@ private struct StyledTextView: UIViewRepresentable {
     view.selectedRange = NSRange(
       location: min(selection.location, length),
       length: min(selection.length, length - min(selection.location, length)))
-    view.invalidateIntrinsicContentSize()
   }
 
   /// Text still being composed when the editor goes away is kept, as if composing had ended.
@@ -97,7 +91,7 @@ private struct StyledTextView: UIViewRepresentable {
 
   final class Coordinator: NSObject, UITextViewDelegate {
     var changed: (String) -> Void
-    var oneLine: Bool
+    let oneLine: Bool
     /// The scale the text was last set at, so a change of setting restyles it.
     var scale: TypeScale?
 
@@ -111,13 +105,10 @@ private struct StyledTextView: UIViewRepresentable {
     ) -> Bool {
       guard oneLine, text.contains(where: \.isNewline) else { return true }
       let kept = text.filter { !$0.isNewline }
-      if !kept.isEmpty,
-        let start = view.position(from: view.beginningOfDocument, offset: range.location),
-        let end = view.position(from: start, offset: range.length),
-        let replaced = view.textRange(from: start, to: end)
-      {
-        // Through the text input system, so undo takes it back as one change.
-        view.replace(replaced, withText: kept)
+      // Nothing in place of a selection Return was pressed over, which would delete it. Through the
+      // text input system, so undo takes it back as one change.
+      if !kept.isEmpty {
+        view.insertText(kept)
       }
       return false
     }
@@ -135,8 +126,6 @@ private struct StyledTextView: UIViewRepresentable {
 final class PlaceholderTextView: UITextView {
   private(set) lazy var placeholder: UILabel = {
     let label = UILabel()
-    label.numberOfLines = 0
-    label.isAccessibilityElement = false
     addSubview(label)
     return label
   }()

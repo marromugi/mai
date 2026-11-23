@@ -46,6 +46,54 @@ struct WritingEditingTests {
     #expect(edits.writing.title == "夜の机")
   }
 
+  /// Return in the body starts a new paragraph.
+  @Test func returnInTheBodyStartsANewLine() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = NSRange(location: 3, length: 0)
+    type("\n", into: body)
+    #expect(edits.writing.body == "朝の机\n\n二行目")
+  }
+
+  /// Return over a selection in the title leaves the selected text in place.
+  @Test func returnOverASelectionInTheTitleKeepsIt() throws {
+    let edits = Edits(writing: Writing(title: "朝昼", body: "本文"))
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let title = try focusedTitle(in: page, holding: "朝昼")
+    title.selectedRange = NSRange(location: 0, length: 2)
+    type("\n", into: title)
+    #expect(title.text == "朝昼")
+    #expect(edits.writing.title == "朝昼")
+  }
+
+  /// When the body changes from elsewhere, the editor shows the new text, with the caret kept
+  /// inside it.
+  @Test func aBodyChangedFromElsewhereKeepsTheCaretInside() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.selectedRange = NSRange(location: (body.text as NSString).length, length: 0)
+    edits.writing.body = "朝\n夜"
+    page.show(screen(editing: true, edits: edits))
+    #expect(body.text == "朝\n夜")
+    #expect(body.selectedRange == NSRange(location: 3, length: 0))
+  }
+
+  /// A new body setting while editing sets the body again in it.
+  @Test func aNewBodySettingRestylesTheBody() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    let setting = try #require(BodySetting(base: 20, lineHeight: 40, tracking: 50))
+    page.show(screen(editing: true, edits: edits, setting: setting))
+    let font = try #require(
+      body.attributedText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+    #expect(font.pointSize == TypeScale(.large, body: setting).size(.body))
+  }
+
   /// Undo after a refused line break takes back what was typed before it, and only that.
   @Test(arguments: [0, 2])
   func undoAfterARefusedLineBreakTakesBackTheTyping(_ caret: Int) throws {
@@ -110,10 +158,15 @@ struct WritingEditingTests {
   /// The title and body are drawn where they are when read, so entering the mode moves no text:
   /// the same lines, each within a pixel. SwiftUI and TextKit may round a line whose position
   /// isn't a whole number of pixels to neighbouring pixels; none is further off, and none drifts.
-  @Test(arguments: [DynamicTypeSize.large, .accessibility5])
-  func editingMovesNoLinePastAPixel(_ size: DynamicTypeSize) throws {
-    let read = try inkBands(drawn(editing: false, size))
-    let edited = try inkBands(drawn(editing: true, size))
+  @Test(arguments: [
+    (DynamicTypeSize.large, BodySetting?.some(.standard)), (.accessibility5, .standard),
+    // Lines closer than the font's own, and the widest tracking.
+    (.large, BodySetting(base: 16, lineHeight: 16, tracking: 200)),
+  ])
+  func editingMovesNoLinePastAPixel(_ size: DynamicTypeSize, _ setting: BodySetting?) throws {
+    let setting = try #require(setting)
+    let read = try inkBands(drawn(editing: false, size, setting))
+    let edited = try inkBands(drawn(editing: true, size, setting))
     try #require(read.count == edited.count)
     #expect(read.count > 3)
     for (line, (readBand, editedBand)) in zip(read, edited).enumerated() {
@@ -180,7 +233,9 @@ private let sampled = Writing(title: "間合いの調整", body: Writing.sampleB
 
 /// The sample page at the top of a 402 × 874 window, read or being edited.
 @MainActor
-private func drawn(editing: Bool, _ size: DynamicTypeSize) -> UIImage {
+private func drawn(editing: Bool, _ size: DynamicTypeSize, _ setting: BodySetting = .standard)
+  -> UIImage
+{
   HostedPage(
     ScrollView {
       WritingPage(
@@ -189,6 +244,7 @@ private func drawn(editing: Bool, _ size: DynamicTypeSize) -> UIImage {
     }
     .background(Color(.systemBackground))
     .dynamicTypeSize(size)
+    .environment(\.bodySetting, setting)
     .environment(\.colorScheme, .light)
   ).image()
 }
@@ -247,11 +303,11 @@ private final class Edits {
   }
 }
 
-private func screen(editing: Bool, edits: Edits) -> some View {
+private func screen(editing: Bool, edits: Edits, setting: BodySetting = .standard) -> some View {
   WritingScreen(
     writing: edits.writing, others: [], open: { _ in }, edit: { edits.writing.apply($0) },
     photos: [],
-    setting: .constant(.standard),
+    setting: .constant(setting),
     editing: .constant(editing),
     typesetting: .constant(false),
     takingPhoto: .constant(false),

@@ -20,6 +20,19 @@ extension WritingStore {
   }
 }
 
+extension WritingStore {
+  /// Makes `change` to the writing with `id` in `writings`, updated `now`, and saves it; saves
+  /// nothing when the change leaves it as it was. `writings` holds the edit even when the save
+  /// throws.
+  func edit(
+    _ id: Writing.ID, in writings: inout [Writing], at now: Date,
+    _ change: (inout Writing) -> Void
+  ) throws {
+    guard let edited = writings.edit(id, at: now, change) else { return }
+    try save(edited)
+  }
+}
+
 /// Each writing as a JSON file of its own in `directory`, named by its ID.
 struct FileWritingStore: WritingStore {
   let directory: URL
