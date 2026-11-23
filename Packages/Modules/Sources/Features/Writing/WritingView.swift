@@ -2,9 +2,9 @@ import SwiftUI
 internal import Typesetting
 
 /// A writing's page: its title, body, and `photos` on the type area, under a back mark, over the
-/// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap or 「閉じる」 leaves it; its camera
-/// takes a photo with `camera` and hands it to `photoTaken`. Where one of `others`' titles appears
-/// in the body, it links to that writing, and a tap on it calls `open` with it.
+/// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap or 「閉じる」 leaves
+/// it; its camera takes a photo with `camera` and hands it to `photoTaken`. Where one of `others`'
+/// titles appears in the body, it links to that writing, and a tap on it calls `open` with it.
 struct WritingView: View {
   let writing: Writing
   let others: [Writing]
@@ -93,22 +93,24 @@ struct WritingScreen: View {
         }
       }
       .safeAreaInset(edge: .bottom, spacing: 0) {
-        // Both rows laid out, one hidden: the inset keeps one height in and out of the mode, so
-        // the scroll offset isn't clamped.
-        ZStack {
-          let row = BottomRow(
-            width: proxy.size.width, cameraAvailable: camera.isAvailable,
-            takePhoto: { takingPhoto = true },
-            adjustTypesetting: { withAnimation { typesetting = true } })
-          let bar = TypesettingBar(
-            width: proxy.size.width, showGestures: { showingGestures = true },
-            close: { withAnimation { typesetting = false } })
+        // Hidden, not removed: the row sets the inset's height in and out of the mode, so the
+        // scroll offset isn't clamped. The bar lies over it.
+        let row = BottomRow(
+          width: proxy.size.width, cameraAvailable: camera.isAvailable,
+          takePhoto: { takingPhoto = true },
+          adjustTypesetting: { withAnimation { typesetting = true } })
+        Group {
           if typesetting {
             row.hidden()
-            bar
           } else {
             row
-            bar.hidden()
+          }
+        }
+        .overlay {
+          if typesetting {
+            TypesettingBar(
+              width: proxy.size.width, showGestures: { showingGestures = true },
+              close: { withAnimation { typesetting = false } })
           }
         }
       }
