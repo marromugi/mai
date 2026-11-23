@@ -3,7 +3,7 @@ internal import Typesetting
 
 extension EnvironmentValues {
   /// How the text in this subtree is set: its base sizes every role, and its line height and
-  /// tracking set the body. Only a writing's own pages set one.
+  /// tracking set the body. Set by a writing's own pages and by the settings' sample line.
   @Entry var bodySetting: BodySetting = .standard
 }
 
