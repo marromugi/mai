@@ -17,7 +17,10 @@ AcceptExcluded NoCopyOfExcluded
 KeepCopyOnExclude NoCopyOfExcluded
 AcceptExpired NoCopyPastExpiry
 KeepExpiredCopy NoCopyPastExpiry
+KeepCopyOnTurnOff NoCopyOutsideMode
 SkipSignatureCheck NeverWrapForUnsignedKey
+AcceptRevoked NoCopyForRevokedKey
+KeepOldVersionCopy CopyIsOfCurrentVersion
 "
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -47,21 +50,22 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# tlc <config> <output file>; returns TLC's exit status
+# tlc <config> <output file> <workers>; returns TLC's exit status.
+# One worker keeps the search breadth-first, so a trace TLC prints is a shortest one.
 tlc() {
-  (cd "$spec_dir" && "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC \
-    -workers auto -metadir "$work/states" -config "$1" ReadMode.tla) >"$2" 2>&1
+  (cd "$spec_dir" && "$java" -XX:+UseParallelGC -Djava.io.tmpdir="$work" -cp "$jar" tlc2.TLC \
+    -workers "$3" -metadir "$work/states" -config "$1" ReadMode.tla) >"$2" 2>&1
 }
 
 if [[ $# -eq 1 ]]; then
-  tlc "Broken/$1.cfg" "$work/out" || true
+  tlc "Broken/$1.cfg" "$work/out" 1 || true
   cat "$work/out"
   exit 0
 fi
 
 failed=0
 
-if tlc ReadMode.cfg "$work/ReadMode.out" && grep -q "No error has been found" "$work/ReadMode.out"; then
+if tlc ReadMode.cfg "$work/ReadMode.out" auto && grep -q "No error has been found" "$work/ReadMode.out"; then
   echo "pass  ReadMode: $(grep "states left on queue" "$work/ReadMode.out" | tail -1)"
 else
   echo "FAIL  ReadMode: TLC found an error" >&2
@@ -72,7 +76,7 @@ fi
 while read -r variant invariant; do
   [[ -z "$variant" ]] && continue
   out="$work/$variant.out"
-  tlc "Broken/$variant.cfg" "$out" || true
+  tlc "Broken/$variant.cfg" "$out" 1 || true
   if grep -q "Invariant $invariant is violated" "$out"; then
     echo "pass  $variant breaks $invariant"
   else
