@@ -105,7 +105,7 @@ export class AppleTokens {
   }
 
   async #signingKey(): Promise<CryptoKey> {
-    const base64 = this.client.key.replace(/-----[A-Z ]+-----/g, "").replace(/\s/g, "");
+    const base64 = this.client.key.replace(/-----[A-Z ]+-----/g, "");
     const der = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
     return crypto.subtle.importKey("pkcs8", der, { name: "ECDSA", namedCurve: "P-256" }, false, [
       "sign",
