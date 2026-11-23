@@ -556,17 +556,7 @@ export class Store {
       ),
     );
     const row = rows[0];
-    if (row === undefined) {
-      return undefined;
-    }
-    const sealed = row["apple_refresh_token"];
-    if (!(sealed instanceof ArrayBuffer)) {
-      throw new Error("accounts.apple_refresh_token is a BLOB, but came back as something else");
-    }
-    return {
-      account: stored(parseAccountId, row["id"]),
-      sealedRefreshToken: new Uint8Array(sealed),
-    };
+    return row === undefined ? undefined : toDelete(row);
   }
 
   /** Which of `uploads` have a row in `photos`, in any state. */
@@ -586,17 +576,12 @@ export class Store {
    * the caller's session is live. False when it wasn't, and nothing was deleted.
    */
   async deleteAccount(caller: Caller, account: AccountId, now: number): Promise<boolean> {
-    const live = `:account = (SELECT s.account_id FROM sessions s WHERE ${liveSession})`;
-    const results = await this.#client.batch(
-      [
-        `DELETE FROM accounts WHERE id = :account AND ${live}`,
-        ...accountTables.map(
-          (table) => `DELETE FROM ${table} WHERE account_id = :account AND ${live}`,
-        ),
-      ].map((sql) => bind(sql, { ...callerValues(caller, now), account })),
-      "write",
+    return this.#deleteRows(
+      account,
+      `:account = (SELECT s.account_id FROM sessions s WHERE ${liveSession})`,
+      callerValues(caller, now),
+      ["accounts", ...accountTables],
     );
-    return results[0]?.rowsAffected === 1;
   }
 
   /**
@@ -690,6 +675,30 @@ export class Store {
       ],
       "write",
     );
+  }
+
+  /**
+   * Deletes the rows of `account` from `tables` in that order, in one batch, each only while
+   * `still` holds with `values`; `still` reads a table that comes last. Answers whether its
+   * `accounts` row went.
+   */
+  async #deleteRows(
+    account: AccountId,
+    still: string,
+    values: Record<string, InValue>,
+    tables: readonly ("accounts" | (typeof accountTables)[number])[],
+  ): Promise<boolean> {
+    const results = await this.#client.batch(
+      tables.map((table) =>
+        bind(
+          `DELETE FROM ${table} WHERE ${table === "accounts" ? "id" : "account_id"} = :account
+             AND ${still}`,
+          { ...values, account },
+        ),
+      ),
+      "write",
+    );
+    return results[tables.indexOf("accounts")]?.rowsAffected === 1;
   }
 
   /**
@@ -861,6 +870,15 @@ function uploadOf(row: Row): Upload {
     upload: stored((upload) => upload, row["upload"]),
     size: Number(row["size"]),
   };
+}
+
+/** An account and its sealed refresh token, as a row of `accounts` holds them. */
+function toDelete(row: Row): ToDelete {
+  const sealed = row["apple_refresh_token"];
+  if (!(sealed instanceof ArrayBuffer)) {
+    throw new Error("accounts.apple_refresh_token is a BLOB, but came back as something else");
+  }
+  return { account: stored(parseAccountId, row["id"]), sealedRefreshToken: new Uint8Array(sealed) };
 }
 
 /** A value read back from a column only this file writes, which holds only valid values. */

@@ -3,7 +3,7 @@ import { problem } from "./http";
 import { uploadOfKey, type Photos } from "./photos";
 import type { Caller } from "./sessions";
 import type { SignIn } from "./sign-in";
-import type { Answer, Store } from "./store";
+import type { Answer, Store, ToDelete } from "./store";
 
 /**
  * `DELETE /account`: Apple's refresh token is revoked, then R2 is emptied of the account, then its
@@ -22,21 +22,46 @@ export async function deleteAccount(
   if (found === undefined) {
     return { ok: false, refusal: "session" };
   }
-  const { account, sealedRefreshToken } = found;
-  const refreshToken = await signIn.refreshTokens.open(sealedRefreshToken, account);
-  const revoked = await signIn.tokens.revoke(refreshToken, now);
-  if (!revoked.ok) {
+  const deleted = await deleteFound(found, signIn, photos, now, () =>
+    signIn.store.deleteAccount(caller, found.account, now),
+  );
+  if (deleted === "unrevoked") {
     return {
       ok: true,
       value: problem(502, "Apple's revoke endpoint didn't answer; nothing was deleted, try again"),
     };
   }
+  return deleted === "kept"
+    ? { ok: false, refusal: "session" }
+    : { ok: true, value: new Response(null, { status: 204 }) };
+}
+
+/** `unrevoked`: Apple didn't answer, and nothing was deleted. `kept`: no row was deleted. */
+type Deleted = "deleted" | "unrevoked" | "kept";
+
+/**
+ * Revokes the account's Apple token, empties R2 of it, then deletes its rows with `deleteRows`,
+ * which answers whether they went; once they did, R2 is swept again, kept alive past the return.
+ */
+async function deleteFound(
+  found: ToDelete,
+  signIn: SignIn,
+  photos: Photos,
+  now: number,
+  deleteRows: () => Promise<boolean>,
+): Promise<Deleted> {
+  const { account, sealedRefreshToken } = found;
+  const refreshToken = await signIn.refreshTokens.open(sealedRefreshToken, account);
+  const revoked = await signIn.tokens.revoke(refreshToken, now);
+  if (!revoked.ok) {
+    return "unrevoked";
+  }
   await deletePhotosOf(account, photos.bucket);
-  if (!(await signIn.store.deleteAccount(caller, account, now))) {
-    return { ok: false, refusal: "session" };
+  if (!(await deleteRows())) {
+    return "kept";
   }
   photos.keepAlive(deleteRowlessPhotosOf(account, photos.bucket, signIn.store));
-  return { ok: true, value: new Response(null, { status: 204 }) };
+  return "deleted";
 }
 
 /** Deletes every object R2 holds under `<account>/`. */
