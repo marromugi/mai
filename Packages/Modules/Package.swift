@@ -27,6 +27,7 @@ let package = Package(
         .product(name: "Typesetting", package: "Typesetting"),
         .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
       ],
+      exclude: ["Shared/Fonts/Fixtures"],
       swiftSettings: mainActor),
   ]
 )

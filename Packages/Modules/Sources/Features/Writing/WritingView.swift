@@ -272,7 +272,7 @@ struct WritingHeader: View {
   let width: CGFloat
   let close: () -> Void
   @EnvironmentTypeScale private var scale
-  @Environment(\.fontStack) private var stack
+  @Environment(\.fontFamilies) private var families
 
   var body: some View {
     VStack(spacing: 0) {
@@ -323,7 +323,7 @@ struct WritingHeader: View {
   private func titleText(at step: TextRole) -> some View {
     let size = min(scale.size(step), TypeScale.standard.size(step))
     return Text(verbatim: title)
-      .font(Font(scale.font(.title, in: stack).withSize(size)))
+      .font(Font(scale.font(.title, in: families).withSize(size)))
       .lineLimit(1)
       .accessibilityAddTraits(.isHeader)
   }

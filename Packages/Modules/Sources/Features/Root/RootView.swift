@@ -2,6 +2,7 @@ import SwiftUI
 
 public struct RootView: View {
   private let store: any WritingStore
+  private let fonts: FontLibrary
   /// Nil until the store has been read.
   @State private var writings: Result<[Writing], any Error>?
   @State private var path: [Writing.ID] = []
@@ -13,15 +14,17 @@ public struct RootView: View {
   @State private var unsaved: UnsavedWriting?
   @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting.standard
   @AppStorage(ColorTheme.key) private var theme = ColorTheme.system
+  @AppStorage(StoredFontStack.key) private var fontStack = StoredFontStack.standard
 
-  /// The writings kept on the device.
-  public init() {
-    self.init(store: FileWritingStore.onDevice)
+  /// The writings kept on the device, set in the families of `fonts`.
+  public init(fonts: FontLibrary) {
+    self.init(store: FileWritingStore.onDevice, fonts: fonts)
   }
 
   /// Opened on the writings in `path`, the last one on top.
-  init(store: any WritingStore, path: [Writing.ID] = []) {
+  init(store: any WritingStore, fonts: FontLibrary = FontLibrary(server: nil), path: [Writing.ID] = []) {
     self.store = store
+    self.fonts = fonts
     _path = State(initialValue: path)
   }
 
@@ -67,8 +70,9 @@ public struct RootView: View {
         try store.all(seedingWhenEmpty: Writing.samples(now: opened, calendar: .current))
       }
     }
+    .environment(\.fontFamilies, fontStack.stack.families(from: fonts.available))
     .sheet(isPresented: $showingSettings) {
-      SettingsView()
+      SettingsView(fonts: fonts)
     }
     .alert(
       "保存できませんでした", isPresented: Binding(get: { unsaved != nil }, set: { _ in unsaved = nil }),
@@ -102,5 +106,5 @@ private struct UnsavedWriting: LocalizedError {
 }
 
 #Preview {
-  RootView()
+  RootView(fonts: FontLibrary(server: nil))
 }

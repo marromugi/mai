@@ -1,4 +1,3 @@
-import CoreGraphics
 import SwiftUI
 
 /// Families in order of preference, as CSS's `font-family`: a character the first lacks is set in
@@ -9,12 +8,12 @@ struct FontStack: Codable, Hashable {
   /// The bundled family alone.
   static let standard = FontStack(names: [])
 
-  /// The families text is set in, in order: each of `known` the stack names, then the bundled
+  /// The families text is set in, in order: each of `available` the stack names, then the bundled
   /// family unless named already, so Japanese never falls back to a system font.
-  func families(from known: [FontFamily] = FontFamily.known) -> [FontFamily] {
+  func families(from available: [FontFamily] = FontFamily.known) -> [FontFamily] {
     var families: [FontFamily] = []
     for name in names {
-      guard let family = known.first(where: { $0.name == name }), !families.contains(family)
+      guard let family = available.first(where: { $0.name == name }), !families.contains(family)
       else { continue }
       families.append(family)
     }
@@ -23,17 +22,9 @@ struct FontStack: Codable, Hashable {
     }
     return families
   }
-
-  /// The em box's descent of the first family with Japanese, which sets the Japanese text.
-  func emBoxDescent(from known: [FontFamily] = FontFamily.known) -> CGFloat {
-    guard let descent = families(from: known).lazy.compactMap(\.emBoxDescent).first else {
-      preconditionFailure("A stack always ends in the bundled family, which has Japanese.")
-    }
-    return descent
-  }
 }
 
 extension EnvironmentValues {
-  /// The families the text in this subtree is set in.
-  @Entry var fontStack: FontStack = .standard
+  /// The families the text in this subtree is set in, as `FontStack.families(from:)` gives them.
+  @Entry var fontFamilies: [FontFamily] = FontStack.standard.families()
 }

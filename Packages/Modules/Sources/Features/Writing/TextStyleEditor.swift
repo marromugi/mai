@@ -15,17 +15,17 @@ struct TextStyleEditor: View {
   var oneLine = false
   let changed: (String) -> Void
   @EnvironmentTypeScale private var scale
-  @Environment(\.fontStack) private var stack
+  @Environment(\.fontFamilies) private var families
 
   var body: some View {
     // A fixed line box puts the baseline `-descender` above its bottom; this moves it to where
     // `textStyle(role)` puts it. Not `baselineOffset`, which TextKit 2 takes off the line box.
-    let baseline = scale.size(role) + scale.emBoxShift(role, in: stack)
+    let baseline = scale.size(role) + scale.emBoxShift(role, in: families)
     StyledTextView(
       role: role, text: text, placeholder: placeholder, oneLine: oneLine, changed: changed,
-      scale: scale, stack: stack
+      scale: scale, families: families
     )
-    .offset(y: baseline - scale.lineHeight(role) - scale.font(role, in: stack).descender)
+    .offset(y: baseline - scale.lineHeight(role) - scale.font(role, in: families).descender)
   }
 }
 
@@ -36,7 +36,7 @@ private struct StyledTextView: UIViewRepresentable {
   let oneLine: Bool
   let changed: (String) -> Void
   let scale: TypeScale
-  let stack: FontStack
+  let families: [FontFamily]
 
   func makeUIView(context: Context) -> PlaceholderTextView {
     let view = PlaceholderTextView(usingTextLayoutManager: true)
@@ -52,12 +52,12 @@ private struct StyledTextView: UIViewRepresentable {
     context.coordinator.changed = changed
     // Never while composing: replacing the text ends the input method's composition.
     guard view.markedTextRange == nil,
-      context.coordinator.scale != scale || context.coordinator.stack != stack
+      context.coordinator.scale != scale || context.coordinator.families != families
         || view.text != text
     else { return }
     context.coordinator.scale = scale
-    context.coordinator.stack = stack
-    let attributes = scale.attributes(role, in: stack)
+    context.coordinator.families = families
+    let attributes = scale.attributes(role, in: families)
     let selection = view.selectedRange
     view.attributedText = NSAttributedString(string: text, attributes: attributes)
     view.typingAttributes = attributes
@@ -97,9 +97,9 @@ private struct StyledTextView: UIViewRepresentable {
   final class Coordinator: NSObject, UITextViewDelegate {
     var changed: (String) -> Void
     let oneLine: Bool
-    /// The scale and stack the text was last set in, so a change of either restyles it.
+    /// The scale and families the text was last set in, so a change of either restyles it.
     var scale: TypeScale?
-    var stack: FontStack?
+    var families: [FontFamily]?
 
     init(changed: @escaping (String) -> Void, oneLine: Bool) {
       self.changed = changed
@@ -151,13 +151,13 @@ final class PlaceholderTextView: UITextView {
 extension TypeScale {
   /// `role`'s font, line box, and tracking, as `textStyle(role)` sets them, and for the body the
   /// line-breaking rules `Text(body:)` sets.
-  func attributes(_ role: TextRole, in stack: FontStack) -> [NSAttributedString.Key: Any] {
+  func attributes(_ role: TextRole, in families: [FontFamily]) -> [NSAttributedString.Key: Any] {
     let paragraph = NSMutableParagraphStyle()
     paragraph.minimumLineHeight = lineHeight(role)
     paragraph.maximumLineHeight = lineHeight(role)
     paragraph.lineBreakStrategy = .standard
     var attributes: [NSAttributedString.Key: Any] = [
-      .font: font(role, in: stack),
+      .font: font(role, in: families),
       .foregroundColor: UIColor.label,
       .paragraphStyle: paragraph,
       .tracking: tracking(role),

@@ -50,7 +50,7 @@ private func assertSettings(
     store.set(theme, forKey: ColorTheme.key)
   }
   let page = HostedPage(
-    SettingsView()
+    SettingsView(fonts: FontLibrary(server: nil))
       .defaultAppStorage(store)
       .dynamicTypeSize(size)
       .environment(\.colorScheme, colorScheme))

@@ -16,18 +16,12 @@ extension TypeScale {
       factor: max(1, bodySize(UIContentSizeCategory(size)) / bodySize(.large)), body: body)
   }
 
-  /// `role`'s font from `stack`'s first family, falling back through the rest in order.
-  func font(_ role: TextRole, in stack: FontStack) -> UIFont {
-    font(role, in: stack.families())
-  }
-
   /// `role`'s font from the first of `families`, falling back through the rest in order.
   func font(_ role: TextRole, in families: [FontFamily]) -> UIFont {
     BundledFonts.register()
     let fonts = families.map { family in
-      let name = family.postScriptName(role)
-      guard let font = UIFont(name: name, size: size(role)) else {
-        fatalError("\(name) is known as a family's face but UIFont can't load it.")
+      guard let font = family.font(role, size: size(role)) else {
+        fatalError("\(family.name) is set in before its files are registered.")
       }
       return font
     }

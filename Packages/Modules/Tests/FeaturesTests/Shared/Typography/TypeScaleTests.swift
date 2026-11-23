@@ -14,7 +14,7 @@ struct TypeScaleTests {
     (.caption, "SourceHanSansJP-Regular"),
   ])
   func font(_ role: TextRole, _ postScriptName: String) {
-    let font = TypeScale.standard.font(role, in: .standard)
+    let font = TypeScale.standard.font(role, in: FontStack.standard.families())
     #expect(font.fontName == postScriptName)
     #expect(font.pointSize == TypeScale.standard.size(role))
   }
