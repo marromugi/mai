@@ -121,6 +121,7 @@ function purchaseOf(
       originalTransactionId: transaction.originalTransactionId,
       account: parseAccountId(transaction.appAccountToken ?? ""),
       productId: transaction.productId,
+      periodEnds: transaction.expiresDate,
       paidUntil:
         transaction.revocationDate ??
         Math.max(transaction.expiresDate, renewalInfo?.gracePeriodExpiresDate ?? 0),

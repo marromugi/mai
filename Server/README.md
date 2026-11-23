@@ -54,13 +54,13 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 ### 購読
 
-アカウントは App Store の自動更新の購読で払われる。購読は `subscriptions` に `originalTransactionId` ごとに 1 行で置き、App Store が署名したもののうち一番新しいもの(署名した時刻 `signedDate` で比べる)を写す。アカウントのプラン(`accounts.tier`)は一番長く払われている購読の商品のプラン、`accounts.paid_until` はその購読が払われている時刻。購読が払われている時刻は、期限(`expiresDate`)、請求のやり直しの猶予(`gracePeriodExpiresDate`)の終わりのうち遅い方で、返金・取り消しのあとは取り消された時刻(`revocationDate`)。
+アカウントは App Store の自動更新の購読で払われる。購読は `subscriptions` に `originalTransactionId` ごとに 1 行で置き、App Store が署名したもののうち、一番新しい請求の期間(取引の `expiresDate`)についての一番新しいもの(署名した時刻 `signedDate` で比べる)を写す。前の期間の取引(過ぎた期間の返金の通知など)は今の期間を変えない。アカウントのプラン(`accounts.tier`)は一番長く払われている購読の商品のプラン(同じなら大きいプラン)、`accounts.paid_until` はその購読が払われている時刻。購読が払われている時刻は、期限(`expiresDate`)、請求のやり直しの猶予(`gracePeriodExpiresDate`)の終わりのうち遅い方で、返金・取り消しのあとは取り消された時刻(`revocationDate`)。
 
 購読のことはどれも、App Store が署名した取引と更新の情報から読む。通知の種類は見ない。更新(`DID_RENEW`)は新しい期限の取引を、期限切れ(`EXPIRED`・`GRACE_PERIOD_EXPIRED`・猶予のない `DID_FAIL_TO_RENEW`)は過ぎた期限の取引を、猶予(`DID_FAIL_TO_RENEW` の `GRACE_PERIOD`)は猶予の終わりの入った更新の情報を、返金と取り消し(`REFUND`・`REVOKE`)は `revocationDate` の入った取引を、すぐ変わる上のプランへの変更(`DID_CHANGE_RENEWAL_PREF` の `UPGRADE`)は新しい商品の取引を持ってくる。下のプランへの変更(`DOWNGRADE`)は次の更新で新しい商品の取引が来るまで、今のプランのまま。
 
 - **アカウントを作るとき**(`POST /account`): 取引が `src/app-store.ts` で通り(下の「Apple の署名」)、`appAccountToken` がそのアカウント ID で、まだ払われていて(期限切れや返金・取り消しでなく)、`APP_STORE_ENVIRONMENTS` の環境のもので、どれかのプランの商品であること。署名・形・別のアプリ・自動更新の購読でないものは 400、`appAccountToken` が別のアカウントか無いもの、その購読がもう別のアカウントのものなら 409、払われていなければ 402、受けない環境なら 403。
-- **送り直し**(`PUT /account/subscription`): 同じように確かめ、更新の情報は同じ `originalTransactionId` の取引のものに限る(別の購読のものは 400)。期限が過ぎたものや取り消されたものも受け、その通りに写す。`appAccountToken` が呼んだアカウントでないか、その購読が別のアカウントのものなら 409。期限の切れたアカウントからも送れる。今のものより古ければ何も変えずに 200。
-- **通知**(`POST /app-store/notifications`): 署名と環境を同じように確かめ、通らなければ 400、受けない環境なら 403。取引のない通知(`TEST` など)、自動更新の購読でない取引、まだ置いていない購読で `appAccountToken` のアカウントがないものは、何もせず 200。まだ置いていない購読でアカウントがあれば、そのアカウントのものとして置く。今のものより古いか同じ時刻のものは何も変えない。Apple は 200 を返すまで送り直す。
+- **送り直し**(`PUT /account/subscription`): 同じように確かめ、更新の情報は同じ `originalTransactionId` の取引のものに限る(別の購読のものは 400)。期限が過ぎたものや取り消されたものも受け、その通りに写す。`appAccountToken` が呼んだアカウントでないか、その購読が別のアカウントのものなら 409。期限の切れたアカウントからも送れる。今のものより古いか前の期間のものなら何も変えずに 200。
+- **通知**(`POST /app-store/notifications`): 署名と環境を同じように確かめ、通らなければ 400、受けない環境なら 403。取引のない通知(`TEST` など)、自動更新の購読でない取引、まだ置いていない購読で `appAccountToken` のアカウントがないものは、何もせず 200。まだ置いていない購読でアカウントがあれば、そのアカウントのものとして置く。今のものより古いか同じ時刻のもの、前の期間のものは何も変えない。Apple は 200 を返すまで送り直す。
 
 `accounts.paid_until` を過ぎたアカウントは期限切れで、文書を読めるが書けない。文書の保存(`PUT /writings/<ID>`)と自分の鍵の確かめの値(`PUT /account/own-key-check`)は 402 で、何も書かず、数えもしない。一覧・読み出しと、購読を戻すための送り直しはそのまま使える。`paid_until` が期限の切れた時刻で、それから 90 日で消すのは #22 の S6。
 

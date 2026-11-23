@@ -37,12 +37,14 @@ CREATE TABLE accounts (
 ) STRICT;
 
 -- An App Store subscription, by the originalTransactionId every renewal of it shares, as the
--- latest data the App Store signed about it reads (signed_date). paid_until is when it expires, the
+-- latest data the App Store signed about it reads (signed_date), among data about its latest billing
+-- period (period_ends, the transaction's expiresDate). paid_until is when that period ends, the
 -- end of its billing grace period if later, or when it was refunded or revoked.
 CREATE TABLE subscriptions (
   original_transaction_id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
   product_id TEXT NOT NULL,
+  period_ends INTEGER NOT NULL,
   paid_until INTEGER NOT NULL,
   environment TEXT NOT NULL,
   signed_date INTEGER NOT NULL

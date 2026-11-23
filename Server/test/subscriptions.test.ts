@@ -179,14 +179,15 @@ describe("the subscription the app resends", () => {
   });
 
   it("keeps the account paid through its billing grace period", async () => {
-    const { account, token, original } = await newAccount();
+    const ended = Date.now() - day;
+    const { account, token, original } = await newAccount(products.basic, Date.now(), ended);
     const graceEnds = Date.now() + 6 * day;
     const answer = await call(
       "/account/subscription",
       {
         transaction: await signedTransaction(account, {
           originalTransactionId: original,
-          expiresDate: Date.now() - day,
+          expiresDate: ended,
           signedDate: Date.now() + 1000,
         }),
         renewalInfo: await signedRenewalInfo(original, {
@@ -202,15 +203,7 @@ describe("the subscription the app resends", () => {
   });
 
   it("renews a lapsed account, which then writes again", async () => {
-    const { account, token, original } = await newAccount();
-    await notify(
-      "EXPIRED",
-      "VOLUNTARY",
-      await signedTransaction(account, {
-        originalTransactionId: original,
-        expiresDate: Date.now() - day,
-      }),
-    );
+    const { account, token, original } = await lapsed();
     expect(await save(token)).toBe(402);
 
     const answer = await call(
@@ -225,7 +218,8 @@ describe("the subscription the app resends", () => {
       token,
     );
     expect(answer.status).toBe(200);
-    expect(await save(token)).toBe(200);
+    // Let through to the revision check: the writing lapsed() saved is there, so "none" is 409.
+    expect(await save(token)).toBe(409);
   });
 
   it.each([
@@ -369,15 +363,13 @@ describe("an App Store notification", () => {
   });
 
   it("DID_FAIL_TO_RENEW GRACE_PERIOD keeps the account writing until the grace period ends", async () => {
-    const { account, token, original } = await newAccount();
+    const ended = Date.now() - 1000;
+    const { account, token, original } = await newAccount(products.basic, Date.now(), ended);
     const graceEnds = Date.now() + 6 * day;
     await notify(
       "DID_FAIL_TO_RENEW",
       "GRACE_PERIOD",
-      await signedTransaction(account, {
-        originalTransactionId: original,
-        expiresDate: Date.now() - 1000,
-      }),
+      await signedTransaction(account, { originalTransactionId: original, expiresDate: ended }),
       await signedRenewalInfo(original, {
         isInBillingRetryPeriod: true,
         gracePeriodExpiresDate: graceEnds,
@@ -387,22 +379,24 @@ describe("an App Store notification", () => {
     expect(await save(token)).toBe(200);
   });
 
+  // The account's kept period ends at `ends`, which the notification's transaction is about.
   it.each([
-    ["DID_FAIL_TO_RENEW", undefined, {}, { isInBillingRetryPeriod: true }],
-    ["EXPIRED", "VOLUNTARY", {}, { autoRenewStatus: 0 }],
-    ["EXPIRED", "BILLING_RETRY", {}, {}],
-    ["GRACE_PERIOD_EXPIRED", undefined, {}, { gracePeriodExpiresDate: Date.now() - 1000 }],
-    ["REFUND", undefined, { revocationDate: Date.now() - 1000, expiresDate: Date.now() + day }, {}],
-    ["REVOKE", undefined, { revocationDate: Date.now() - 1000, expiresDate: Date.now() + day }, {}],
-  ])("%s %s lapses the account", async (type, subtype, transaction, renewalInfo) => {
-    const { account, token, original } = await newAccount();
+    ["DID_FAIL_TO_RENEW", undefined, -1000, {}, { isInBillingRetryPeriod: true }],
+    ["EXPIRED", "VOLUNTARY", -1000, {}, { autoRenewStatus: 0 }],
+    ["EXPIRED", "BILLING_RETRY", -1000, {}, {}],
+    ["GRACE_PERIOD_EXPIRED", undefined, -day, {}, { gracePeriodExpiresDate: Date.now() - 1000 }],
+    ["REFUND", undefined, 20 * day, { revocationDate: Date.now() - 1000 }, {}],
+    ["REVOKE", undefined, 20 * day, { revocationDate: Date.now() - 1000 }, {}],
+  ])("%s %s lapses the account", async (type, subtype, ends, transaction, renewalInfo) => {
+    const ended = Date.now() + ends;
+    const { account, token, original } = await newAccount(products.basic, Date.now(), ended);
     await save(token);
     const answer = await notify(
       type,
       subtype,
       await signedTransaction(account, {
         originalTransactionId: original,
-        expiresDate: Date.now() - 1000,
+        expiresDate: ended,
         ...transaction,
       }),
       await signedRenewalInfo(original, renewalInfo),
@@ -413,8 +407,8 @@ describe("an App Store notification", () => {
   });
 
   it("REFUND_REVERSED pays for the account again", async () => {
-    const { account, token, original } = await newAccount();
     const expires = Date.now() + 20 * day;
+    const { account, token, original } = await newAccount(products.basic, Date.now(), expires);
     await notify(
       "REFUND",
       undefined,
@@ -436,6 +430,47 @@ describe("an App Store notification", () => {
     expect(await save(token)).toBe(200);
   });
 
+  it.each([
+    ["REFUND", { revocationDate: Date.now() - 1000 }],
+    ["REFUND_DECLINED", {}],
+    ["CONSUMPTION_REQUEST", {}],
+  ])("%s about an earlier billing period leaves the current one paid", async (type, change) => {
+    const { account, token, original } = await newAccount();
+    const before = await accountOf(account);
+    const answer = await notify(
+      type,
+      undefined,
+      await signedTransaction(account, {
+        originalTransactionId: original,
+        purchaseDate: Date.now() - 35 * day,
+        expiresDate: Date.now() - 5 * day,
+        ...change,
+      }),
+      await signedRenewalInfo(original),
+      Date.now() + 2000,
+    );
+    expect(answer.status).toBe(200);
+    expect(await accountOf(account)).toEqual(before);
+    expect(await save(token)).toBe(200);
+  });
+
+  it("puts an account with two subscriptions paid to the same time on the larger plan", async () => {
+    const expires = Date.now() + 10 * day;
+    const { account } = await newAccount(products.basic, Date.now(), expires);
+    await database.execute({
+      sql: "UPDATE subscriptions SET paid_until = ? WHERE account_id = ?",
+      args: [expires, account],
+    });
+    for (const product of [products.pro, products.plus]) {
+      await notify(
+        "SUBSCRIBED",
+        "INITIAL_BUY",
+        await signedTransaction(account, { productId: product, expiresDate: expires }),
+      );
+    }
+    expect(await accountOf(account)).toEqual({ tier: "pro", paidUntil: expires });
+  });
+
   it("DID_CHANGE_RENEWAL_PREF UPGRADE moves the account to the new plan at once", async () => {
     const { account, original } = await newAccount();
     await notify(
@@ -455,8 +490,8 @@ describe("an App Store notification", () => {
   });
 
   it("DID_CHANGE_RENEWAL_PREF DOWNGRADE keeps the plan until the renewal on the new one", async () => {
-    const { account, original } = await newAccount(products.pro);
     const expires = Date.now() + 10 * day;
+    const { account, original } = await newAccount(products.pro, Date.now(), expires);
     await notify(
       "DID_CHANGE_RENEWAL_PREF",
       "DOWNGRADE",
@@ -639,14 +674,15 @@ describe("an App Store notification", () => {
 
 /** A new account holding the writing, whose subscription then expired. */
 async function lapsed() {
-  const made = await newAccount();
+  const ended = Date.now() - 1000;
+  const made = await newAccount(products.basic, Date.now(), ended);
   expect(await save(made.token)).toBe(200);
   await notify(
     "EXPIRED",
     "VOLUNTARY",
     await signedTransaction(made.account, {
       originalTransactionId: made.original,
-      expiresDate: Date.now() - 1000,
+      expiresDate: ended,
     }),
   );
   return made;
@@ -691,8 +727,8 @@ describe("a lapsed account", () => {
   });
 
   it("keeps when it lapsed, for its deletion 90 days on", async () => {
-    const { account, original } = await newAccount();
     const lapsedAt = Date.now() - 3 * day;
+    const { account, original } = await newAccount(products.basic, Date.now(), lapsedAt);
     await notify(
       "EXPIRED",
       "VOLUNTARY",

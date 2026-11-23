@@ -20,11 +20,13 @@ const month = 30 * 24 * 60 * 60 * 1000;
  * sold as a product of its name), paid for a month from `now`, with one session started at `now`,
  * written without Apple: `test/sign-in.test.ts` makes accounts through Apple. Each test makes its
  * own, so tests share the database and nothing else. `original` is its subscription's
- * originalTransactionId.
+ * originalTransactionId. `periodEnds` is when the billing period kept for it ends; one in the past
+ * reads as a billing grace period that pays for the month.
  */
 export async function newAccount(
   product: string = products.basic,
   now = Date.now(),
+  periodEnds = now + month,
 ): Promise<{ account: string; token: string; caller: Caller; original: string }> {
   const account = parseAccountId(crypto.randomUUID());
   if (account === undefined) {
@@ -41,6 +43,7 @@ export async function newAccount(
         originalTransactionId: original,
         account,
         productId: product,
+        periodEnds,
         paidUntil: now + month,
         revoked: false,
         environment: "Production",

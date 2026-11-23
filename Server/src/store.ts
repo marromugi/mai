@@ -48,11 +48,16 @@ export type Purchase = {
   /** The transaction's `appAccountToken`. */
   readonly account: AccountId | undefined;
   readonly productId: string;
-  /** Its expiry, the end of its billing grace period if later, or when it was refunded or revoked. */
+  /** The transaction's `expiresDate`: when the billing period it is about ends. */
+  readonly periodEnds: number;
+  /** When that period ends, the end of its billing grace period if later, or when it was refunded or revoked. */
   readonly paidUntil: number;
   readonly revoked: boolean;
   readonly environment: Environment;
-  /** When the App Store signed what this was read from; only a later one replaces it. */
+  /**
+   * When the App Store signed what this was read from. It replaces what is kept only when signed
+   * later and about the same or a later billing period.
+   */
   readonly signedDate: number;
 };
 
@@ -238,9 +243,9 @@ export class Store {
          WHERE product_id = :product AND ${claimed}
            AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = :id OR apple_sub = :sub)
            AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE original_transaction_id = :original)`,
-        `INSERT INTO subscriptions
-           (original_transaction_id, account_id, product_id, paid_until, environment, signed_date)
-         SELECT :original, id, :product, :paid, :environment, :signed FROM accounts
+        `INSERT INTO subscriptions (original_transaction_id, account_id, product_id, period_ends,
+           paid_until, environment, signed_date)
+         SELECT :original, id, :product, :period, :paid, :environment, :signed FROM accounts
          WHERE ${madeHere}
          ON CONFLICT (original_transaction_id) DO NOTHING`,
         `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
@@ -508,6 +513,7 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
   return {
     original: purchase.originalTransactionId,
     product: purchase.productId,
+    period: purchase.periodEnds,
     paid: purchase.paidUntil,
     environment: purchase.environment,
     signed: purchase.signedDate,
@@ -515,25 +521,27 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
 }
 
 /**
- * Replaces the kept subscription `:original` with newer data, or keeps it for the account
- * `:account` when it isn't kept yet; then sets its account's plan and paid-until time from all of
- * the account's subscriptions. Each statement holds `condition` in its WHERE.
+ * Replaces the kept subscription `:original` with newer data about the same or a later billing
+ * period, or keeps it for the account `:account` when it isn't kept yet; then sets its account's
+ * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan).
+ * Each statement holds `condition` in its WHERE.
  */
 function keepStatements(condition: string): string[] {
   return [
-    `UPDATE subscriptions SET product_id = :product, paid_until = :paid,
+    `UPDATE subscriptions SET product_id = :product, period_ends = :period, paid_until = :paid,
        environment = :environment, signed_date = :signed
      WHERE original_transaction_id = :original AND signed_date < :signed
-       AND ${plan} AND ${condition}`,
-    `INSERT INTO subscriptions
-       (original_transaction_id, account_id, product_id, paid_until, environment, signed_date)
-     SELECT :original, id, :product, :paid, :environment, :signed FROM accounts
+       AND period_ends <= :period AND ${plan} AND ${condition}`,
+    `INSERT INTO subscriptions (original_transaction_id, account_id, product_id, period_ends,
+       paid_until, environment, signed_date)
+     SELECT :original, id, :product, :period, :paid, :environment, :signed FROM accounts
      WHERE id = :account AND ${plan} AND ${condition}
      ON CONFLICT (original_transaction_id) DO NOTHING`,
     `UPDATE accounts SET
        paid_until = (SELECT max(paid_until) FROM subscriptions WHERE account_id = accounts.id),
        tier = coalesce((SELECT p.tier FROM subscriptions s JOIN plans p ON p.product_id = s.product_id
-                        WHERE s.account_id = accounts.id ORDER BY s.paid_until DESC LIMIT 1), tier)
+                        WHERE s.account_id = accounts.id
+                        ORDER BY s.paid_until DESC, p.writings_bytes DESC LIMIT 1), tier)
      WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original)
        AND ${condition}`,
   ];
