@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { serve, signInOf } from "../src/index";
 import type { SignIn } from "../src/sign-in";
 import { parseEnvironments } from "../src/subscriptions";
-import { newAccount, products } from "./accounts";
+import { newAccount, products, store } from "./accounts";
 import { makeChain, signAppStore } from "./apple-fakes";
 import {
   appStoreRoot,
@@ -60,6 +60,22 @@ async function subscriptionsOf(account: string): Promise<number> {
     args: [account],
   });
   return Number(rows[0]?.["count"]);
+}
+
+async function subscriptionRow(original: string): Promise<unknown> {
+  const { rows } = await database.execute({
+    sql: "SELECT * FROM subscriptions WHERE original_transaction_id = ?",
+    args: [original],
+  });
+  return { ...rows[0] };
+}
+
+/** Counts today's 4 requests, all a `test-daily` account may make. */
+async function useUpRequests(account: string): Promise<void> {
+  await database.execute({
+    sql: "INSERT INTO usage (account_id, day, requests) VALUES (?, ?, 4)",
+    args: [account, Math.floor(Date.now() / day)],
+  });
 }
 
 const writing = "6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
@@ -154,6 +170,7 @@ describe("the subscription the app resends", () => {
       token,
     );
     expect(answer.status).toBe(200);
+    expect(await answer.json()).toMatchObject({ plan: "pro" });
     expect((await accountOf(account)).tier).toBe("pro");
   });
 
@@ -223,16 +240,17 @@ describe("the subscription the app resends", () => {
   });
 
   it.each([
-    ["another account's appAccountToken", () => crypto.randomUUID()],
-    ["no appAccountToken", () => undefined],
-  ])("refuses a purchase with %s", async (_, token) => {
+    ["another account's appAccountToken", async () => (await newAccount()).account],
+    ["no appAccountToken", () => Promise.resolve(undefined)],
+  ])("refuses a purchase with %s, keeping it for no account", async (_, token) => {
     const caller = await newAccount();
     const before = await accountOf(caller.account);
+    const named = await token();
     const original = crypto.randomUUID();
     const answer = await call(
       "/account/subscription",
       {
-        transaction: await signedTransaction(token(), {
+        transaction: await signedTransaction(named, {
           originalTransactionId: original,
           productId: products.pro,
         }),
@@ -243,18 +261,24 @@ describe("the subscription the app resends", () => {
     expect(answer.status).toBe(409);
     expect(await accountOf(caller.account)).toEqual(before);
     expect(await subscriptionsOf(caller.account)).toBe(1);
+    if (named !== undefined) {
+      expect(await subscriptionsOf(named)).toBe(1);
+    }
   });
 
   it("refuses a subscription another account has, though it names this one", async () => {
     const owner = await newAccount();
+    const before = await accountOf(owner.account);
+    const kept = await subscriptionRow(owner.original);
     const caller = await newAccount();
     const answer = await call(
       "/account/subscription",
       {
         transaction: await signedTransaction(caller.account, {
           originalTransactionId: owner.original,
+          productId: products.pro,
           signedDate: Date.now() + 1000,
-          expiresDate: Date.now() - day,
+          expiresDate: Date.now() + 90 * day,
         }),
         renewalInfo: await signedRenewalInfo(owner.original),
       },
@@ -262,7 +286,72 @@ describe("the subscription the app resends", () => {
     );
     expect(answer.status).toBe(409);
     expect(await subscriptionsOf(caller.account)).toBe(1);
-    expect((await accountOf(owner.account)).paidUntil).toBeGreaterThan(Date.now());
+    expect(await accountOf(owner.account)).toEqual(before);
+    expect(await subscriptionRow(owner.original)).toEqual(kept);
+  });
+
+  it("answers 409 for a purchase that is another account's and of no plan", async () => {
+    const caller = await newAccount();
+    const other = await newAccount();
+    const original = crypto.randomUUID();
+    const answer = await call(
+      "/account/subscription",
+      {
+        transaction: await signedTransaction(other.account, {
+          originalTransactionId: original,
+          productId: "com.marromugi.mai.something.else",
+        }),
+        renewalInfo: await signedRenewalInfo(original),
+      },
+      caller.token,
+    );
+    expect(answer.status).toBe(409);
+  });
+
+  it.each([
+    [
+      "a session token with another secret",
+      (token: string) => `${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`,
+    ],
+  ])("writes nothing for %s", async (_, alter) => {
+    const { account, token, original } = await newAccount();
+    const before = await accountOf(account);
+    const answer = await call(
+      "/account/subscription",
+      {
+        transaction: await signedTransaction(account, {
+          originalTransactionId: original,
+          productId: products.pro,
+          expiresDate: Date.now() + 90 * day,
+          signedDate: Date.now() + 1000,
+        }),
+        renewalInfo: await signedRenewalInfo(original),
+      },
+      alter(token),
+    );
+    expect(answer.status).toBe(401);
+    expect(await accountOf(account)).toEqual(before);
+  });
+
+  it("writes nothing once the plan's requests for the day are used up", async () => {
+    const { account, token, original } = await newAccount("test-daily");
+    await useUpRequests(account);
+    const before = await accountOf(account);
+    const answer = await call(
+      "/account/subscription",
+      {
+        transaction: await signedTransaction(account, {
+          originalTransactionId: original,
+          productId: "test-storage",
+          expiresDate: Date.now() + 90 * day,
+          signedDate: Date.now() + 1000,
+        }),
+        renewalInfo: await signedRenewalInfo(original),
+      },
+      token,
+    );
+    expect(answer.status).toBe(429);
+    expect(await accountOf(account)).toEqual(before);
   });
 
   it("refuses a purchase from an environment the server doesn't take", async () => {
@@ -305,22 +394,27 @@ describe("the subscription the app resends", () => {
     expect(await save(token)).toBe(200);
   });
 
-  it("refuses a product no plan is sold as", async () => {
+  it("refuses a product no plan is sold as, keeping nothing of it", async () => {
     const { account, token, original } = await newAccount();
-    const answer = await call(
-      "/account/subscription",
-      {
-        transaction: await signedTransaction(account, {
-          originalTransactionId: original,
-          productId: "com.marromugi.mai.something.else",
-          signedDate: Date.now() + 1000,
-        }),
-        renewalInfo: await signedRenewalInfo(original),
-      },
-      token,
-    );
-    expect(answer.status).toBe(400);
-    expect((await accountOf(account)).tier).toBe("basic");
+    const before = await accountOf(account);
+    for (const subscription of [original, crypto.randomUUID()]) {
+      const answer = await call(
+        "/account/subscription",
+        {
+          transaction: await signedTransaction(account, {
+            originalTransactionId: subscription,
+            productId: "com.marromugi.mai.something.else",
+            expiresDate: Date.now() + 90 * day,
+            signedDate: Date.now() + 1000,
+          }),
+          renewalInfo: await signedRenewalInfo(subscription),
+        },
+        token,
+      );
+      expect(answer.status).toBe(400);
+    }
+    expect(await accountOf(account)).toEqual(before);
+    expect(await subscriptionsOf(account)).toBe(1);
   });
 
   it.each([
@@ -667,6 +761,114 @@ describe("an App Store notification", () => {
     expect(await accountOf(account)).toEqual(before);
   });
 
+  it("is refused when its own environment isn't taken, whatever its transaction says", async () => {
+    const { account, original } = await newAccount();
+    const before = await accountOf(account);
+    const answer = await call("/app-store/notifications", {
+      signedPayload: await signedNotification("DID_RENEW", undefined, {
+        environment: "Sandbox",
+        transaction: await signedTransaction(account, {
+          originalTransactionId: original,
+          expiresDate: Date.now() + 90 * day,
+        }),
+      }),
+    });
+    expect(answer.status).toBe(403);
+    expect(await accountOf(account)).toEqual(before);
+  });
+
+  it("is ordered by its own signedDate, not its transaction's", async () => {
+    const { account, original } = await newAccount();
+    const expires = Date.now() + 90 * day;
+    await notify(
+      "DID_RENEW",
+      undefined,
+      await signedTransaction(account, {
+        originalTransactionId: original,
+        expiresDate: expires,
+        signedDate: Date.now() - 60_000,
+      }),
+    );
+    expect((await accountOf(account)).paidUntil).toBe(expires);
+  });
+
+  it("with renewal info of another subscription is refused and changes nothing", async () => {
+    const { account, original } = await newAccount();
+    const before = await accountOf(account);
+    const answer = await notify(
+      "DID_RENEW",
+      undefined,
+      await signedTransaction(account, {
+        originalTransactionId: original,
+        expiresDate: Date.now() + 90 * day,
+      }),
+      await signedRenewalInfo(crypto.randomUUID()),
+    );
+    expect(answer.status).toBe(400);
+    expect(await accountOf(account)).toEqual(before);
+  });
+
+  it("about a purchase that isn't a subscription is answered 200 and changes nothing", async () => {
+    const { account } = await newAccount();
+    const before = await accountOf(account);
+    const answer = await notify(
+      "ONE_TIME_CHARGE",
+      undefined,
+      await signedTransaction(account, { expiresDate: undefined, type: "Non-Consumable" }),
+    );
+    expect(answer.status).toBe(200);
+    expect(await accountOf(account)).toEqual(before);
+    expect(await subscriptionsOf(account)).toBe(1);
+  });
+
+  it("of a product no plan is sold as keeps nothing of it", async () => {
+    const { account, original } = await newAccount();
+    const before = await accountOf(account);
+    for (const subscription of [original, crypto.randomUUID()]) {
+      const answer = await notify(
+        "DID_CHANGE_RENEWAL_PREF",
+        "UPGRADE",
+        await signedTransaction(account, {
+          originalTransactionId: subscription,
+          productId: "com.marromugi.mai.something.else",
+          expiresDate: Date.now() + 90 * day,
+        }),
+      );
+      expect(answer.status).toBe(200);
+    }
+    expect(await accountOf(account)).toEqual(before);
+    expect(await subscriptionsOf(account)).toBe(1);
+  });
+
+  it("puts an account on the plan of the subscription paid for longest, though smaller", async () => {
+    const expires = Date.now() + 60 * day;
+    const { account } = await newAccount(products.basic, Date.now(), expires);
+    await database.execute({
+      sql: "UPDATE subscriptions SET paid_until = ? WHERE account_id = ?",
+      args: [expires, account],
+    });
+    await notify(
+      "SUBSCRIBED",
+      "INITIAL_BUY",
+      await signedTransaction(account, {
+        productId: products.pro,
+        expiresDate: Date.now() + 10 * day,
+      }),
+    );
+    expect(await accountOf(account)).toEqual({ tier: "basic", paidUntil: expires });
+  });
+
+  it("about a kept subscription without an appAccountToken still updates its account", async () => {
+    const { account, original } = await newAccount();
+    const expires = Date.now() + 60 * day;
+    await notify(
+      "DID_RENEW",
+      undefined,
+      await signedTransaction(undefined, { originalTransactionId: original, expiresDate: expires }),
+    );
+    expect((await accountOf(account)).paidUntil).toBe(expires);
+  });
+
   it("refuses a body without a signedPayload", async () => {
     expect((await call("/app-store/notifications", {})).status).toBe(400);
   });
@@ -724,6 +926,34 @@ describe("a lapsed account", () => {
       args: [account],
     });
     expect(Number(rows[0]?.["saves"])).toBe(1);
+  });
+
+  it("is lapsed from the very time it is paid until", async () => {
+    const { account, caller } = await newAccount();
+    const { rows } = await database.execute({
+      sql: "SELECT paid_until FROM accounts WHERE id = ?",
+      args: [account],
+    });
+    const paidUntil = Number(rows[0]?.["paid_until"]);
+    const check = new Uint8Array(32).fill(3);
+    expect(await store.keepOwnKeyCheck(caller, check, paidUntil)).toEqual({
+      ok: false,
+      refusal: "lapsed",
+    });
+    expect(await store.keepOwnKeyCheck(caller, check, paidUntil - 1)).toEqual({
+      ok: true,
+      value: true,
+    });
+  });
+
+  it("hears 402 before 429 when its requests for the day are used up too", async () => {
+    const { account, token } = await newAccount("test-daily");
+    await database.execute({
+      sql: "UPDATE accounts SET paid_until = ? WHERE id = ?",
+      args: [Date.now() - 1000, account],
+    });
+    await useUpRequests(account);
+    expect(await save(token)).toBe(402);
   });
 
   it("keeps when it lapsed, for its deletion 90 days on", async () => {
@@ -793,5 +1023,10 @@ describe("APP_STORE_ENVIRONMENTS", () => {
       sandbox,
     );
     expect(answer.status).toBe(200);
+    const { rows } = await database.execute({
+      sql: "SELECT environment FROM subscriptions WHERE original_transaction_id = ?",
+      args: [original],
+    });
+    expect(rows[0]?.["environment"]).toBe("Sandbox");
   });
 });

@@ -67,6 +67,8 @@ function fakeApple(
     /** Milliseconds each endpoint waits before it answers. */
     delay?: number;
     keysAnswer?: () => Response;
+    /** The Worker's `APP_STORE_ENVIRONMENTS`, `wrangler.jsonc`'s when left out. */
+    environments?: string;
   } = {},
 ) {
   const codes = new Map<string, Grant>();
@@ -110,7 +112,16 @@ function fakeApple(
     caches.open(crypto.randomUUID()),
     appStoreRoot(),
   ]).then(([cache, root]) =>
-    signInOf({ ...env, APPLE_SIGN_IN_KEY: options.key ?? clientKeyPem }, send, cache, root),
+    signInOf(
+      {
+        ...env,
+        APPLE_SIGN_IN_KEY: options.key ?? clientKeyPem,
+        APP_STORE_ENVIRONMENTS: options.environments ?? env.APP_STORE_ENVIRONMENTS,
+      },
+      send,
+      cache,
+      root,
+    ),
   );
   return { codes, asked, signIn };
 }
@@ -297,6 +308,18 @@ describe("making an account", () => {
     expect(await rowsOf(first.account, first.sub)).toEqual({ sessions: 1, accounts: 1 });
   });
 
+  it("answers a retry with the account's own purchase as the account being there", async () => {
+    const apple = fakeApple();
+    const account = crypto.randomUUID();
+    const purchase = await signedTransaction(account);
+    const first = await makeAccount(apple, newSub(), account, purchase);
+    const retry = await makeAccount(apple, first.sub, account, purchase);
+    expect(retry.answer.status).toBe(409);
+    expect(await retry.answer.json()).toEqual({
+      error: "this Apple user or this account ID has an account; sign in instead",
+    });
+  });
+
   it("makes one account when two requests for the same Apple user come at once", async () => {
     const apple = fakeApple();
     const sub = newSub();
@@ -347,6 +370,11 @@ describe("making an account", () => {
     expect(answer.status).toBe(409);
     expect(await accountRow(first.account)).toMatchObject({ apple_sub: first.sub });
     expect(await rowsOf(first.account, sub)).toEqual({ sessions: 1, accounts: 0 });
+    const { rows } = await database.execute({
+      sql: "SELECT count(*) AS count FROM subscriptions WHERE account_id = ?",
+      args: [first.account],
+    });
+    expect(Number(rows[0]?.["count"])).toBe(1);
   });
 
   it("refuses a code Apple turns down, and a code for another Apple user", async () => {
@@ -527,6 +555,53 @@ describe("the purchase an account is made with", () => {
     expect(await rowsOf(account, sub)).toEqual({ sessions: 0, accounts: 0 });
     expect(await paidFor(account)).toBeUndefined();
     expect(apple.asked.some((asked) => asked.url === appleTokenUrl)).toBe(asksApple);
+  });
+
+  it.each([
+    [
+      "has expired",
+      { expiresDate: Date.now() - 1000 },
+      "the purchase has expired; buy the plan again",
+    ],
+    ["was refunded", { revocationDate: Date.now() - 1000 }, "the purchase was refunded or revoked"],
+  ])("tells a purchase that %s from the other", async (_, change, error) => {
+    const account = crypto.randomUUID();
+    const { answer } = await makeAccount(
+      fakeApple(),
+      newSub(),
+      account,
+      await signedTransaction(account, change),
+    );
+    expect(await answer.json()).toEqual({ error });
+  });
+
+  it("answers 401 for an ID token that doesn't hold, before it looks at the purchase", async () => {
+    const apple = fakeApple();
+    const account = crypto.randomUUID();
+    const answer = await call(apple.signIn, "/account", {
+      account,
+      challenge: await challenge(apple.signIn),
+      identityToken: await identityToken(newSub(), await challenge(apple.signIn)),
+      authorizationCode: "code",
+      transaction: await signedTransaction(account, { expiresDate: Date.now() - 1000 }),
+    });
+    expect(answer.status).toBe(401);
+  });
+
+  it("keeps the environment of the purchase on a Worker that takes the Sandbox", async () => {
+    const account = crypto.randomUUID();
+    const { answer } = await makeAccount(
+      fakeApple({ environments: "Sandbox" }),
+      newSub(),
+      account,
+      await signedTransaction(account, { environment: "Sandbox" }),
+    );
+    expect(answer.status).toBe(201);
+    const { rows } = await database.execute({
+      sql: "SELECT environment FROM subscriptions WHERE account_id = ?",
+      args: [account],
+    });
+    expect(rows[0]?.["environment"]).toBe("Sandbox");
   });
 
   it("refuses a purchase signed under a root other than the one it was given", async () => {
