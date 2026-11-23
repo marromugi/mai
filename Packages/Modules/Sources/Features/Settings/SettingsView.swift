@@ -3,13 +3,16 @@ internal import Typesetting
 
 /// The app's settings in a sheet, closed by the button at the top trailing corner.
 struct SettingsView: View {
+  let sync: WritingSync
+  let syncNow: () async -> Void
   @AppStorage(StoredBodySetting.key) private var stored = StoredBodySetting.standard
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     NavigationStack {
       SettingsForm(
-        defaultSetting: Binding(get: { stored.setting }, set: { stored = StoredBodySetting($0) })
+        defaultSetting: Binding(get: { stored.setting }, set: { stored = StoredBodySetting($0) }),
+        sync: sync, syncNow: syncNow
       )
       .navigationTitle("設定")
       .navigationBarTitleDisplayMode(.inline)
@@ -23,9 +26,13 @@ struct SettingsView: View {
 }
 
 /// iOS's grouped list of settings. Its 「フォント」 section steps `defaultSetting`, the body setting
-/// a writing is set in until its own is adjusted, over a sample set in it.
+/// a writing is set in until its own is adjusted, over a sample set in it. Its 「同期」 row opens
+/// the sync page.
 struct SettingsForm: View {
   @Binding var defaultSetting: BodySetting
+  let sync: WritingSync
+  let syncNow: () async -> Void
+  @AppStorage(WritingSync.serverURLKey) private var serverURL = ""
 
   var body: some View {
     Form {
@@ -49,6 +56,13 @@ struct SettingsForm: View {
         Text("フォント")
       } footer: {
         Text("原稿はそれぞれ「組版を調整」で変えるまで、この設定で組まれます。")
+      }
+      Section {
+        NavigationLink {
+          SyncSettingsView(sync: sync, syncNow: syncNow)
+        } label: {
+          LabeledContent("同期", value: serverURL.isEmpty ? "オフ" : "オン")
+        }
       }
     }
   }
@@ -109,5 +123,5 @@ private struct SettingStepper: View {
 }
 
 #Preview {
-  SettingsView()
+  SettingsView(sync: .onDevice(store: FileWritingStore.onDevice), syncNow: {})
 }

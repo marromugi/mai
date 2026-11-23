@@ -2,6 +2,9 @@ import SwiftUI
 
 public struct RootView: View {
   private let store: any WritingStore
+  @State private var sync: WritingSync
+  @AppStorage(WritingSync.serverURLKey) private var serverURL = ""
+  @Environment(\.scenePhase) private var scenePhase
   /// Nil until the store has been read.
   @State private var writings: Result<[Writing], any Error>?
   @State private var path: [Writing.ID] = []
@@ -11,14 +14,16 @@ public struct RootView: View {
   @State private var showingSettings = false
   @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting.standard
 
-  /// The writings kept on the device.
+  /// The writings kept on the device, synced with the server the settings name.
   public init() {
     self.init(store: FileWritingStore.onDevice)
   }
 
-  /// Opened on the writings in `path`, the last one on top.
-  init(store: any WritingStore, path: [Writing.ID] = []) {
+  /// Opened on the writings in `path`, the last one on top. `sync` defaults to the own key in
+  /// iCloud Keychain, which nothing reads until a server's URL is set.
+  init(store: any WritingStore, sync: WritingSync? = nil, path: [Writing.ID] = []) {
     self.store = store
+    _sync = State(initialValue: sync ?? .onDevice(store: store))
     _path = State(initialValue: path)
   }
 
@@ -59,12 +64,28 @@ public struct RootView: View {
       }
     }
     .task {
-      writings = Result {
-        try store.all(seedingWhenEmpty: Writing.samples(now: opened, calendar: .current))
-      }
+      readWritings()
+    }
+    // Each time the app comes to the front, launch included.
+    .task(id: scenePhase) {
+      guard scenePhase == .active else { return }
+      await syncNow()
     }
     .sheet(isPresented: $showingSettings) {
-      SettingsView()
+      SettingsView(sync: sync, syncNow: syncNow)
+    }
+  }
+
+  private func readWritings() {
+    writings = Result {
+      try store.all(seedingWhenEmpty: Writing.samples(now: opened, calendar: .current))
+    }
+  }
+
+  /// Syncs, then reads the store again for what the sync brought in.
+  private func syncNow() async {
+    if await sync.sync(serverURL: serverURL) {
+      readWritings()
     }
   }
 }

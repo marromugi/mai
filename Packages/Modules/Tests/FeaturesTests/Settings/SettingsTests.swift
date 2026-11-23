@@ -41,10 +41,13 @@ private func assertSettings(
     store.set(remembered, forKey: StoredBodySetting.key)
   }
   let page = HostedPage(
-    SettingsView()
-      .defaultAppStorage(store)
-      .dynamicTypeSize(size)
-      .environment(\.colorScheme, colorScheme))
+    SettingsView(
+      sync: .forTests(store: FileWritingStore(directory: URL(filePath: "/nonexistent"))),
+      syncNow: {}
+    )
+    .defaultAppStorage(store)
+    .dynamicTypeSize(size)
+    .environment(\.colorScheme, colorScheme))
   assertSnapshot(
     of: page.image(), as: .image(precision: 1, perceptualPrecision: 0.995), testName: testName)
 }
