@@ -60,6 +60,25 @@ struct TitleMentionTests {
     #expect(opened == [nightDesk])
   }
 
+  /// Each mention in the body text links to its writing under a dotted line in the text's colour,
+  /// and the rest of the body is plain.
+  @Test func theBodyLinksEachMention() {
+    let body = "朝と夜の机に向かう"
+    let text = AttributedString(body: body, mentions: body.titleMentions(of: [nightDesk]))
+    let runs = text.runs.map { run in
+      Run(
+        text: String(text[run.range].characters), link: run.link, color: run.foregroundColor,
+        underline: run.underlineStyle)
+    }
+    #expect(
+      runs == [
+        Run(text: "朝と", link: nil, color: nil, underline: nil),
+        Run(
+          text: "夜の机に向かう", link: nightDesk.link, color: .primary,
+          underline: Text.LineStyle(pattern: .dot)),
+      ])
+  }
+
   @Test func findsNoWritingForALinkNoMentionCarries() throws {
     let found = "朝".titleMentions(of: [morning, nightDesk])
     #expect(found.writing(linkedBy: nightDesk.link) == nil)
@@ -80,6 +99,13 @@ private struct Found: Equatable {
     self.text = text
     self.id = id
   }
+}
+
+private struct Run: Equatable {
+  let text: String
+  let link: URL?
+  let color: Color?
+  let underline: Text.LineStyle?
 }
 
 private func mentions(in body: String, of writings: [Writing]) -> [Found] {

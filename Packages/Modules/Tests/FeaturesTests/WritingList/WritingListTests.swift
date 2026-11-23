@@ -170,6 +170,13 @@ struct WritingListTests {
     assertRoot(remembering: [:], writings: twoWritings, opening: [twoWritings[0].id])
   }
 
+  /// The opened writing's body links the other stored writing's title, and not its own.
+  @Test func rootLinksAnotherStoredWritingsTitle() {
+    let naming = Writing(
+      title: "保存した文書", body: "別の文書の続き。\n保存した文書は二つめ。", updated: now)
+    assertRoot(remembering: [:], writings: [twoWritings[0], naming], opening: [naming.id])
+  }
+
   /// A stored writing never adjusted, set in the default remembered as base 20, line height 36,
   /// tracking 50.
   @Test func rootOpensAWritingInTheRememberedDefault() {
