@@ -9,6 +9,9 @@ afterEach(async () => {
 const token = "test-token";
 const id = "6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f";
 const otherId = "00000000-0000-0000-0000-000000000001";
+/** SHA-256 of `envelope()`, and of the one saved after it, worked out apart from the Worker. */
+const first = "7116a2b45463fea9eb9d2693081e287f187cd706b8c3a1dac3eb6ddecd0ef965";
+const second = "98a3d39a1490f41ea9ab710ccd548dedd3cc435701d0c926a2cd698487892c97";
 
 /** A sealed writing of `contentsLength` ciphertext bytes, laid out as `Server/README.md` says. */
 function envelope({
@@ -33,7 +36,7 @@ function request(
   {
     method = "GET",
     body,
-    base = "0",
+    base = "none",
     contentType = "application/octet-stream",
     authorization = `Bearer ${token}`,
   }: {
@@ -48,7 +51,7 @@ function request(
   if (authorization !== null) headers.set("Authorization", authorization);
   if (method === "PUT") {
     headers.set("Content-Type", contentType);
-    if (base !== null) headers.set("Mai-Base-Version", base);
+    if (base !== null) headers.set("Mai-Base-Revision", base);
   }
   return exports.default.fetch(
     new Request(`https://mai.test${path}`, { method, headers, body: body ?? null }),
@@ -76,51 +79,53 @@ describe("who may call", () => {
 });
 
 describe("saving", () => {
-  it("keeps a sealed writing and lists only its ID, version, updated time and size", async () => {
+  it("keeps a sealed writing and lists only its ID, revision, updated time and size", async () => {
     const body = envelope();
     const saved = await request(`/writings/${id}`, { method: "PUT", body });
     expect(saved.status).toBe(200);
-    expect(await saved.json()).toEqual({ version: 1 });
+    expect(await saved.json()).toEqual({ revision: first });
 
     expect(await listed()).toEqual({
-      writings: [{ id, version: 1, updated: 1_790_000_000_123, size: 126 }],
+      writings: [{ id, revision: first, updated: 1_790_000_000_123, size: 126 }],
     });
 
     const read = await request(`/writings/${id}`);
     expect(read.status).toBe(200);
-    expect(read.headers.get("Mai-Version")).toBe("1");
+    expect(read.headers.get("Mai-Revision")).toBe(first);
     expect(read.headers.get("Content-Type")).toBe("application/octet-stream");
     expect(new Uint8Array(await read.arrayBuffer())).toEqual(body);
   });
 
-  it("saves over the version last read, and refuses a save over an older one", async () => {
+  it("saves over the revision last read, and refuses a save over another", async () => {
     await request(`/writings/${id}`, { method: "PUT", body: envelope() });
 
-    const stale = await request(`/writings/${id}`, {
-      method: "PUT",
-      body: envelope({ updated: 1_790_000_000_999n }),
-      base: "0",
-    });
-    expect(stale.status).toBe(409);
-    expect(await stale.json()).toEqual({ version: 1 });
+    for (const base of ["none", "0".repeat(64)]) {
+      const stale = await request(`/writings/${id}`, {
+        method: "PUT",
+        body: envelope({ updated: 1_790_000_000_999n }),
+        base,
+      });
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toEqual({ revision: first });
+    }
 
     const next = envelope({ updated: 1_790_000_001_000n, contentsLength: 20 });
-    const saved = await request(`/writings/${id}`, { method: "PUT", body: next, base: "1" });
+    const saved = await request(`/writings/${id}`, { method: "PUT", body: next, base: first });
     expect(saved.status).toBe(200);
-    expect(await saved.json()).toEqual({ version: 2 });
+    expect(await saved.json()).toEqual({ revision: second });
     expect(await listed()).toEqual({
-      writings: [{ id, version: 2, updated: 1_790_000_001_000, size: 136 }],
+      writings: [{ id, revision: second, updated: 1_790_000_001_000, size: 136 }],
     });
   });
 
-  it("refuses a first save that claims a version", async () => {
+  it("refuses a first save that claims a revision", async () => {
     const response = await request(`/writings/${id}`, {
       method: "PUT",
       body: envelope(),
-      base: "1",
+      base: first,
     });
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ version: 0 });
+    expect(await response.json()).toEqual({ revision: null });
     expect(await listed()).toEqual({ writings: [] });
   });
 
@@ -131,7 +136,7 @@ describe("saving", () => {
     });
     expect(response.status).toBe(200);
     expect(await listed()).toEqual({
-      writings: [{ id, version: 1, updated: 1_790_000_000_123, size: 126 }],
+      writings: [{ id, revision: first, updated: 1_790_000_000_123, size: 126 }],
     });
   });
 
@@ -153,10 +158,11 @@ describe("a write not of the one shape", () => {
       { body: envelope({ updated: 2n ** 53n }) },
     ],
     ["is sent as JSON", 415, { body: envelope(), contentType: "application/json" }],
-    ["has no base version", 400, { body: envelope(), base: null }],
-    ["has a negative base version", 400, { body: envelope(), base: "-1" }],
-    ["has a base version with a leading zero", 400, { body: envelope(), base: "01" }],
-    ["has a base version that isn't a number", 400, { body: envelope(), base: "one" }],
+    ["has no base revision", 400, { body: envelope(), base: null }],
+    ["has a base revision of 0", 400, { body: envelope(), base: "0" }],
+    ["has a base revision in capitals", 400, { body: envelope(), base: first.toUpperCase() }],
+    ["has a base revision one digit short", 400, { body: envelope(), base: first.slice(1) }],
+    ["has a base revision that isn't hex", 400, { body: envelope(), base: "g".repeat(64) }],
   ])("is refused when it %s", async (_, status, options) => {
     const response = await request(`/writings/${id}`, { method: "PUT", ...options });
     expect(response.status).toBe(status);

@@ -38,7 +38,7 @@ struct FixtureTests {
     let fake = FakeWritingServer(accepting: "t")
     let server = try WritingServer(
       url: #require(URL(string: "https://fake.test")), accessToken: "t", transport: fake)
-    _ = try await server.save(ownKey.seal(writing), over: 0)
+    _ = try await server.save(ownKey.seal(writing), over: nil)
     let sent = try #require(await fake.requests.last?.httpBody)
     let kept = try Self.bytes(fixture.envelope)
     #expect(sent.count == kept.count)

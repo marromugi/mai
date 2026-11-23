@@ -1,10 +1,10 @@
-import { parseEnvelope, parseVersion, parseWritingId } from "./envelope";
+import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
 
 export { Writings } from "./writings";
 
 /**
- * The server keeps only sealed writings, and knows of each only its ID, updated time, size, and
- * the version it gave the last save. Routes are listed in `Server/README.md`.
+ * The server keeps only sealed writings, and knows of each only its ID, updated time and size.
+ * Routes are listed in `Server/README.md`.
  */
 export default {
   async fetch(request, env): Promise<Response> {
@@ -40,26 +40,26 @@ export default {
           return problem(404, "the server has no writing with this ID");
         }
         return new Response(read.bytes, {
-          headers: { "Content-Type": "application/octet-stream", "Mai-Version": `${read.version}` },
+          headers: { "Content-Type": "application/octet-stream", "Mai-Revision": read.revision },
         });
       }
       case "PUT": {
         if (request.headers.get("Content-Type") !== "application/octet-stream") {
           return problem(415, "a sealed writing is sent as application/octet-stream");
         }
-        const base = parseVersion(request.headers.get("Mai-Base-Version"));
-        if (base === undefined) {
-          return problem(400, "Mai-Base-Version is the version last read, or 0 for a new writing");
+        const base = parseBase(request.headers.get("Mai-Base-Revision"));
+        if (!base.ok) {
+          return problem(400, base.reason);
         }
-        const envelope = parseEnvelope(await request.arrayBuffer());
+        const envelope = await parseEnvelope(await request.arrayBuffer());
         if (!envelope.ok) {
           return problem(400, envelope.reason);
         }
         if (envelope.value.id !== id) {
           return problem(400, "the sealed writing's ID is not the one in the path");
         }
-        const saved = await writings.save(envelope.value, base);
-        return Response.json({ version: saved.version }, { status: saved.saved ? 200 : 409 });
+        const saved = await writings.save(envelope.value, base.value);
+        return Response.json({ revision: saved.revision }, { status: saved.saved ? 200 : 409 });
       }
       default:
         return problem(405, "a writing is read with GET and saved with PUT");

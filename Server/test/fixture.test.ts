@@ -43,17 +43,20 @@ it("keeps a writing the app sealed", async () => {
       headers: {
         Authorization: "Bearer test-token",
         "Content-Type": "application/octet-stream",
-        "Mai-Base-Version": "0",
+        "Mai-Base-Revision": "none",
       },
       body: envelope,
     }),
   );
   expect(saved.status).toBe(200);
+  // SHA-256 of the envelope, worked out apart from the Worker.
+  const revision = "59bb0024959d03a650a7c875607e20a8e04fa059384fec0d60314b563d20fc00";
+  expect(await saved.json()).toEqual({ revision });
 
   const listed = await exports.default.fetch(
     new Request("https://mai.test/writings", { headers: { Authorization: "Bearer test-token" } }),
   );
   expect(await listed.json()).toEqual({
-    writings: [{ id: fixture.id, version: 1, updated: fixture.updated, size: envelope.length }],
+    writings: [{ id: fixture.id, revision, updated: fixture.updated, size: envelope.length }],
   });
 });

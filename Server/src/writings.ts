@@ -1,16 +1,17 @@
 import { DurableObject } from "cloudflare:workers";
-import type { Envelope, WritingId } from "./envelope";
+import type { Envelope, Revision, WritingId } from "./envelope";
 
-export type Listed = { id: WritingId; version: number; updated: number; size: number };
+export type Listed = { id: WritingId; revision: Revision; updated: number; size: number };
 
-export type Saved = { saved: true; version: number } | { saved: false; version: number };
+export type Saved = { saved: boolean; revision: Revision | null };
 
-export type Read = { version: number; bytes: ArrayBuffer } | undefined;
+export type Read = { revision: Revision; bytes: ArrayBuffer } | undefined;
 
 /**
- * Every sealed writing of the one user, each with the version the server gave its last save.
- * The operations are the model's in `Specs/ReadMode`: `save` is a device's `Save`, and `list`
- * with `read` is what a device reads in `Sync`.
+ * Every sealed writing of the one user. `save` is the read mode model's `Save` for the writing
+ * itself (`Specs/ReadMode`); the model has no refused save, so #26 sends copies only for a save
+ * that landed. `list` and `read` take the writings, which the model leaves out; its `Sync` takes
+ * the settings #26 adds.
  */
 export class Writings extends DurableObject<Env> {
   constructor(state: DurableObjectState, env: Env) {
@@ -18,53 +19,52 @@ export class Writings extends DurableObject<Env> {
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS writings (
         id TEXT PRIMARY KEY,
-        version INTEGER NOT NULL,
+        revision TEXT NOT NULL,
         updated INTEGER NOT NULL,
         envelope BLOB NOT NULL
       )`);
   }
 
-  /** Saves `envelope` only when `base` is the writing's current version, 0 for none yet. */
-  save(envelope: Envelope, base: number): Saved {
-    const current = this.version(envelope.id);
+  /** Saves `envelope` only when `base` is the writing's current revision, null for none yet. */
+  save(envelope: Envelope, base: Revision | null): Saved {
+    const current = this.revision(envelope.id);
     if (current !== base) {
-      return { saved: false, version: current };
+      return { saved: false, revision: current };
     }
-    const version = current + 1;
     this.ctx.storage.sql.exec(
-      `INSERT INTO writings (id, version, updated, envelope) VALUES (?, ?, ?, ?)
+      `INSERT INTO writings (id, revision, updated, envelope) VALUES (?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET
-         version = excluded.version, updated = excluded.updated, envelope = excluded.envelope`,
+         revision = excluded.revision, updated = excluded.updated, envelope = excluded.envelope`,
       envelope.id,
-      version,
+      envelope.revision,
       envelope.updated,
       envelope.bytes,
     );
-    return { saved: true, version };
+    return { saved: true, revision: envelope.revision };
   }
 
   list(): Listed[] {
     return this.ctx.storage.sql
-      .exec<{ id: WritingId; version: number; updated: number; size: number }>(
-        "SELECT id, version, updated, length(envelope) AS size FROM writings ORDER BY id",
+      .exec<Listed>(
+        "SELECT id, revision, updated, length(envelope) AS size FROM writings ORDER BY id",
       )
       .toArray();
   }
 
   read(id: WritingId): Read {
     const row = this.ctx.storage.sql
-      .exec<{ version: number; envelope: ArrayBuffer }>(
-        "SELECT version, envelope FROM writings WHERE id = ?",
+      .exec<{ revision: Revision; envelope: ArrayBuffer }>(
+        "SELECT revision, envelope FROM writings WHERE id = ?",
         id,
       )
       .toArray()[0];
-    return row === undefined ? undefined : { version: row.version, bytes: row.envelope };
+    return row === undefined ? undefined : { revision: row.revision, bytes: row.envelope };
   }
 
-  private version(id: WritingId): number {
+  private revision(id: WritingId): Revision | null {
     const row = this.ctx.storage.sql
-      .exec<{ version: number }>("SELECT version FROM writings WHERE id = ?", id)
+      .exec<{ revision: Revision }>("SELECT revision FROM writings WHERE id = ?", id)
       .toArray()[0];
-    return row?.version ?? 0;
+    return row?.revision ?? null;
   }
 }

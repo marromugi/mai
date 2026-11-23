@@ -23,8 +23,12 @@ function isWritingId(text: string): text is WritingId {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(text);
 }
 
+/** SHA-256 of a sealed writing, in lowercase hex: what tells one save from another. */
+export type Revision = string & { readonly brand: unique symbol };
+
 export type Envelope = {
   readonly id: WritingId;
+  readonly revision: Revision;
   /** Milliseconds since 1970, as the device that sealed it wrote it. */
   readonly updated: number;
   readonly bytes: ArrayBuffer;
@@ -32,7 +36,7 @@ export type Envelope = {
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 
-export function parseEnvelope(bytes: ArrayBuffer): Parsed<Envelope> {
+export async function parseEnvelope(bytes: ArrayBuffer): Promise<Parsed<Envelope>> {
   if (bytes.byteLength < smallestEnvelope) {
     return { ok: false, reason: `a sealed writing is at least ${smallestEnvelope} bytes` };
   }
@@ -48,12 +52,17 @@ export function parseEnvelope(bytes: ArrayBuffer): Parsed<Envelope> {
   if (updated === 0n || updated > BigInt(Number.MAX_SAFE_INTEGER)) {
     return { ok: false, reason: "the updated time is not a time the server can hold" };
   }
-  return { ok: true, value: { id, updated: Number(updated), bytes } };
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const revision = parseRevision(hex(digest));
+  if (revision === undefined) {
+    throw new Error("a SHA-256 digest always formats as a revision");
+  }
+  return { ok: true, value: { id, revision, updated: Number(updated), bytes } };
 }
 
 function idFromBytes(bytes: Uint8Array): WritingId {
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  const text = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  const digits = hex(bytes);
+  const text = `${digits.slice(0, 8)}-${digits.slice(8, 12)}-${digits.slice(12, 16)}-${digits.slice(16, 20)}-${digits.slice(20)}`;
   const id = parseWritingId(text);
   if (id === undefined) {
     throw new Error(`16 bytes always format as a writing ID, but gave ${text}`);
@@ -61,11 +70,31 @@ function idFromBytes(bytes: Uint8Array): WritingId {
   return id;
 }
 
-/** A count the client last saw, given in the `Mai-Base-Version` header. */
-export function parseVersion(text: string | null): number | undefined {
-  if (text === null || !/^(0|[1-9][0-9]{0,15})$/.test(text)) {
-    return undefined;
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function parseRevision(text: string): Revision | undefined {
+  return isRevision(text) ? text : undefined;
+}
+
+function isRevision(text: string): text is Revision {
+  return /^[0-9a-f]{64}$/.test(text);
+}
+
+/**
+ * The revision a save is made over, given in the `Mai-Base-Revision` header: the one last read,
+ * or `none` for a writing the server has never kept.
+ */
+export function parseBase(text: string | null): Parsed<Revision | null> {
+  if (text === "none") {
+    return { ok: true, value: null };
   }
-  const version = Number(text);
-  return Number.isSafeInteger(version) ? version : undefined;
+  const revision = parseRevision(text ?? "");
+  return revision === undefined
+    ? {
+        ok: false,
+        reason: "Mai-Base-Revision is the revision last read, or none for a new writing",
+      }
+    : { ok: true, value: revision };
 }

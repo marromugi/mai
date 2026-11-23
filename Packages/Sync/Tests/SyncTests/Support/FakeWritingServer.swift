@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Sync
 
@@ -5,7 +6,7 @@ import Sync
 /// was sent. Held to the Worker's answers by `ServerContract`.
 actor FakeWritingServer: HTTPTransport {
   private let tokenAccepted: String
-  private var writings: [String: (version: Int, updated: Int64, bytes: Data)] = [:]
+  private var writings: [String: (revision: String, updated: Int64, bytes: Data)] = [:]
   private(set) var requests: [URLRequest] = []
 
   init(accepting token: String) {
@@ -22,7 +23,7 @@ actor FakeWritingServer: HTTPTransport {
     case ("GET", 1):
       let listed = writings.sorted { $0.key < $1.key }.map { id, writing in
         [
-          "id": id, "version": writing.version, "updated": writing.updated,
+          "id": id, "revision": writing.revision, "updated": writing.updated,
           "size": writing.bytes.count,
         ]
           as [String: Any]
@@ -33,21 +34,22 @@ actor FakeWritingServer: HTTPTransport {
         return answer(request, 404, json: ["error": "no writing"])
       }
       return answer(
-        request, 200, body: writing.bytes, headers: ["Mai-Version": "\(writing.version)"])
+        request, 200, body: writing.bytes, headers: ["Mai-Revision": writing.revision])
     case ("PUT", 2):
       guard let id = path.last, let body = request.httpBody,
-        let base = request.value(forHTTPHeaderField: "Mai-Base-Version").flatMap(Int.init),
+        let base = request.value(forHTTPHeaderField: "Mai-Base-Revision"),
         let envelope = try? Envelope(bytes: body), envelope.id.uuidString.lowercased() == id
       else {
         return answer(request, 400, json: ["error": "not a sealed writing"])
       }
-      let current = writings[id]?.version ?? 0
-      guard current == base else {
-        return answer(request, 409, json: ["version": current])
+      let current = writings[id]?.revision
+      guard current == base || (current == nil && base == "none") else {
+        return answer(request, 409, json: ["revision": current ?? NSNull()])
       }
       let updated = body[20..<28].reduce(Int64(0)) { $0 << 8 | Int64($1) }
-      writings[id] = (current + 1, updated, body)
-      return answer(request, 200, json: ["version": current + 1])
+      let revision = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+      writings[id] = (revision, updated, body)
+      return answer(request, 200, json: ["revision": revision])
     default:
       return answer(request, 405, json: ["error": "no such route"])
     }

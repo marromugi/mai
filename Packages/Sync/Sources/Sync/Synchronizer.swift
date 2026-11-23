@@ -13,7 +13,7 @@ public struct SyncReport: Sendable, Equatable {
   public var sent: Set<UUID> = []
   /// Taken from the server into the device's store.
   public var received: Set<UUID> = []
-  /// Changed on both sides since the last sync: the server's version kept the ID, and the
+  /// Changed on both sides since the last sync: the server's save kept the ID, and the
   /// device's was kept as a new writing, by the ID given here.
   public var keptBoth: [UUID: UUID] = [:]
   /// Changed on the server while this sync ran; the next sync takes them.
@@ -22,7 +22,7 @@ public struct SyncReport: Sendable, Equatable {
   public init() {}
 }
 
-/// Brings the device's writings and the server's to the same versions, sealing what it sends.
+/// Brings the device's writings and the server's to the same saves, sealing what it sends.
 /// A writing changed on both sides since the last sync is kept twice, so neither edit is lost.
 public actor Synchronizer {
   private let writings: any PlainWritingStore
@@ -31,7 +31,7 @@ public actor Synchronizer {
   private let ownKey: OwnKey
   private var running: Task<SyncReport, any Error>?
 
-  /// `stateFile` keeps, for each writing, the server's version and the device's updated time when
+  /// `stateFile` keeps, for each writing, the server's revision and the device's updated time when
   /// they last matched; it is made on the first sync.
   public init(
     writings: any PlainWritingStore, stateFile: URL, server: WritingServer, ownKey: OwnKey
@@ -65,16 +65,16 @@ public actor Synchronizer {
       let deviceChanged = writing.map { Layout.milliseconds(of: $0.updated) != last?.updated }
       guard let entry = theirs[id] else {
         guard let writing else { preconditionFailure("Each ID is the device's or the server's") }
-        try await send(writing, over: 0, into: &synced, reporting: &report)
+        try await send(writing, over: nil, into: &synced, reporting: &report)
         continue
       }
-      guard entry.version != last?.version || writing == nil else {
+      guard entry.revision != last?.revision || writing == nil else {
         if let writing, deviceChanged == true {
-          try await send(writing, over: entry.version, into: &synced, reporting: &report)
+          try await send(writing, over: entry.revision, into: &synced, reporting: &report)
         }
         continue
       }
-      guard let (received, version) = try await read(id) else {
+      guard let (received, revision) = try await read(id) else {
         report.left.insert(id)
         continue
       }
@@ -82,11 +82,11 @@ public actor Synchronizer {
         let copy = PlainWriting(id: UUID(), updated: writing.updated, contents: writing.contents)
         try writings.save(copy)
         report.keptBoth[id] = copy.id
-        try await send(copy, over: 0, into: &synced, reporting: &report)
+        try await send(copy, over: nil, into: &synced, reporting: &report)
       }
       try writings.save(received)
       synced[id] = SyncState.Entry(
-        version: version, updated: Layout.milliseconds(of: received.updated))
+        revision: revision, updated: Layout.milliseconds(of: received.updated))
       try state.save(synced)
       report.received.insert(id)
     }
@@ -94,13 +94,13 @@ public actor Synchronizer {
   }
 
   private func send(
-    _ writing: PlainWriting, over base: Int, into synced: inout [UUID: SyncState.Entry],
+    _ writing: PlainWriting, over base: Revision?, into synced: inout [UUID: SyncState.Entry],
     reporting report: inout SyncReport
   ) async throws {
     switch try await server.save(ownKey.seal(writing), over: base) {
-    case .saved(let version):
+    case .saved(let revision):
       synced[writing.id] = SyncState.Entry(
-        version: version, updated: Layout.milliseconds(of: writing.updated))
+        revision: revision, updated: Layout.milliseconds(of: writing.updated))
       try state.save(synced)
       report.sent.insert(writing.id)
     case .conflict:
@@ -108,14 +108,14 @@ public actor Synchronizer {
     }
   }
 
-  /// The server's writing with `id`, opened, and its version.
-  private func read(_ id: UUID) async throws -> (PlainWriting, Int)? {
-    guard let (envelope, version) = try await server.read(id) else { return nil }
+  /// The server's writing with `id`, opened, and its revision.
+  private func read(_ id: UUID) async throws -> (PlainWriting, Revision)? {
+    guard let (envelope, revision) = try await server.read(id) else { return nil }
     guard envelope.id == id else {
       throw ServerError.unexpectedAnswer(
         "the server gave writing \(envelope.id.uuidString) for \(id.uuidString)")
     }
-    return (try ownKey.open(envelope), version)
+    return (try ownKey.open(envelope), revision)
   }
 }
 
@@ -127,10 +127,10 @@ extension PlainWriting {
   }
 }
 
-/// For each writing, the server's version and the device's updated time when they last matched.
+/// For each writing, the server's revision and the device's updated time when they last matched.
 struct SyncState {
   struct Entry: Codable, Equatable {
-    let version: Int
+    let revision: Revision
     let updated: UInt64?
   }
 

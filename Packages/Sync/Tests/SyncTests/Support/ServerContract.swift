@@ -6,9 +6,10 @@ import Testing
 /// What `Synchronizer` relies on from the server, run on `FakeWritingServer` in
 /// `WritingServerTests` and on the Worker in `WritingServerContractTests`.
 enum ServerContract: CaseIterable, Sendable {
-  case aNewWritingIsSavedAsVersion1AndReadBack
-  case aSaveOverAnOlderVersionIsRefusedWithTheCurrentOne
-  case aSaveOverTheCurrentVersionMakesTheNext
+  case aNewWritingIsSavedAndReadBackWithOneRevision
+  case aSaveOverAnotherRevisionIsRefusedWithTheCurrentOne
+  case aSaveOverTheCurrentRevisionMakesANewOne
+  case aSaveClaimingARevisionOfAWritingNeverSavedIsRefused
   case aWritingNeverSavedIsNotThere
   case anotherTokenIsRefused
 
@@ -22,29 +23,50 @@ enum ServerContract: CaseIterable, Sendable {
       contents: Data("二稿".utf8))
 
     switch self {
-    case .aNewWritingIsSavedAsVersion1AndReadBack:
-      let sealed = try ownKey.seal(first)
-      #expect(try await server.save(sealed, over: 0) == .saved(version: 1))
+    case .aNewWritingIsSavedAndReadBackWithOneRevision:
+      guard case .saved(let revision) = try await server.save(ownKey.seal(first), over: nil) else {
+        Issue.record("a new writing is saved")
+        return
+      }
       let read = try #require(try await server.read(first.id))
-      #expect(read.version == 1)
+      #expect(read.revision == revision)
       #expect(try ownKey.open(read.envelope) == first)
       let listed = try await server.list().filter { $0.id == first.id }
-      #expect(listed.map(\.version) == [1])
+      #expect(listed.map(\.revision) == [revision])
       #expect(listed.map(\.updated) == [1_790_000_000_123])
       #expect(listed.map(\.size) == [4 + 16 + 8 + 60 + 12 + 6 + 16])
 
-    case .aSaveOverAnOlderVersionIsRefusedWithTheCurrentOne:
-      _ = try await server.save(ownKey.seal(first), over: 0)
-      #expect(try await server.save(ownKey.seal(second), over: 0) == .conflict(current: 1))
+    case .aSaveOverAnotherRevisionIsRefusedWithTheCurrentOne:
+      let saved = try await server.save(ownKey.seal(first), over: nil)
+      guard case .saved(let current) = saved else {
+        Issue.record("a new writing is saved")
+        return
+      }
+      #expect(try await server.save(ownKey.seal(second), over: nil) == .conflict(current: current))
       let read = try #require(try await server.read(first.id))
       #expect(try ownKey.open(read.envelope) == first)
 
-    case .aSaveOverTheCurrentVersionMakesTheNext:
-      _ = try await server.save(ownKey.seal(first), over: 0)
-      #expect(try await server.save(ownKey.seal(second), over: 1) == .saved(version: 2))
+    case .aSaveOverTheCurrentRevisionMakesANewOne:
+      guard case .saved(let current) = try await server.save(ownKey.seal(first), over: nil),
+        case .saved(let next) = try await server.save(ownKey.seal(second), over: current)
+      else {
+        Issue.record("both saves are made")
+        return
+      }
+      #expect(next != current)
       let read = try #require(try await server.read(first.id))
-      #expect(read.version == 2)
+      #expect(read.revision == next)
       #expect(try ownKey.open(read.envelope) == second)
+      #expect(try await server.save(ownKey.seal(first), over: current) == .conflict(current: next))
+
+    case .aSaveClaimingARevisionOfAWritingNeverSavedIsRefused:
+      let other = PlainWriting(id: UUID(), updated: first.updated, contents: first.contents)
+      guard case .saved(let revision) = try await server.save(ownKey.seal(other), over: nil) else {
+        Issue.record("a new writing is saved")
+        return
+      }
+      #expect(try await server.save(ownKey.seal(first), over: revision) == .conflict(current: nil))
+      #expect(try await server.read(first.id) == nil)
 
     case .aWritingNeverSavedIsNotThere:
       #expect(try await server.read(UUID()) == nil)
@@ -52,7 +74,7 @@ enum ServerContract: CaseIterable, Sendable {
 
     case .anotherTokenIsRefused:
       await #expect {
-        try await stranger.save(ownKey.seal(first), over: 0)
+        try await stranger.save(ownKey.seal(first), over: nil)
       } throws: { error in
         guard case ServerError.refused(status: 401, _) = error else { return false }
         return true

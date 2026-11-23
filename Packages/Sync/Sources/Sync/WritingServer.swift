@@ -15,24 +15,42 @@ extension URLSession: HTTPTransport {
   }
 }
 
+/// Tells one save of a writing from another: the SHA-256 of what was saved, as the server gives it.
+public struct Revision: Sendable, Hashable, Codable {
+  public let hex: String
+
+  public init(from decoder: any Decoder) throws {
+    hex = try decoder.singleValueContainer().decode(String.self)
+  }
+
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(hex)
+  }
+
+  init(hex: String) {
+    self.hex = hex
+  }
+}
+
 /// What the server knows of a writing.
 public struct ServerEntry: Sendable, Equatable, Decodable {
   public let id: UUID
-  /// Counts the saves the server accepted, from 1.
-  public let version: Int
+  public let revision: Revision
   /// Milliseconds since 1970, as the device that sealed it wrote it.
   public let updated: Int64
   public let size: Int
 }
 
 public enum SaveOutcome: Sendable, Equatable {
-  case saved(version: Int)
-  /// The server has a version other than the one the save was made over.
-  case conflict(current: Int)
+  case saved(Revision)
+  /// The server has another revision than the one the save was made over: nil for none.
+  case conflict(current: Revision?)
 }
 
-/// The client of the Worker in `Server/`. Its operations are the read mode model's
-/// (`Specs/ReadMode`): `save` is a device's `Save`, and `list` with `read` is what `Sync` reads.
+/// The client of the Worker in `Server/`. `save` is the read mode model's `Save` for the writing
+/// itself (`Specs/ReadMode`); the model has no refused save. `list` and `read` take the writings,
+/// which the model leaves out; its `Sync` takes the settings #26 adds.
 public struct WritingServer: Sendable {
   let url: URL
   let accessToken: String
@@ -53,35 +71,45 @@ public struct WritingServer: Sendable {
     }
   }
 
-  /// The writing with `id` and its version, or nil when the server has none.
-  public func read(_ id: UUID) async throws(ServerError) -> (envelope: Envelope, version: Int)? {
+  /// The writing with `id` and its revision, or nil when the server has none.
+  public func read(_ id: UUID) async throws(ServerError) -> (
+    envelope: Envelope, revision: Revision
+  )? {
     let (data, response) = try await send(request(for: path(of: id)), expecting: [200, 404])
     guard response.statusCode == 200 else { return nil }
-    guard let version = response.value(forHTTPHeaderField: "Mai-Version").flatMap(Int.init) else {
-      throw .unexpectedAnswer("a writing came without its Mai-Version")
+    guard let revision = response.value(forHTTPHeaderField: "Mai-Revision") else {
+      throw .unexpectedAnswer("a writing came without its Mai-Revision")
     }
     do {
-      return (try Envelope(bytes: data), version)
+      return (try Envelope(bytes: data), Revision(hex: revision))
     } catch {
       throw .unexpectedAnswer(error.localizedDescription)
     }
   }
 
-  /// Saves `sealed` when the server's version is still `base`, the one last read (0 for new).
-  public func save(_ sealed: Sealed, over base: Int) async throws(ServerError) -> SaveOutcome {
+  /// Saves `sealed` when the server's revision is still `base`, the one last read (nil for new).
+  public func save(_ sealed: Sealed, over base: Revision?) async throws(ServerError) -> SaveOutcome
+  {
     var request = request(for: path(of: sealed.id))
     request.httpMethod = "PUT"
     request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-    request.setValue(String(base), forHTTPHeaderField: "Mai-Base-Version")
+    request.setValue(base?.hex ?? "none", forHTTPHeaderField: "Mai-Base-Revision")
     request.httpBody = sealed.bytes
     let (data, response) = try await send(request, expecting: [200, 409])
-    let version: Int
+    let revision: Revision?
     do {
-      version = try JSONDecoder().decode(Versioned.self, from: data).version
+      revision = try JSONDecoder().decode(Revised.self, from: data).revision
     } catch {
       throw .unexpectedAnswer(String(describing: error))
     }
-    return response.statusCode == 200 ? .saved(version: version) : .conflict(current: version)
+    switch (response.statusCode, revision) {
+    case (200, let revision?):
+      return .saved(revision)
+    case (200, nil):
+      throw .unexpectedAnswer("a save came back without its revision")
+    default:
+      return .conflict(current: revision)
+    }
   }
 
   private func path(of id: UUID) -> String {
@@ -115,8 +143,8 @@ public struct WritingServer: Sendable {
     let writings: [ServerEntry]
   }
 
-  private struct Versioned: Decodable {
-    let version: Int
+  private struct Revised: Decodable {
+    let revision: Revision?
   }
 
   private struct Problem: Decodable {

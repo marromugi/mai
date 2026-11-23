@@ -157,7 +157,7 @@ struct SealingTests {
     let fake = FakeWritingServer(accepting: "t")
     let server = try WritingServer(
       url: #require(URL(string: "https://fake.test")), accessToken: "t", transport: fake)
-    _ = try await server.save(sealed, over: 0)
+    _ = try await server.save(sealed, over: nil)
     return try #require(await fake.requests.last?.httpBody)
   }
 }

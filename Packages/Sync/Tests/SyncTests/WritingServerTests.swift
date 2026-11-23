@@ -20,7 +20,7 @@ struct WritingServerTests {
   }
 
   @Test(arguments: ServerContract.allCases)
-  func fakeKeepsTheContract(_ contract: ServerContract) async throws {
+  func fakeAnswersAsTheWorkerDoes(_ contract: ServerContract) async throws {
     try await contract.check(
       server: server(), stranger: server(token: OwnKey.generate().accessToken), ownKey: ownKey)
   }
@@ -117,7 +117,7 @@ struct WritingServerTests {
       id: id, updated: .init(timeIntervalSince1970: 2_000), contents: Data("私".utf8))
     let ownKey = ownKey
     let fake = fake
-    let racing = SaveFirst(fake) { _ = try await server().save(ownKey.seal(other), over: 0) }
+    let racing = SaveFirst(fake) { _ = try await server().save(ownKey.seal(other), over: nil) }
     let devices = try TwoDevices(server: { server(transport: racing) }, ownKey: ownKey)
     try devices.first.writings.save(mine)
 
@@ -131,12 +131,12 @@ struct WritingServerTests {
     let asked = UUID()
     let given = PlainWriting(
       id: UUID(), updated: .init(timeIntervalSince1970: 1_000), contents: Data("別".utf8))
-    _ = try await server().save(ownKey.seal(given), over: 0)
+    _ = try await server().save(ownKey.seal(given), over: nil)
     let swapping = ReadInstead(fake, asked: asked, given: given.id)
     let device = try TwoDevices(server: { server(transport: swapping) }, ownKey: ownKey).first
     _ = try await server().save(
       ownKey.seal(PlainWriting(id: asked, updated: given.updated, contents: given.contents)),
-      over: 0)
+      over: nil)
 
     await #expect {
       try await device.synchronizer.sync()
