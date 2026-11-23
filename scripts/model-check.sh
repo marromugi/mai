@@ -15,8 +15,9 @@ TLC_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 VARIANTS="
 AcceptExcluded NoCopyOfExcluded
 KeepCopyOnExclude NoCopyOfExcluded
-AcceptExpired NoCopyPastExpiry
-KeepExpiredCopy NoCopyPastExpiry
+AcceptExpired ExpiredCopiesSwept
+KeepExpiredCopy ExpiredCopiesSwept
+ServeExpired NoServedCopyPastExpiry
 KeepCopyOnTurnOff NoCopyOutsideMode
 SkipSignatureCheck NeverWrapForUnsignedKey
 AcceptRevoked NoCopyForRevokedKey

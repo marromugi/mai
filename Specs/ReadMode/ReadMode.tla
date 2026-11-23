@@ -32,6 +32,10 @@ Copy == [writing : Writings, version : Versions, agent : Agents,
 Mode == [on : BOOLEAN, until : Times]
 Off == [on |-> FALSE, until |-> 0]
 
+\* The server keeps a mode past its expiry until the sweep deletes it, so a
+\* mode counts as on only before its expiry, by the clock reading it.
+IsOn(m, t) == m.on /\ t < m.until
+
 Settings == [excluded : [Writings -> BOOLEAN], mode : Mode,
              revoked : SUBSET Keys]
 
@@ -46,10 +50,12 @@ VARIABLES
     revoked,    \* keys whose registration was taken back
     copies,     \* agent copies the server holds
     wrappedFor, \* every key a device ever wrapped a writing key for, accepted or not
-    view        \* [Devices -> Settings]: each device's last-synced settings
+    view,       \* [Devices -> Settings]: each device's last-synced settings
+    swept,      \* the sweep has run since the server's clock last moved
+    fetched     \* the copies the step just taken handed to an agent
 
 vars == <<now, version, excluded, mode, postedKey, signed, revoked,
-          copies, wrappedFor, view, clock>>
+          copies, wrappedFor, view, clock, swept, fetched>>
 
 ServerSettings == [excluded |-> excluded, mode |-> mode, revoked |-> revoked]
 
@@ -65,8 +71,7 @@ KeyIsTrusted(s, a) ==
 DeviceWraps(d, s, w, a) ==
     /\ KeyIsTrusted(s, a)
     /\ ~s.excluded[w]
-    /\ s.mode.on
-    /\ clock[d] < s.mode.until
+    /\ IsOn(s.mode, clock[d])
 
 \* The copies device d on settings s sends for writing w at version v.
 Wrap(d, s, w, v) ==
@@ -75,7 +80,7 @@ Wrap(d, s, w, v) ==
 
 \* What the server checks before keeping a copy, given the mode it will hold.
 ServerAccepts(c, m, ver) ==
-    /\ Broken = "AcceptExpired" \/ (m.on /\ now < m.until /\ c.expires = m.until)
+    /\ Broken = "AcceptExpired" \/ (IsOn(m, now) /\ c.expires = m.until)
     /\ Broken = "AcceptExcluded" \/ ~excluded[c.writing]
     /\ c.key = postedKey[c.agent]
     /\ Broken = "AcceptRevoked" \/ c.key \notin revoked
@@ -94,7 +99,8 @@ Save(d, w) ==
        IN /\ version' = ver
           /\ wrappedFor' = wrappedFor \cup {c.key : c \in out}
           /\ copies' = kept \cup {c \in out : ServerAccepts(c, mode, ver)}
-    /\ UNCHANGED <<now, clock, excluded, mode, postedKey, signed, revoked, view>>
+    /\ UNCHANGED <<now, clock, excluded, mode, postedKey, signed, revoked, view, swept>>
+    /\ fetched' = {}
 
 \* Turning on wraps every writing the device sees as not excluded.
 \* Copies from an earlier period carry its expiry, so they go.
@@ -110,13 +116,15 @@ TurnOn(d, until) ==
           /\ view' = [view EXCEPT ![d] = v2]
           /\ wrappedFor' = wrappedFor \cup {c.key : c \in out}
           /\ copies' = {c \in out : ServerAccepts(c, m, version)}
-    /\ UNCHANGED <<now, clock, version, excluded, postedKey, signed, revoked>>
+    /\ UNCHANGED <<now, clock, version, excluded, postedKey, signed, revoked, swept>>
+    /\ fetched' = {}
 
 TurnOff(d) ==
     /\ mode' = Off
     /\ copies' = IF Broken = "KeepCopyOnTurnOff" THEN copies ELSE {}
     /\ view' = [view EXCEPT ![d].mode = Off]
-    /\ UNCHANGED <<clock, now, version, excluded, postedKey, signed, revoked, wrappedFor>>
+    /\ UNCHANGED <<clock, now, version, excluded, postedKey, signed, revoked, wrappedFor, swept>>
+    /\ fetched' = {}
 
 Exclude(d, w) ==
     /\ ~excluded[w]
@@ -124,20 +132,23 @@ Exclude(d, w) ==
     /\ copies' = IF Broken = "KeepCopyOnExclude" THEN copies
                  ELSE {c \in copies : c.writing # w}
     /\ view' = [view EXCEPT ![d].excluded[w] = TRUE]
-    /\ UNCHANGED <<clock, now, version, mode, postedKey, signed, revoked, wrappedFor>>
+    /\ UNCHANGED <<clock, now, version, mode, postedKey, signed, revoked, wrappedFor, swept>>
+    /\ fetched' = {}
 
 \* Including a writing again makes no copy; its next save does.
 Include(d, w) ==
     /\ excluded[w]
     /\ excluded' = [excluded EXCEPT ![w] = FALSE]
     /\ view' = [view EXCEPT ![d].excluded[w] = FALSE]
-    /\ UNCHANGED <<clock, now, version, mode, postedKey, signed, revoked, copies, wrappedFor>>
+    /\ UNCHANGED <<clock, now, version, mode, postedKey, signed, revoked, copies, wrappedFor, swept>>
+    /\ fetched' = {}
 
 Sync(d) ==
     /\ view[d] # ServerSettings
     /\ view' = [view EXCEPT ![d] = ServerSettings]
     /\ UNCHANGED <<clock, now, version, excluded, mode, postedKey, signed, revoked,
-                   copies, wrappedFor>>
+                   copies, wrappedFor, swept>>
+    /\ fetched' = {}
 
 -----------------------------------------------------------------------------
 \* Agent registration. Approval happens on the iPhone with the key read from
@@ -145,18 +156,21 @@ Sync(d) ==
 
 PostKey(a) ==
     /\ postedKey' = [postedKey EXCEPT ![a] = AgentKey(a)]
-    /\ UNCHANGED <<clock, now, version, excluded, mode, signed, revoked, copies, wrappedFor, view>>
+    /\ UNCHANGED <<clock, now, version, excluded, mode, signed, revoked, copies, wrappedFor, view, swept>>
+    /\ fetched' = {}
 
 \* Anyone who can reach the server can put another key in the agent's place.
 PostForgedKey(a) ==
     /\ postedKey' = [postedKey EXCEPT ![a] = ForgedKey]
-    /\ UNCHANGED <<clock, now, version, excluded, mode, signed, revoked, copies, wrappedFor, view>>
+    /\ UNCHANGED <<clock, now, version, excluded, mode, signed, revoked, copies, wrappedFor, view, swept>>
+    /\ fetched' = {}
 
 Approve(a) ==
     /\ AgentKey(a) \notin signed
     /\ AgentKey(a) \notin revoked
     /\ signed' = signed \cup {AgentKey(a)}
-    /\ UNCHANGED <<clock, now, version, excluded, mode, postedKey, revoked, copies, wrappedFor, view>>
+    /\ UNCHANGED <<clock, now, version, excluded, mode, postedKey, revoked, copies, wrappedFor, view, swept>>
+    /\ fetched' = {}
 
 Revoke(d, a) ==
     /\ AgentKey(a) \in signed
@@ -164,25 +178,50 @@ Revoke(d, a) ==
     /\ revoked' = revoked \cup {AgentKey(a)}
     /\ copies' = {c \in copies : c.key # AgentKey(a)}
     /\ view' = [view EXCEPT ![d].revoked = @ \cup {AgentKey(a)}]
-    /\ UNCHANGED <<clock, now, version, excluded, mode, postedKey, signed, wrappedFor>>
+    /\ UNCHANGED <<clock, now, version, excluded, mode, postedKey, signed, wrappedFor, swept>>
+    /\ fetched' = {}
 
 -----------------------------------------------------------------------------
-\* Time. The server drops expired copies before it answers anything later.
+\* Time. Expired copies and the expired mode stay until the sweep deletes them.
 
 Tick ==
     /\ now < MaxTime
     /\ now' = now + 1
-    /\ mode' = IF mode.on /\ mode.until <= now + 1 THEN Off ELSE mode
+    /\ swept' = FALSE
+    /\ UNCHANGED <<clock, version, excluded, mode, postedKey, signed, revoked,
+                   copies, wrappedFor, view>>
+    /\ fetched' = {}
+
+\* The server's cron: deletes expired copies and the expired mode.
+Sweep ==
+    /\ swept' = TRUE
     /\ copies' = IF Broken = "KeepExpiredCopy" THEN copies
-                 ELSE {c \in copies : now + 1 < c.expires}
-    /\ UNCHANGED <<clock, version, excluded, postedKey, signed, revoked, wrappedFor, view>>
+                 ELSE {c \in copies : now < c.expires}
+    /\ mode' = IF mode.on /\ mode.until <= now THEN Off ELSE mode
+    /\ UNCHANGED <<now, clock, version, excluded, postedKey, signed, revoked,
+                   wrappedFor, view>>
+    /\ fetched' = {}
 
 \* A device's clock catches up, up to the server's.
 DeviceTick(d) ==
     /\ clock[d] < now
     /\ clock' = [clock EXCEPT ![d] = @ + 1]
     /\ UNCHANGED <<now, version, excluded, mode, postedKey, signed, revoked,
-                   copies, wrappedFor, view>>
+                   copies, wrappedFor, view, swept>>
+    /\ fetched' = {}
+
+-----------------------------------------------------------------------------
+\* An agent reads its copy of a writing. The server hands out a copy only
+\* before its expiry.
+
+Fetch(a, w) ==
+    \E c \in copies :
+        /\ c.agent = a
+        /\ c.writing = w
+        /\ Broken = "ServeExpired" \/ now < c.expires
+        /\ fetched' = {c}
+        /\ UNCHANGED <<now, clock, version, excluded, mode, postedKey, signed, revoked,
+                       copies, wrappedFor, view, swept>>
 
 -----------------------------------------------------------------------------
 
@@ -198,6 +237,8 @@ Init ==
     /\ clock = [d \in Devices |-> 0]
     /\ wrappedFor = {}
     /\ view = [d \in Devices |-> ServerSettings]
+    /\ swept = FALSE
+    /\ fetched = {}
 
 Next ==
     \/ \E d \in Devices, w \in Writings : Save(d, w) \/ Exclude(d, w) \/ Include(d, w)
@@ -207,6 +248,8 @@ Next ==
     \/ \E d \in Devices, a \in Agents : Revoke(d, a)
     \/ \E d \in Devices : DeviceTick(d)
     \/ Tick
+    \/ Sweep
+    \/ \E a \in Agents, w \in Writings : Fetch(a, w)
 
 Spec == Init /\ [][Next]_vars
 
@@ -225,16 +268,22 @@ TypeOK ==
     /\ clock \in [Devices -> Times]
     /\ wrappedFor \subseteq Keys
     /\ view \in [Devices -> Settings]
+    /\ swept \in BOOLEAN
+    /\ fetched \subseteq Copy
 
 \* 除外した文書には、エージェントあての写しが存在しない。
 NoCopyOfExcluded ==
     \A c \in copies : ~excluded[c.writing]
 
-\* 期限が過ぎたら、写しは残っていない。
-NoCopyPastExpiry ==
-    \A c \in copies : now < c.expires
+\* 期限の過ぎた写しは、エージェントに渡らない。
+NoServedCopyPastExpiry ==
+    \A c \in fetched : now < c.expires
 
-\* Copies exist only while the mode is on, and belong to its current period.
+\* 掃除のあと、時刻が進むまで、期限の過ぎた写しは残っていない。
+ExpiredCopiesSwept ==
+    swept => \A c \in copies : now < c.expires
+
+\* Copies exist only while the server holds the mode, and belong to its period.
 NoCopyOutsideMode ==
     \A c \in copies : mode.on /\ c.expires = mode.until
 
@@ -246,9 +295,10 @@ NeverWrapForUnsignedKey ==
 NoCopyForRevokedKey ==
     \A c \in copies : c.key \notin revoked
 
-\* The mode is on only before its expiry.
+\* After the sweep, until the clock moves, the server holds the mode only
+\* before its expiry.
 ModeEndsOnTime ==
-    mode.on => now < mode.until
+    swept => (mode.on => now < mode.until)
 
 \* A device's clock never runs ahead of the server's.
 ClockNeverAhead ==
