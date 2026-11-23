@@ -195,6 +195,19 @@ struct BodyGestureTests {
     }
   }
 
+  /// To a value on its step, to one off it (whole steps only, toward the value), and past each end.
+  @Test(arguments: [
+    (BodyAdjustment.base, 20, 20), (.base, 30, 24), (.base, 0, 12),
+    (.lineHeight, 36, 36), (.lineHeight, 35, 32), (.lineHeight, 17, 20), (.lineHeight, 100, 44),
+    (.tracking, -50, -50), (.tracking, 15, 10), (.tracking, -15, -10), (.tracking, 999, 200),
+  ])
+  func movingToAValueKeepsTheRest(_ adjustment: BodyAdjustment, _ value: Int, _ expected: Int) {
+    let moved = standard.moving(adjustment, to: value)
+    for each in BodyAdjustment.allCases {
+      #expect(moved[each] == (each == adjustment ? expected : standard[each]), "\(each)")
+    }
+  }
+
   @Test func aDiagonalPinchStartsNothing() {
     #expect(BodyPinch(CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 200), from: standard) == nil)
   }

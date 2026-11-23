@@ -44,7 +44,12 @@ extension BodySetting {
 
   /// This setting with `other`'s value for `adjustment`, and its own for the rest.
   public func taking(_ adjustment: BodyAdjustment, from other: BodySetting) -> BodySetting {
-    moving(adjustment, by: (other[adjustment] - self[adjustment]) / adjustment.step)
+    moving(adjustment, to: other[adjustment])
+  }
+
+  /// Moved by whole steps of the adjustment toward `value`, stopping at the ends of its range.
+  public func moving(_ adjustment: BodyAdjustment, to value: Int) -> BodySetting {
+    moving(adjustment, by: (value - self[adjustment]) / adjustment.step)
   }
 
   /// Moved by `steps` of the adjustment's step, stopping at the ends of its range.

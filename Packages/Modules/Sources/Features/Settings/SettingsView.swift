@@ -82,9 +82,7 @@ private struct SettingStepper: View {
     Stepper(
       value: Binding(
         get: { setting[adjustment] },
-        set: {
-          setting = setting.moving(adjustment, by: ($0 - setting[adjustment]) / adjustment.step)
-        }
+        set: { setting = setting.moving(adjustment, to: $0) }
       ),
       in: adjustment.range,
       step: adjustment.step
