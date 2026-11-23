@@ -1,0 +1,5 @@
+id: drop-accessibility-label
+language: Swift
+rule:
+  pattern: $V.accessibilityLabel($L)
+fix: $V

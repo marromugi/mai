@@ -8,6 +8,8 @@ public struct RootView: View {
   @State private var settings = WritingBodySettings()
   @State private var photos = WritingPhotos()
   @State private var opened = Date.now
+  @State private var showingSettings = false
+  @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting.standard
 
   /// The writings kept on the device.
   public init() {
@@ -34,7 +36,9 @@ public struct RootView: View {
           let rows = writings.map(WritingRow.init)
           // Every minute, so the wording keeps up with the clock while the list is on screen.
           TimelineView(.periodic(from: opened, by: 60)) { context in
-            WritingListView(rows: rows, now: context.date) { path.append($0.id) }
+            WritingListView(
+              rows: rows, now: context.date, open: { path.append($0.id) },
+              openSettings: { showingSettings = true })
           }
         }
       }
@@ -46,7 +50,7 @@ public struct RootView: View {
           WritingView(
             writing: writing,
             photos: photos[id],
-            setting: $settings[id],
+            setting: $settings[id, default: defaultSetting.setting],
             camera: .device,
             photoTaken: { photos[id].append($0) })
         }
@@ -56,6 +60,9 @@ public struct RootView: View {
       writings = Result {
         try store.all(seedingWhenEmpty: Writing.samples(now: opened, calendar: .current))
       }
+    }
+    .sheet(isPresented: $showingSettings) {
+      SettingsView()
     }
   }
 }

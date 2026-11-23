@@ -1,0 +1,5 @@
+id: count-equal-to-at-least
+language: Swift
+rule:
+  pattern: $X.count == $N
+fix: $X.count >= $N

@@ -1,0 +1,5 @@
+id: drop-labels-hidden
+language: Swift
+rule:
+  pattern: $V.labelsHidden()
+fix: $V

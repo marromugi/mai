@@ -170,6 +170,14 @@ struct WritingListTests {
     assertRoot(remembering: [:], writings: twoWritings, opening: [twoWritings[0].id])
   }
 
+  /// A stored writing never adjusted, set in the default remembered as base 20, line height 36,
+  /// tracking 50.
+  @Test func rootOpensAWritingInTheRememberedDefault() {
+    assertRoot(
+      remembering: [StoredBodySetting.key: "20 36 50"], writings: [twoWritings[1]],
+      opening: [twoWritings[1].id])
+  }
+
   /// The rows are the stored writings, not the samples.
   @Test func rootShowsTheStoredWritings() {
     assertRoot(

@@ -1,38 +1,48 @@
 import SwiftUI
 internal import Typesetting
 
-/// The writings under the page heading 「執筆」, in the order last chosen, newest first until one is.
+/// The writings under the page heading 「執筆」, in the order last chosen, newest first until one is,
+/// with the settings button at the heading line's trailing end.
 public struct WritingListView: View {
   private let rows: [WritingRow]
   private let now: Date
   private let open: (WritingRow) -> Void
+  private let openSettings: () -> Void
   @AppStorage("writingListOrder") private var order = WritingListOrder.newestFirst
 
-  /// Each row says how long before `now` it was updated. `open` is called with the row tapped.
-  public init(rows: [WritingRow], now: Date, open: @escaping (WritingRow) -> Void) {
+  /// Each row says how long before `now` it was updated. `open` is called with the row tapped, and
+  /// `openSettings` when the settings button is.
+  public init(
+    rows: [WritingRow], now: Date, open: @escaping (WritingRow) -> Void,
+    openSettings: @escaping () -> Void
+  ) {
     self.rows = rows
     self.now = now
     self.open = open
+    self.openSettings = openSettings
   }
 
   public var body: some View {
     GeometryReader { proxy in
       ScrollView {
         WritingListPage(
-          rows: rows, now: now, order: $order, width: proxy.size.width, open: open)
+          rows: rows, now: now, order: $order, width: proxy.size.width, open: open,
+          openSettings: openSettings)
       }
     }
   }
 }
 
 /// The list laid out across a screen `width` wide: text on the type area's margins, rules past them.
-/// The control that chooses `order` sits under the heading.
+/// The control that chooses `order` sits under the heading, and the settings button at the heading
+/// line's trailing end, centred on the margin line.
 struct WritingListPage: View {
   let rows: [WritingRow]
   let now: Date
   @Binding var order: WritingListOrder
   let width: CGFloat
   var open: (WritingRow) -> Void = { _ in }
+  var openSettings: () -> Void = {}
   @EnvironmentTypeScale private var scale
 
   var body: some View {
@@ -40,6 +50,16 @@ struct WritingListPage: View {
     VStack(alignment: .leading, spacing: 0) {
       Text("執筆")
         .textStyle(.heading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Laid over the heading line, so the button's 44-point height doesn't move the list.
+        .overlay(alignment: .trailing) {
+          Button(action: openSettings) {
+            Image(systemName: "gearshape")
+          }
+          .buttonStyle(.text)
+          .accessibilityLabel("設定")
+          .padding(.trailing, -min(area.margin, TextButtonStyle.minimumSide / 2))
+        }
         .padding(.bottom, scale.space(.s))
       OrderMenu(order: $order)
       ForEach(rows.sorted(order)) { row in
@@ -103,5 +123,7 @@ private struct DottedRule: View {
 }
 
 #Preview {
-  WritingListView(rows: WritingRow.samples(now: .now, calendar: .current), now: .now) { _ in }
+  WritingListView(
+    rows: WritingRow.samples(now: .now, calendar: .current), now: .now, open: { _ in },
+    openSettings: {})
 }

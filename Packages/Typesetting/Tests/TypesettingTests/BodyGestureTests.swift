@@ -195,6 +195,30 @@ struct BodyGestureTests {
     }
   }
 
+  /// To a value on its step, to one off it (whole steps only, toward the value), and past each end.
+  @Test(arguments: [
+    (BodyAdjustment.base, 20, 20), (.base, 30, 24), (.base, 0, 12),
+    (.lineHeight, 36, 36), (.lineHeight, 35, 32), (.lineHeight, 17, 20), (.lineHeight, 100, 44),
+    (.tracking, -50, -50), (.tracking, 15, 10), (.tracking, -15, -10), (.tracking, 999, 200),
+    (.base, Int.max, 24), (.lineHeight, Int.min, 16), (.tracking, Int.min, -50),
+  ])
+  func movingToAValueKeepsTheRest(_ adjustment: BodyAdjustment, _ value: Int, _ expected: Int) {
+    let moved = standard.moving(adjustment, to: value)
+    for each in BodyAdjustment.allCases {
+      #expect(moved[each] == (each == adjustment ? expected : standard[each]), "\(each)")
+    }
+  }
+
+  /// From the far end, so the distance to `Int.max` or `Int.min` would overflow unclamped.
+  @Test func movingToAnyValueFromAnEndStopsAtTheOther() throws {
+    let low = try #require(BodySetting(base: 12, lineHeight: 16, tracking: -50))
+    let high = try #require(BodySetting(base: 24, lineHeight: 44, tracking: 200))
+    for adjustment in BodyAdjustment.allCases {
+      #expect(low.moving(adjustment, to: .max)[adjustment] == adjustment.range.upperBound)
+      #expect(high.moving(adjustment, to: .min)[adjustment] == adjustment.range.lowerBound)
+    }
+  }
+
   @Test func aDiagonalPinchStartsNothing() {
     #expect(BodyPinch(CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 200), from: standard) == nil)
   }
