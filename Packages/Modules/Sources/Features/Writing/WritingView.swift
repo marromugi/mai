@@ -48,7 +48,7 @@ struct WritingScreen: View {
   let photoTaken: (UIImage) -> Void
   @State private var titleCutOff: CGFloat = 0
   /// Found once per body and set of others, not at every update: the scroll updates the screen
-  /// each frame.
+  /// each frame. Not found while editing, which shows none and changes the body at each key.
   @State private var mentions: [TitleMention] = []
   @Environment(\.dismiss) private var dismiss
 
@@ -60,7 +60,8 @@ struct WritingScreen: View {
           width: proxy.size.width, back: { dismiss() }, titleCutOff: { titleCutOff = $0 })
       }
       .environment(\.openURL, .opening(mentions, with: open))
-      .task(id: MentionSource(body: writing.body, others: others)) {
+      .task(id: editing ? nil : MentionSource(body: writing.body, others: others)) {
+        guard !editing else { return }
         mentions = writing.body.titleMentions(of: others)
       }
       .scrollDisabled(typesetting)

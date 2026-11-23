@@ -92,12 +92,12 @@ public struct RootView: View {
   }
 }
 
-/// A save that failed. The edit stays on screen, and the next one saves it again with it.
+/// A save that failed: the edit is on screen but not on the device.
 private struct UnsavedWriting: LocalizedError {
   let reason: any Error
 
   var errorDescription: String? {
-    "編集は画面に残っていて、次に編集したときにもう一度保存します。\(reason.localizedDescription)"
+    "この編集は画面に出ていますが、端末には残っていません。\(reason.localizedDescription)"
   }
 }
 

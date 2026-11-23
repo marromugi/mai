@@ -122,6 +122,29 @@ struct WritingEditingTests {
     }
   }
 
+  /// A title written into the body while editing is linked once editing ends, as on a page opened
+  /// with it.
+  @Test func leavingEditingLinksTitlesInTheEditedBody() async throws {
+    let nightDesk = Writing(title: "夜の机に向かう", body: "")
+    let edits = Edits(writing: Writing(title: "朝", body: "本文"))
+    func page(editing: Bool) -> some View {
+      WritingScreen(
+        writing: edits.writing, others: [nightDesk], open: { _ in },
+        edit: { edits.writing.apply($0) },
+        photos: [], setting: .constant(.standard), editing: .constant(editing),
+        typesetting: .constant(false), takingPhoto: .constant(false), camera: .standIn(taking: nil),
+        photoTaken: { _ in })
+    }
+    let hosted = HostedPage(page(editing: true))
+    edits.writing.body = "本文と夜の机に向かう"
+    hosted.show(page(editing: true))
+    hosted.show(page(editing: false))
+    let opened = HostedPage(page(editing: false))
+    try await opened.settle { false }
+    try await hosted.settle { false }
+    #expect(hosted.image().pngData() == opened.image().pngData())
+  }
+
   @Test func editingMode() {
     assertSnapshot(
       of: screen(editing: true, edits: Edits(writing: sampled))
