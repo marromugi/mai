@@ -1,7 +1,8 @@
 import { AppleSignInKeys } from "./apple-sign-in";
 import { AppleTokens } from "./apple-tokens";
 import { Challenges } from "./challenges";
-import { hex, parseBase, parseEnvelope, parseWritingId } from "./envelope";
+import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
+import { hex } from "./hex";
 import { RefreshTokens } from "./refresh-tokens";
 import { callerOf } from "./sessions";
 import { appleRootCaG3 } from "./apple-root";
