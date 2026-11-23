@@ -17,7 +17,9 @@ import { parsePhotoId, parsePhotoPart, type PhotoId, type PhotoPart } from "./ph
  * The only file that speaks to Turso. Every request is one `batch()`, so one round trip and one
  * transaction: it checks the caller, does the work only when the caller may, and counts it. A
  * photo put is the one exception: its reservation is such a batch, and what follows R2 (marking it
- * stored, or releasing it) is written apart, by the upload's ID, without the caller.
+ * stored, or releasing it) is written apart, by the upload's ID, without the caller. Deleting an
+ * account is the other: it reads the account first, and deletes its rows in a batch of their own
+ * once Apple and R2 are done with it (`src/account-deletion.ts`).
  * The tables are in `Server/schema.sql`.
  */
 
@@ -113,6 +115,9 @@ export type Upload = {
   readonly upload: string;
   readonly size: number;
 };
+
+/** What deleting an account needs before its rows go: its ID, and Apple's refresh token sealed. */
+export type ToDelete = { readonly account: AccountId; readonly sealedRefreshToken: Uint8Array };
 
 /** Not reserved: the account has that part of the photo already, or is taking it now. */
 export type Reserved = { reserved: true; upload: Upload } | { reserved: false };
@@ -538,6 +543,51 @@ export class Store {
   }
 
   /**
+   * The caller's account and its sealed refresh token, for deleting it; undefined when the caller
+   * has no live session. Neither counted nor limited, so a lapsed account or one past its day's
+   * requests is deleted too.
+   */
+  async accountToDelete(caller: Caller, now: number): Promise<ToDelete | undefined> {
+    const { rows } = await this.#client.execute(
+      bind(
+        `SELECT a.id, a.apple_refresh_token FROM sessions s JOIN accounts a ON a.id = s.account_id
+         WHERE ${liveSession}`,
+        callerValues(caller, now),
+      ),
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      return undefined;
+    }
+    const sealed = row["apple_refresh_token"];
+    if (!(sealed instanceof ArrayBuffer)) {
+      throw new Error("accounts.apple_refresh_token is a BLOB, but came back as something else");
+    }
+    return {
+      account: stored(parseAccountId, row["id"]),
+      sealedRefreshToken: new Uint8Array(sealed),
+    };
+  }
+
+  /**
+   * Deletes every row of the caller's account `account`, its sessions last, in one batch, while
+   * the caller's session is live. False when it wasn't, and nothing was deleted.
+   */
+  async deleteAccount(caller: Caller, account: AccountId, now: number): Promise<boolean> {
+    const live = `:account = (SELECT s.account_id FROM sessions s WHERE ${liveSession})`;
+    const results = await this.#client.batch(
+      [
+        `DELETE FROM accounts WHERE id = :account AND ${live}`,
+        ...accountTables.map(
+          (table) => `DELETE FROM ${table} WHERE account_id = :account AND ${live}`,
+        ),
+      ].map((sql) => bind(sql, { ...callerValues(caller, now), account })),
+      "write",
+    );
+    return results[0]?.rowsAffected === 1;
+  }
+
+  /**
    * Keeps `check` as the account's own key check when it has none. Answers whether the account's
    * check is now `check`: false means another own key was made first.
    */
@@ -731,6 +781,19 @@ export class Store {
     }
     return { ok: true, value: results.slice(1, 1 + statements.length) };
   }
+}
+
+/**
+ * Every table whose rows belong to an account by their `account_id`, which deleting an account
+ * empties of it; `sessions` last, since each delete checks the caller's session.
+ */
+export const accountTables = ["writings", "photos", "usage", "subscriptions", "sessions"] as const;
+
+/** Whether the session `s` is the caller's, and live at `:now`, with `callerValues`. */
+const liveSession = "s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive";
+
+function callerValues(caller: Caller, now: number): Record<string, InValue> {
+  return { session: caller.session, hash: caller.secretSha256, alive: now - sessionLifetime };
 }
 
 /** Whether the account `a` is paid for at `:now`; once it isn't, the account has lapsed. */

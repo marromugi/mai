@@ -3,12 +3,14 @@ import { isJson, readCompactJws, text, type Checked, type Json } from "./jws";
 import { base64url } from "./sessions";
 
 /**
- * Sign in with Apple's token endpoint, as
+ * Sign in with Apple's token and revoke endpoints, as
  * https://developer.apple.com/documentation/signinwithapplerestapi/generate-and-validate-tokens
- * says: an authorization code the app got is exchanged for the user's refresh token.
+ * says: an authorization code the app got is exchanged for the user's refresh token, which is
+ * revoked when the account is deleted.
  */
 
 export const appleTokenUrl = "https://appleid.apple.com/auth/token";
+export const appleRevokeUrl = "https://appleid.apple.com/auth/revoke";
 
 /** A `client_secret` is made fresh for each call and lasts this long. */
 export const clientSecretLifetime = 5 * 60 * 1000;
@@ -30,7 +32,7 @@ export type ExchangeFailure = "refused" | "unavailable";
 export type Exchanged = { readonly refreshToken: string; readonly sub: string };
 
 export class AppleTokens {
-  /** `post` is `fetch` outside the tests; the URL is always `appleTokenUrl`. */
+  /** `post` is `fetch` outside the tests; the URL is `appleTokenUrl` or `appleRevokeUrl`. */
   constructor(
     private readonly post: (url: string, init: RequestInit) => Promise<Response>,
     private readonly client: Client,
@@ -58,6 +60,23 @@ export class AppleTokens {
       return { ok: false, failure: "unavailable" };
     }
     return { ok: true, value: { refreshToken, sub } };
+  }
+
+  /**
+   * Revokes the user's refresh token, and with it what the user granted the app, as
+   * https://developer.apple.com/documentation/signinwithapplerestapi/revoke-tokens says. Apple
+   * answers 200 for a token revoked before too, so this can be called again.
+   */
+  async revoke(refreshToken: string, now: number): Promise<Checked<undefined, "unavailable">> {
+    const sent = await this.#post(
+      appleRevokeUrl,
+      { token: refreshToken, token_type_hint: "refresh_token" },
+      [],
+      now,
+    );
+    return sent === "unavailable" || !sent.response.ok
+      ? { ok: false, failure: "unavailable" }
+      : { ok: true, value: undefined };
   }
 
   /**
