@@ -1,6 +1,8 @@
 import { env } from "cloudflare:test";
 import { createClient } from "@libsql/client/web";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { deleteLapsedAccounts, lapsedDeletedAtOnce } from "../src/account-deletion";
+import { parseAccountId } from "../src/account-id";
 import { appleIssuer } from "../src/apple-sign-in";
 import { appleRevokeUrl } from "../src/apple-tokens";
 import { serve, signInOf } from "../src/index";
@@ -8,11 +10,12 @@ import { readCompactJws } from "../src/jws";
 import { RefreshTokens } from "../src/refresh-tokens";
 import { newSessionToken } from "../src/sessions";
 import type { SignIn } from "../src/sign-in";
-import { accountTables, type Store } from "../src/store";
-import { newAccount } from "./accounts";
+import { accountTables, lapsedKept, type Purchase, type Store } from "../src/store";
+import { newAccount, products, store as testStore } from "./accounts";
 
 const database = createClient({ url: env.TURSO_URL });
-const month = 30 * 24 * 60 * 60 * 1000;
+const day = 24 * 60 * 60 * 1000;
+const month = 30 * day;
 
 /** The Worker's Sign in with Apple key; the fake revoke endpoint checks `client_secret` with it. */
 let clientKey: CryptoKeyPair;
@@ -100,14 +103,8 @@ type Server = {
  * `kept` takes it.
  */
 async function serveWith(sent: Request, server: Server = {}): Promise<Response> {
-  const signed: SignIn = signInOf(
-    { ...env, APPLE_SIGN_IN_KEY: clientKeyPem },
-    (server.apple ?? fakeApple()).send,
-    await caches.open(crypto.randomUUID()),
-  );
-  const signIn = { ...signed, store: server.store?.(signed.store) ?? signed.store };
   const kept: Promise<unknown>[] = [];
-  const answer = await serve(sent, signIn, {
+  const answer = await serve(sent, await signInWith(server), {
     bucket: server.bucket ?? env.PHOTOS,
     keepAlive: (work) =>
       server.kept === undefined
@@ -121,6 +118,16 @@ async function serveWith(sent: Request, server: Server = {}): Promise<Response> 
   });
   await Promise.all(kept);
   return answer;
+}
+
+/** What the Worker reaches Apple and Turso through, as `server` has them. */
+async function signInWith(server: Server): Promise<SignIn> {
+  const signed: SignIn = signInOf(
+    { ...env, APPLE_SIGN_IN_KEY: clientKeyPem },
+    (server.apple ?? fakeApple()).send,
+    await caches.open(crypto.randomUUID()),
+  );
+  return { ...signed, store: server.store?.(signed.store) ?? signed.store };
 }
 
 function request(method: string, path: string, token: string, body?: Uint8Array): Request {
@@ -148,14 +155,18 @@ function bucketWith<K extends keyof R2Bucket>(name: K, replacement: R2Bucket[K])
 }
 
 function tursoFailing(store: Store): Store {
-  return storeWith(store, () => Promise.reject(new Error("Turso is unavailable")));
+  return storeWith(store, "deleteAccount", () => Promise.reject(new Error("Turso is unavailable")));
 }
 
-/** `store` with `deleteAccount` replaced. */
-function storeWith(store: Store, replacement: Store["deleteAccount"]): Store {
+/** `store` with `name` replaced. */
+function storeWith<K extends keyof Store>(
+  store: Store,
+  name: K,
+  replacement: NoInfer<Store[K]>,
+): Store {
   return new Proxy(store, {
     get(target, key, receiver) {
-      if (key === "deleteAccount") return replacement;
+      if (key === name) return replacement;
       const value: unknown = Reflect.get(target, key, receiver);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -272,7 +283,7 @@ describe("deleting an account", () => {
     let leftBeforeRows: number | undefined;
     const answer = await deleteAccount(token, {
       store: (store) =>
-        storeWith(store, async (...args) => {
+        storeWith(store, "deleteAccount", async (...args) => {
           leftBeforeRows = (await env.PHOTOS.list({ prefix: `${account}/` })).objects.length;
           return store.deleteAccount(...args);
         }),
@@ -373,7 +384,7 @@ describe("deleting an account", () => {
     const late = `${account}/late/photo/upload`;
     const answer = await deleteAccount(token, {
       store: (store) =>
-        storeWith(store, async (...args) => {
+        storeWith(store, "deleteAccount", async (...args) => {
           await env.PHOTOS.put(late, "x");
           return store.deleteAccount(...args);
         }),
@@ -429,7 +440,7 @@ describe("a deletion that fails partway", () => {
       bucket,
       kept,
       store: (store) =>
-        storeWith(store, async (...args) => {
+        storeWith(store, "deleteAccount", async (...args) => {
           await env.PHOTOS.put(late, "x");
           return store.deleteAccount(...args);
         }),
@@ -476,7 +487,7 @@ describe("a deletion that fails partway", () => {
     const one = await fullAccount();
     const answer = await deleteAccount(one.token, {
       store: (store) =>
-        storeWith(store, async (caller, account, now) => {
+        storeWith(store, "deleteAccount", async (caller, account, now) => {
           await store.endSession(caller, now);
           return store.deleteAccount(caller, account, now);
         }),
@@ -485,5 +496,231 @@ describe("a deletion that fails partway", () => {
     expect(await rowsOf(one.account)).toMatchObject({ ...everyRow, sessions: 1 });
     expect((await deleteAccount(one.secondToken)).status).toBe(204);
     expect(await rowsOf(one.account)).toEqual(noRow);
+  });
+});
+
+/**
+ * When the next lapse test's accounts lapse: a year before the last test's, so that its runs never
+ * reach an earlier test's accounts, and decades before any account another test file makes, so
+ * that they reach none of those either.
+ */
+let lapse = Date.UTC(2001, 0, 1);
+
+function nextLapse(): number {
+  lapse -= 365 * day;
+  return lapse;
+}
+
+/** `fullAccount`, with its subscription, and so the account, paid until `at`. */
+async function lapsedAccount(at: number) {
+  const made = await fullAccount();
+  await database.batch(
+    [
+      {
+        sql: `UPDATE subscriptions SET period_ends = ?, paid_until = ?, signed_date = ?
+              WHERE account_id = ?`,
+        args: [at, at, at - month, made.account],
+      },
+      { sql: "UPDATE accounts SET paid_until = ? WHERE id = ?", args: [at, made.account] },
+    ],
+    "write",
+  );
+  return made;
+}
+
+async function paidUntilOf(account: string): Promise<number> {
+  const { rows } = await database.execute({
+    sql: "SELECT paid_until FROM accounts WHERE id = ?",
+    args: [account],
+  });
+  return Number(rows[0]?.["paid_until"]);
+}
+
+/** A renewal of the account's subscription signed at `signed`, paying for a month from then. */
+function renewal(made: { account: string; original: string }, signed: number): Purchase {
+  return {
+    originalTransactionId: made.original,
+    account: parseAccountId(made.account),
+    productId: products.basic,
+    periodEnds: signed + month,
+    paidUntil: signed + month,
+    revoked: false,
+    environment: "Production",
+    signedDate: signed,
+  };
+}
+
+/**
+ * Deletes lapsed accounts as the cron trigger does at `now`, with Apple, R2 and Turso as `server`
+ * has them, and waits for what it keeps alive.
+ */
+async function deleteLapsed(now: number, server: Server = {}): Promise<void> {
+  const kept: Promise<unknown>[] = [];
+  await deleteLapsedAccounts(
+    await signInWith(server),
+    { bucket: server.bucket ?? env.PHOTOS, keepAlive: (work) => kept.push(work) },
+    now,
+  );
+  await Promise.all(kept);
+}
+
+describe("the cron trigger, for lapsed accounts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("deletes an account lapsed 90 days ago, as DELETE /account does, and not one lapsed 89", async () => {
+    const at = nextLapse();
+    const old = await lapsedAccount(at);
+    const recent = await lapsedAccount(at + day);
+    const apple = fakeApple();
+
+    await deleteLapsed(at + lapsedKept, { apple });
+
+    expect(apple.revoked).toEqual([old.refreshToken]);
+    expect(await rowsOf(old.account)).toEqual(noRow);
+    expect(await keysOf(old.account)).toEqual([]);
+    expect(await rowsOf(recent.account)).toEqual(everyRow);
+    expect(await keysOf(recent.account)).toHaveLength(2);
+  });
+
+  it("keeps an account resubscribed within the 90 days, until it lapses again", async () => {
+    const at = nextLapse();
+    const one = await lapsedAccount(at);
+    const back = at + 60 * day;
+    await testStore.keepNotified(renewal(one, back));
+    expect(await paidUntilOf(one.account)).toBe(back + month);
+
+    const apple = fakeApple();
+    await deleteLapsed(at + lapsedKept, { apple });
+    expect(apple.revoked).toEqual([]);
+    expect(await rowsOf(one.account)).toEqual(everyRow);
+    expect(await keysOf(one.account)).toHaveLength(2);
+
+    await deleteLapsed(back + month + lapsedKept, { apple });
+    expect(apple.revoked).toEqual([one.refreshToken]);
+    expect(await rowsOf(one.account)).toEqual(noRow);
+  });
+
+  it("keeps an account resubscribed after it was read, before anything of it is deleted", async () => {
+    const at = nextLapse();
+    const one = await lapsedAccount(at);
+    await deleteLapsed(at + lapsedKept, {
+      store: (reached) =>
+        storeWith(reached, "markForDeletion", async (account, now) => {
+          await reached.keepNotified(renewal(one, at + lapsedKept));
+          return reached.markForDeletion(account, now);
+        }),
+    });
+    expect(await rowsOf(one.account)).toEqual(everyRow);
+    expect(await keysOf(one.account)).toHaveLength(2);
+  });
+
+  it("deletes an account resubscribed once its deletion started", async () => {
+    const at = nextLapse();
+    const one = await lapsedAccount(at);
+    await deleteLapsed(at + lapsedKept, {
+      store: (reached) =>
+        storeWith(reached, "markForDeletion", async (account, now) => {
+          const marked = await reached.markForDeletion(account, now);
+          await reached.keepNotified(renewal(one, at + lapsedKept));
+          return marked;
+        }),
+    });
+    expect(await rowsOf(one.account)).toEqual(noRow);
+    expect(await keysOf(one.account)).toEqual([]);
+  });
+
+  it(`deletes at most ${lapsedDeletedAtOnce} accounts a run, the longest lapsed first`, async () => {
+    const at = nextLapse();
+    const made = [];
+    for (let index = 0; index <= lapsedDeletedAtOnce; index += 1) {
+      made.push(await lapsedAccount(at + index * 60_000));
+    }
+    const last = made.at(-1);
+    if (last === undefined) {
+      throw new Error("the loop made accounts");
+    }
+    const apple = fakeApple();
+
+    await deleteLapsed(at + lapsedKept + day, { apple });
+    expect(apple.revoked.toSorted()).toEqual(
+      made
+        .slice(0, lapsedDeletedAtOnce)
+        .map((one) => one.refreshToken)
+        .toSorted(),
+    );
+    expect(await rowsOf(last.account)).toEqual(everyRow);
+
+    await deleteLapsed(at + lapsedKept + day, { apple });
+    expect(await rowsOf(last.account)).toEqual(noRow);
+  });
+
+  it("goes on with the other accounts when one fails, and finishes it in a later run", async () => {
+    const at = nextLapse();
+    const sealedWrong = await lapsedAccount(at);
+    const r2Fails = await lapsedAccount(at + 1);
+    const fine = await lapsedAccount(at + 2);
+    await database.execute({
+      sql: "UPDATE accounts SET apple_refresh_token = ? WHERE id = ?",
+      args: [new Uint8Array(40), sealedWrong.account],
+    });
+    const bucket = bucketWith("delete", async (keys: string | string[]) => {
+      if ([keys].flat().some((key) => key.startsWith(`${r2Fails.account}/`))) {
+        throw new Error("R2 is unavailable");
+      }
+      return env.PHOTOS.delete(keys);
+    });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await deleteLapsed(at + lapsedKept + 2, { bucket });
+
+    expect(await rowsOf(fine.account)).toEqual(noRow);
+    expect(await keysOf(fine.account)).toEqual([]);
+    expect(await rowsOf(sealedWrong.account)).toEqual(everyRow);
+    expect(await keysOf(sealedWrong.account)).toHaveLength(2);
+    expect(await rowsOf(r2Fails.account)).toEqual(everyRow);
+    expect(await keysOf(r2Fails.account)).toHaveLength(2);
+    expect(logged.mock.calls.map(([message]) => String(message)).toSorted()).toEqual(
+      [
+        `deleting the lapsed account ${sealedWrong.account} failed; the next run tries again`,
+        `deleting the lapsed account ${r2Fails.account} failed; the next run tries again`,
+      ].toSorted(),
+    );
+
+    // Marked before R2 failed, so a resubscription now comes too late.
+    await testStore.keepNotified(renewal(r2Fails, at + lapsedKept));
+    await database.execute({
+      sql: "UPDATE accounts SET apple_refresh_token = ? WHERE id = ?",
+      args: [
+        await new RefreshTokens(env.REFRESH_TOKEN_KEY).seal(
+          sealedWrong.refreshToken,
+          sealedWrong.account,
+        ),
+        sealedWrong.account,
+      ],
+    });
+    await deleteLapsed(at + lapsedKept + 2);
+    expect(await rowsOf(sealedWrong.account)).toEqual(noRow);
+    expect(await rowsOf(r2Fails.account)).toEqual(noRow);
+    expect(await keysOf(r2Fails.account)).toEqual([]);
+  });
+
+  it("deletes nothing of an account whose Apple token wasn't revoked, and tries it again", async () => {
+    const at = nextLapse();
+    const one = await lapsedAccount(at);
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await deleteLapsed(at + lapsedKept, {
+      apple: fakeApple(() => new Response("unavailable", { status: 503 })),
+    });
+    expect(await rowsOf(one.account)).toEqual(everyRow);
+    expect(await keysOf(one.account)).toHaveLength(2);
+    expect(warned).toHaveBeenCalledTimes(1);
+
+    // Not marked, so a resubscription still keeps it.
+    await testStore.keepNotified(renewal(one, at + lapsedKept));
+    await deleteLapsed(at + lapsedKept);
+    expect(await rowsOf(one.account)).toEqual(everyRow);
   });
 });

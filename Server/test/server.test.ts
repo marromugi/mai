@@ -1,9 +1,8 @@
-import { createScheduledController, env } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { createClient } from "@libsql/client/web";
 import { beforeEach, describe, expect, it } from "vitest";
-import worker from "../src/index";
-import { newAccount, products, store } from "./accounts";
+import { newAccount, products, runCron, store } from "./accounts";
 
 /** The session token of a new account made for each test. */
 let token: string;
@@ -583,12 +582,18 @@ describe("the cron trigger", () => {
     expect((await store.list(ended.caller, longAgo)).ok).toBe(true);
     const alive = await newAccount(products.basic, now);
     expect((await store.list(alive.caller, now)).ok).toBe(true);
+    const database = createClient({ url: env.TURSO_URL });
+    // Paid for now, so that the cron trigger doesn't delete it as lapsed.
+    await database.execute({
+      sql: "UPDATE accounts SET paid_until = ? WHERE id = ?",
+      args: [now + lifetime, ended.account],
+    });
 
-    await worker.scheduled(createScheduledController(), env);
+    await runCron();
 
     expect(await store.list(ended.caller, longAgo)).toEqual({ ok: false, refusal: "session" });
     expect((await store.list(alive.caller, now)).ok).toBe(true);
-    const counted = await createClient({ url: env.TURSO_URL }).execute({
+    const counted = await database.execute({
       sql: "SELECT account_id FROM usage WHERE account_id IN (?, ?)",
       args: [ended.account, alive.account],
     });

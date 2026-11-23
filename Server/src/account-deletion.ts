@@ -22,9 +22,10 @@ export async function deleteAccount(
   if (found === undefined) {
     return { ok: false, refusal: "session" };
   }
-  const deleted = await deleteFound(found, signIn, photos, now, () =>
-    signIn.store.deleteAccount(caller, found.account, now),
-  );
+  const deleted = await deleteFound(found, signIn, photos, now, {
+    mark: () => Promise.resolve(true),
+    deleteRows: () => signIn.store.deleteAccount(caller, found.account, now),
+  });
   if (deleted === "unrevoked") {
     return {
       ok: true,
@@ -36,19 +37,64 @@ export async function deleteAccount(
     : { ok: true, value: new Response(null, { status: 204 }) };
 }
 
+/** At most this many lapsed accounts are deleted each time the cron trigger runs. */
+export const lapsedDeletedAtOnce = 10;
+
+/**
+ * Deletes the accounts lapsed `lapsedKept` or longer, at most `lapsedDeletedAtOnce`, longest
+ * first, as `deleteAccount` does; run by the cron trigger. Each is marked once Apple has revoked
+ * its token and before R2 is touched: a resubscription before then keeps the account whole, and
+ * one after it no longer keeps it, so an account that fails partway is finished by a later run.
+ * One that fails is logged and left for the next run, and the others go on.
+ */
+export async function deleteLapsedAccounts(
+  signIn: SignIn,
+  photos: Photos,
+  now: number,
+): Promise<void> {
+  const lapsed = await signIn.store.lapsedToDelete(now, lapsedDeletedAtOnce);
+  await Promise.all(
+    lapsed.map(async (found) => {
+      try {
+        const deleted = await deleteFound(found, signIn, photos, now, {
+          mark: () => signIn.store.markForDeletion(found.account, now),
+          deleteRows: () => signIn.store.deleteLapsedAccount(found.account),
+        });
+        if (deleted === "unrevoked") {
+          console.warn(
+            `the lapsed account ${found.account} wasn't deleted: Apple's revoke endpoint didn't answer; the next run tries again`,
+          );
+        }
+      } catch (error) {
+        // Each account's deletion is an entrance of its own, so one account's failure stops no other.
+        console.error(
+          `deleting the lapsed account ${found.account} failed; the next run tries again`,
+          error,
+        );
+      }
+    }),
+  );
+}
+
 /** `unrevoked`: Apple didn't answer, and nothing was deleted. `kept`: no row was deleted. */
 type Deleted = "deleted" | "unrevoked" | "kept";
 
 /**
- * Revokes the account's Apple token, empties R2 of it, then deletes its rows with `deleteRows`,
- * which answers whether they went; once they did, R2 is swept again, kept alive past the return.
+ * Whether the account is still to be deleted: `mark` asks before R2 is touched, and `deleteRows`
+ * deletes its rows. Each answers false when it isn't, and nothing more is done.
+ */
+type Held = { mark: () => Promise<boolean>; deleteRows: () => Promise<boolean> };
+
+/**
+ * Revokes the account's Apple token, empties R2 of it, then deletes its rows, as `held` lets it;
+ * once the rows went, R2 is swept again, kept alive past the return.
  */
 async function deleteFound(
   found: ToDelete,
   signIn: SignIn,
   photos: Photos,
   now: number,
-  deleteRows: () => Promise<boolean>,
+  held: Held,
 ): Promise<Deleted> {
   const { account, sealedRefreshToken } = found;
   const refreshToken = await signIn.refreshTokens.open(sealedRefreshToken, account);
@@ -56,8 +102,11 @@ async function deleteFound(
   if (!revoked.ok) {
     return "unrevoked";
   }
+  if (!(await held.mark())) {
+    return "kept";
+  }
   await deletePhotosOf(account, photos.bucket);
-  if (!(await deleteRows())) {
+  if (!(await held.deleteRows())) {
     return "kept";
   }
   photos.keepAlive(deleteRowlessPhotosOf(account, photos.bucket, signIn.store));

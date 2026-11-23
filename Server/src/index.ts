@@ -1,4 +1,4 @@
-import { deleteAccount } from "./account-deletion";
+import { deleteAccount, deleteLapsedAccounts } from "./account-deletion";
 import { AppleSignInKeys } from "./apple-sign-in";
 import { AppleTokens } from "./apple-tokens";
 import { Challenges } from "./challenges";
@@ -36,11 +36,16 @@ export default {
     );
   },
 
-  async scheduled(_controller, env): Promise<void> {
-    const store = Store.open(env.TURSO_URL, env.TURSO_TOKEN);
+  async scheduled(_controller, env, ctx): Promise<void> {
+    const signIn = signInOf(env, (url, init) => fetch(url, init), caches.default);
     const now = Date.now();
-    await store.sweep(now);
-    await sweepUploads(store, env.PHOTOS, now);
+    await signIn.store.sweep(now);
+    await sweepUploads(signIn.store, env.PHOTOS, now);
+    await deleteLapsedAccounts(
+      signIn,
+      { bucket: env.PHOTOS, keepAlive: (work) => ctx.waitUntil(work) },
+      now,
+    );
   },
 } satisfies ExportedHandler<Env>;
 
@@ -111,6 +116,7 @@ export async function serve(request: Request, signIn: SignIn, photos: Photos): P
           plan: state.tier,
           paidUntil: state.paidUntil,
           lapsed: state.lapsed,
+          deletesAt: state.deletesAt,
           usage: state.usage,
           ownKeyCheck: state.ownKeyCheck === null ? null : hex(state.ownKeyCheck),
         }),
