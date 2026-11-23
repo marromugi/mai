@@ -87,9 +87,7 @@ final class PlanPurchaseTests {
 
   /// A cancel thrown rather than returned.
   @Test func aPurchaseCancelledByThrowingKeepsNothing() async throws {
-    let outcome = try await buyPlan(product(.basic), keptIn: kept) { _, _ in
-      throw StoreKitError.userCancelled
-    }
+    let outcome = try await buyPlan(product(.basic), keptIn: kept, purchase: Self.cancel)
     #expect(outcome == .cancelled)
     #expect(kept.id == nil)
   }
@@ -159,6 +157,12 @@ final class PlanPurchaseTests {
     _ product: Product, _ options: Set<Product.PurchaseOption>
   ) async throws -> Product.PurchaseResult {
     try await product.purchase(options: options)
+  }
+
+  private static func cancel(
+    _ product: Product, _ options: Set<Product.PurchaseOption>
+  ) async throws -> Product.PurchaseResult {
+    throw StoreKitError.userCancelled
   }
 
   private func product(_ plan: SyncPlan) async throws -> Product {
