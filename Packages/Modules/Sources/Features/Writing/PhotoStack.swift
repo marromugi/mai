@@ -3,28 +3,40 @@ internal import Typesetting
 
 /// Photos taken one after another, oldest first, as prints piled on the page: centred in a column
 /// `lineLength` wide, each in a light border with rounded corners and a soft shadow, tilted, the
-/// newest on top. Only the newest `PhotoStack.layers.count` are drawn.
+/// newest on top. Only the newest `PhotoStack.layers.count` are drawn. A tap opens them in a
+/// `PhotoViewer`, zooming out of the top print, on the newest.
 struct PhotoStack: View {
   let photos: [UIImage]
   let lineLength: CGFloat
   @EnvironmentTypeScale private var scale
+  @Namespace private var zoom
+  @State private var viewing = false
 
   var body: some View {
     let shown = Array(photos.suffix(Self.layers.count))
-    ZStack {
-      // Keyed on the image object: each photo the camera takes is a new one.
-      ForEach(Array(shown.enumerated()), id: \.element.id) { index, photo in
-        let layer = Self.layers[shown.count - 1 - index]
-        PhotoPrint(photo: photo, bounds: bounds)
-          .rotationEffect(.degrees(layer.tilt))
-          .offset(x: layer.offset.width * scale.scale, y: layer.offset.height * scale.scale)
+    Button {
+      viewing = true
+    } label: {
+      ZStack {
+        ForEach(Array(shown.enumerated()), id: \.element.id) { index, photo in
+          let layer = Self.layers[shown.count - 1 - index]
+          PhotoPrint(photo: photo, bounds: bounds)
+            .rotationEffect(.degrees(layer.tilt))
+            .matchedTransitionSource(id: photo.id, in: zoom)
+            .offset(x: layer.offset.width * scale.scale, y: layer.offset.height * scale.scale)
+        }
       }
     }
+    .buttonStyle(.plain)
     .frame(maxWidth: .infinity)
     .padding(.vertical, scale.space(.m))
     .accessibilityElement(children: .ignore)
-    .accessibilityAddTraits(.isImage)
+    .accessibilityAddTraits([.isImage, .isButton])
     .accessibilityLabel(Self.label(count: photos.count))
+    .fullScreenCover(isPresented: $viewing) {
+      PhotoViewer(photos: photos) { viewing = false }
+        .navigationTransition(.zoom(sourceID: photos[photos.count - 1].id, in: zoom))
+    }
   }
 
   /// What VoiceOver reads for a stack of `count` photos.
@@ -75,5 +87,7 @@ private struct PhotoPrint: View {
 }
 
 extension UIImage {
-  fileprivate var id: ObjectIdentifier { ObjectIdentifier(self) }
+  /// Who this photo is: each photo the camera takes is a new image object, and `UIImage`'s `==`
+  /// compares the pixels' source instead.
+  var id: ObjectIdentifier { ObjectIdentifier(self) }
 }
