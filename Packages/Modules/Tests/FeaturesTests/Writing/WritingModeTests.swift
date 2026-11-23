@@ -19,7 +19,8 @@ struct WritingModeTests {
   @Test func aWritingOpensOutOfTheMode() throws {
     let page = HostedPage(
       WritingView(
-        writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: [],
+        writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [], open: { _ in },
+        photos: [],
         setting: .constant(.standard), camera: .standIn(taking: nil), photoTaken: { _ in }))
     let scrollView = try #require(page.scrollViews.first)
     #expect(scrollView.isScrollEnabled)
@@ -64,7 +65,7 @@ struct WritingModeTests {
 
 private func screen(typesetting: Bool, setting: BodySetting = .standard) -> WritingScreen {
   WritingScreen(
-    writing: Writing(title: "間合いの調整", body: Writing.sampleBody),
+    writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [], open: { _ in },
     photos: [],
     setting: .constant(setting),
     typesetting: .constant(typesetting),

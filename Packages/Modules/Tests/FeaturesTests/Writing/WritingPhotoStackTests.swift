@@ -49,7 +49,8 @@ struct WritingPhotoStackTests {
     func contentHeight(_ photos: [UIImage]) throws -> CGFloat {
       let page = HostedPage(
         WritingView(
-          writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: photos,
+          writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [], open: { _ in },
+          photos: photos,
           setting: .constant(.standard), camera: .standIn(taking: nil), photoTaken: { _ in }))
       return try #require(page.scrollViews.first).contentSize.height
     }

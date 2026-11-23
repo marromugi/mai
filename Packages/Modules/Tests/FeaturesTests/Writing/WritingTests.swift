@@ -122,4 +122,12 @@ struct WritingTests {
       Writing.samples(now: now, calendar: calendar).map(WritingRow.init)
         == WritingRow.samples(now: now, calendar: calendar))
   }
+
+  /// The samples' bodies name one of them, so the app has a title link to show.
+  @Test func aSampleNamesAnotherSampleWriting() throws {
+    let samples = Writing.samples(now: .now, calendar: .current)
+    let bread = try #require(samples.first)
+    let named = bread.body.titleMentions(of: Array(samples.dropFirst())).map(\.writing.title)
+    #expect(named.contains("夜の机に向かう"))
+  }
 }

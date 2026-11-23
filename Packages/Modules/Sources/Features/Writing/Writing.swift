@@ -17,10 +17,10 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
 }
 
 extension Writing {
-  /// The sample rows as writings, each body `sampleBody` repeated to the row's character count.
-  /// Stand-in for the writings the developer will write (#29).
+  /// The sample rows as writings, each body `sampleBody` and `sampleMention` repeated to the row's
+  /// character count. Stand-in for the writings the developer will write (#29).
   static func samples(now: Date, calendar: Calendar) -> [Writing] {
-    let paragraph = sampleBody + "\n"
+    let paragraph = sampleBody + "\n" + sampleMention + "\n"
     return WritingRow.samples(now: now, calendar: calendar).map { row in
       let repeated = String(
         repeating: paragraph, count: row.characterCount / paragraph.count + 1)
@@ -29,6 +29,9 @@ extension Writing {
         updated: row.updated)
     }
   }
+
+  /// Names another sample writing's title, so the samples show a title link.
+  nonisolated static let sampleMention = "焼いた日の夜のことは「夜の机に向かう」に書いた。"
 
   nonisolated static let sampleBody = """
     週末に小さなパンを焼いてみたい。

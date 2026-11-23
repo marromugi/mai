@@ -13,11 +13,26 @@ extension View {
 
 extension Text {
   /// `string` as body text, broken by the strict rules: no line starts with ー, a small kana, or
-  /// anything else 行頭禁則 forbids, and no break rests on a guessed language (#23).
-  init(body string: String) {
-    var text = AttributedString(string)
-    text.languageIdentifier = Self.bodyLanguage
-    self.init(text)
+  /// anything else 行頭禁則 forbids, and no break rests on a guessed language (#23). Each of
+  /// `mentions` links to its writing, under a dotted line in the text's colour.
+  init(body string: String, mentions: [TitleMention] = []) {
+    self.init(AttributedString(body: string, mentions: mentions))
+  }
+}
+
+extension AttributedString {
+  /// `string` as `Text(body:mentions:)` sets it.
+  init(body string: String, mentions: [TitleMention]) {
+    self.init(string)
+    self.languageIdentifier = Self.bodyLanguage
+    for mention in mentions {
+      guard let range = Range(mention.range, in: self) else {
+        preconditionFailure("A mention's range is not in the body it was found in.")
+      }
+      self[range].link = mention.writing.link
+      self[range].foregroundColor = .primary
+      self[range].underlineStyle = Text.LineStyle(pattern: .dot)
+    }
   }
 
   /// Undetermined, not `ja`: Japanese also turns on the text system's own spacing, which sets

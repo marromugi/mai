@@ -49,6 +49,8 @@ public struct RootView: View {
         {
           WritingView(
             writing: writing,
+            others: writings.filter { $0.id != id },
+            open: { path.append($0.id) },
             photos: photos[id],
             setting: $settings[id, default: defaultSetting.setting],
             camera: .device,
