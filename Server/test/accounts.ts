@@ -2,9 +2,13 @@ import { env } from "cloudflare:test";
 import { parseAccountId } from "../src/account-id";
 import { challengeLifetime } from "../src/challenges";
 import { newSessionToken, type Caller } from "../src/sessions";
+import type { Photos } from "../src/photos";
 import { Store } from "../src/store";
 
 export const store = Store.open(env.TURSO_URL, env.TURSO_TOKEN);
+
+/** The local R2, for tests that call `serve` themselves; it awaits whatever it keeps alive. */
+export const photos: Photos = { bucket: env.PHOTOS, keepAlive: () => undefined };
 
 /** The products `schema.sql` sells the plans as. */
 export const products = {

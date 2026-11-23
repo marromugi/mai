@@ -15,7 +15,9 @@ import { parsePhotoId, parsePhotoPart, type PhotoId, type PhotoPart } from "./ph
 
 /**
  * The only file that speaks to Turso. Every request is one `batch()`, so one round trip and one
- * transaction: it checks the caller, does the work only when the caller may, and counts it.
+ * transaction: it checks the caller, does the work only when the caller may, and counts it. A
+ * photo put is the one exception: its reservation is such a batch, and what follows R2 (marking it
+ * stored, or releasing it) is written apart, by the upload's ID, without the caller.
  * The tables are in `Server/schema.sql`.
  */
 

@@ -17,7 +17,7 @@ import {
 import { issueChallenge, makeAccount, startSession, type SignIn } from "./sign-in";
 import { Store, type Answer, type Refusal } from "./store";
 import { parsePhotoId } from "./photo-id";
-import { getPhoto, putPhoto, sizeOf, sweepUploads } from "./photos";
+import { getPhoto, putPhoto, sizeOf, sweepUploads, type Photos } from "./photos";
 
 /**
  * The server keeps only sealed writings and photos. It knows of each writing only its ID, updated
@@ -27,11 +27,11 @@ import { getPhoto, putPhoto, sizeOf, sweepUploads } from "./photos";
  * Routes are listed in `Server/README.md`.
  */
 export default {
-  fetch(request, env): Promise<Response> {
+  fetch(request, env, ctx): Promise<Response> {
     return serve(
       request,
       signInOf(env, (url, init) => fetch(url, init), caches.default),
-      env.PHOTOS,
+      { bucket: env.PHOTOS, keepAlive: (work) => ctx.waitUntil(work) },
     );
   },
 
@@ -73,7 +73,7 @@ export function signInOf(
 }
 
 /** Answers `request`, with Apple and Turso reached through `signIn`, and photos kept in `photos`. */
-export async function serve(request: Request, signIn: SignIn, photos: R2Bucket): Promise<Response> {
+export async function serve(request: Request, signIn: SignIn, photos: Photos): Promise<Response> {
   const now = Date.now();
   const route = `${request.method} ${new URL(request.url).pathname}`;
   switch (route) {
@@ -151,7 +151,7 @@ export async function serve(request: Request, signIn: SignIn, photos: R2Bucket):
     switch (request.method) {
       case "GET":
         return answered(
-          await getPhoto(caller, id, part, store, photos, now),
+          await getPhoto(caller, id, part, store, photos.bucket, now),
           (read) => read ?? problem(404, `the server has no ${part} for this photo`),
         );
       case "PUT": {
@@ -160,7 +160,17 @@ export async function serve(request: Request, signIn: SignIn, photos: R2Bucket):
           return turnedDown(sized.status, sized.reason);
         }
         return answered(
-          await putPhoto(sized.body, sized.size, caller, id, part, store, photos, now),
+          await putPhoto(
+            sized.body,
+            sized.size,
+            caller,
+            id,
+            part,
+            store,
+            photos.bucket,
+            photos.keepAlive,
+            now,
+          ),
           (put) => put,
         );
       }

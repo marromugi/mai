@@ -54,6 +54,15 @@ export function sizeOf(request: Request, part: PhotoPart): Sized {
 }
 
 /**
+ * Runs work to its end even when the request it belongs to is gone, as `ctx.waitUntil` does: a
+ * device that drops its connection mid-upload would otherwise leave its room reserved.
+ */
+export type KeepAlive = (work: Promise<unknown>) => void;
+
+/** Where photos are kept, and how a put outlives its request. */
+export type Photos = { readonly bucket: R2Bucket; readonly keepAlive: KeepAlive };
+
+/**
  * Takes `size` bytes of a part of a photo. Room for them is reserved in the account's plan first;
  * R2 then takes exactly that many bytes, or the room is released.
  */
@@ -65,6 +74,7 @@ export async function putPhoto(
   part: PhotoPart,
   store: Store,
   bucket: R2Bucket,
+  keepAlive: KeepAlive,
   now: number,
 ): Promise<Answer<Response>> {
   const reserved = await store.reservePhoto(caller, id, part, size, now);
@@ -79,12 +89,17 @@ export async function putPhoto(
   }
   const upload = reserved.value.upload;
   const key = photoKey(upload);
-  try {
-    await bucket.put(key, body.pipeThrough(new FixedLengthStream(size)));
-  } catch (error) {
-    await release(store, bucket, await store.startReleasing(upload));
-    throw error;
-  }
+  const sent = (async () => {
+    try {
+      await bucket.put(key, body.pipeThrough(new FixedLengthStream(size)));
+    } catch (error) {
+      await release(store, bucket, await store.startReleasing(upload));
+      throw error;
+    }
+  })();
+  // The failure reaches the caller through `await sent` below; the copy kept alive only finishes.
+  keepAlive(sent.catch(() => undefined));
+  await sent;
   if (!(await store.storePhoto(upload))) {
     await bucket.delete(key);
     return {
@@ -131,7 +146,7 @@ export async function sweepUploads(store: Store, bucket: R2Bucket, now: number):
 
 /**
  * Deletes what R2 may hold of `uploads`, which are being released, then the room they reserved.
- * Where R2 can't be reached the room stays reserved, for the cron trigger to release later.
+ * Where R2 can't be reached they stay releasing, for the cron trigger to finish later.
  */
 async function release(store: Store, bucket: R2Bucket, uploads: Upload[]): Promise<void> {
   if (uploads.length === 0) {

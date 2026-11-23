@@ -73,14 +73,21 @@ function put(path: string, token: string, body: Uint8Array<ArrayBuffer>): Promis
   return call(path, token, { method: "PUT", body });
 }
 
-/** Answers `request` with R2 reached through `bucket`, and Apple never reached. */
-async function serveWith(request: Request, bucket: R2Bucket): Promise<Response> {
+/**
+ * Answers `request` with R2 reached through `bucket`, and Apple never reached. What the Worker
+ * would keep alive past the request goes into `kept`.
+ */
+async function serveWith(
+  request: Request,
+  bucket: R2Bucket,
+  kept: Promise<unknown>[] = [],
+): Promise<Response> {
   const signIn = signInOf(
     env,
     () => Promise.reject(new Error("the photo routes don't reach Apple")),
     await caches.open(crypto.randomUUID()),
   );
-  return serve(request, signIn, bucket);
+  return serve(request, signIn, { bucket, keepAlive: (work) => kept.push(work) });
 }
 
 /** `env.PHOTOS` with `put` replaced. */
@@ -305,7 +312,11 @@ describe("an upload that fails", () => {
     const id = crypto.randomUUID();
     const failing = bucketWith(() => Promise.reject(new Error("R2 is unreachable")));
     const request = photoRequest(`/photos/${id}`, token, { method: "PUT", body: sealed(10) });
-    await expect(serveWith(request, failing)).rejects.toThrow("R2 is unreachable");
+    const kept: Promise<unknown>[] = [];
+    await expect(serveWith(request, failing, kept)).rejects.toThrow("R2 is unreachable");
+    // The send and its release, kept alive past a device that drops its connection.
+    expect(kept).toHaveLength(1);
+    await Promise.all(kept);
     expect(await photoRows(account)).toEqual([]);
     expect(await photosBytes(account)).toBe(0);
     expect((await put(`/photos/${id}`, token, sealed(10))).status).toBe(201);

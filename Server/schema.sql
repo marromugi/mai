@@ -135,8 +135,9 @@ CREATE TABLE photos (
 ) STRICT;
 CREATE INDEX photos_unstored ON photos (reserved) WHERE state != 'stored';
 
--- accounts.photos_bytes follows every reserved or stored part. A reservation that grows an account
--- past its plan aborts the whole batch with this message, which src/store.ts answers as 429.
+-- accounts.photos_bytes follows every part, whatever its state, until its row is deleted. A
+-- reservation that grows an account past its plan aborts the whole batch with this message, which
+-- src/store.ts answers as 429.
 CREATE TRIGGER photos_added AFTER INSERT ON photos BEGIN
   UPDATE accounts SET photos_bytes = photos_bytes + NEW.size WHERE id = NEW.account_id;
   SELECT RAISE(ABORT, 'mai: over the plan''s photo storage')
