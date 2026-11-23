@@ -1,0 +1,518 @@
+import { env } from "cloudflare:test";
+import { exports } from "cloudflare:workers";
+import { createClient } from "@libsql/client/web";
+import { beforeAll, describe, expect, it } from "vitest";
+import { appleIssuer, appleKeysUrl } from "../src/apple-sign-in";
+import { appleTokenUrl } from "../src/apple-tokens";
+import { Challenges, challengeLifetime } from "../src/challenges";
+import { serve, signInOf } from "../src/index";
+import { readCompactJws } from "../src/jws";
+import { RefreshTokens } from "../src/refresh-tokens";
+import type { SignIn } from "../src/sign-in";
+import { store } from "./accounts";
+import { base64url, jwks, makeSignInKey, signIdentityToken, type SignInKey } from "./apple-fakes";
+
+const database = createClient({ url: env.TURSO_URL });
+
+/** The ID tokens' signer, standing in for Apple's JWKS. */
+let signer: SignInKey;
+/** The Worker's Sign in with Apple key; the fake token endpoint checks `client_secret` with it. */
+let clientKey: CryptoKeyPair;
+let clientKeyPem: string;
+
+beforeAll(async () => {
+  signer = await makeSignInKey("test-key");
+  const made = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ]);
+  if (!("privateKey" in made)) {
+    throw new Error("ECDSA makes a key pair");
+  }
+  clientKey = made;
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", clientKey.privateKey);
+  if (!(pkcs8 instanceof ArrayBuffer)) {
+    throw new Error("a key exported as PKCS #8 is bytes");
+  }
+  const body = btoa(String.fromCharCode(...new Uint8Array(pkcs8)));
+  // Laid out as Apple Developer's .p8 file is.
+  clientKeyPem = [
+    "-----BEGIN PRIVATE KEY-----",
+    ...(body.match(/.{1,64}/g) ?? []),
+    "-----END PRIVATE KEY-----",
+  ].join("\n");
+});
+
+type Grant = { sub: string; refreshToken: string };
+
+/**
+ * Apple's JWKS and token endpoints, answering from the test. `codes` are the authorization codes
+ * Apple would take, each once; `down` makes the token endpoint fail; `key` is the Worker's
+ * `APPLE_SIGN_IN_KEY`, the .p8 as Apple gives it when left out.
+ */
+function fakeApple(options: { down?: boolean; key?: string } = {}) {
+  const codes = new Map<string, Grant>();
+  const asked: { url: string; form?: URLSearchParams }[] = [];
+  const send = async (url: string, init?: RequestInit): Promise<Response> => {
+    if (url === appleKeysUrl) {
+      asked.push({ url });
+      return new Response(await jwks([signer]));
+    }
+    if (url !== appleTokenUrl || !(init?.body instanceof URLSearchParams)) {
+      throw new Error(`the Worker reached ${url}, which the fake Apple doesn't serve`);
+    }
+    const form = init.body;
+    asked.push({ url, form });
+    if (options.down === true) {
+      return new Response("<html>busy</html>", { status: 503 });
+    }
+    if (!(await clientSecretHolds(form.get("client_secret") ?? ""))) {
+      return Response.json({ error: "invalid_client" }, { status: 400 });
+    }
+    const grant = codes.get(form.get("code") ?? "");
+    if (form.get("grant_type") !== "authorization_code" || grant === undefined) {
+      return Response.json({ error: "invalid_grant" }, { status: 400 });
+    }
+    codes.delete(form.get("code") ?? "");
+    return Response.json({
+      access_token: "access",
+      token_type: "Bearer",
+      expires_in: 3600,
+      refresh_token: grant.refreshToken,
+      id_token: await signIdentityToken(
+        { iss: appleIssuer, aud: env.APPLE_CLIENT_ID, sub: grant.sub },
+        signer,
+      ),
+    });
+  };
+  const signIn: Promise<SignIn> = caches
+    .open(crypto.randomUUID())
+    .then((cache) =>
+      signInOf({ ...env, APPLE_SIGN_IN_KEY: options.key ?? clientKeyPem }, send, cache),
+    );
+  return { codes, asked, signIn };
+}
+
+async function clientSecretHolds(secret: string): Promise<boolean> {
+  const jws = readCompactJws(secret);
+  if (jws === undefined) {
+    return false;
+  }
+  const signed = await crypto.subtle.verify(
+    { name: "ECDSA", hash: "SHA-256" },
+    clientKey.publicKey,
+    jws.signature,
+    jws.signingInput,
+  );
+  const { iss, aud, sub, iat, exp } = jws.payload;
+  return (
+    signed &&
+    jws.header["alg"] === "ES256" &&
+    jws.header["kid"] === env.APPLE_SIGN_IN_KEY_ID &&
+    iss === env.APPLE_TEAM_ID &&
+    aud === appleIssuer &&
+    sub === env.APPLE_CLIENT_ID &&
+    typeof iat === "number" &&
+    typeof exp === "number" &&
+    exp > Date.now() / 1000
+  );
+}
+
+async function call(signIn: SignIn | Promise<SignIn>, path: string, body?: unknown) {
+  const request = new Request(`https://mai.test${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? null : JSON.stringify(body),
+  });
+  return serve(request, await signIn);
+}
+
+/** A request to the Worker as deployed, with its own secrets and Apple unreached. */
+function deployed(path: string, init: RequestInit = {}): Promise<Response> {
+  return exports.default.fetch(new Request(`https://mai.test${path}`, init));
+}
+
+async function challenge(signIn: SignIn | Promise<SignIn>): Promise<string> {
+  const answer = await call(signIn, "/challenges");
+  expect(answer.status).toBe(201);
+  const { challenge: value } = await answer.json<{ challenge: string }>();
+  return value;
+}
+
+/** Apple's ID token for `sub`, made for the challenge `madeFor` as the app asks for it. */
+async function identityToken(sub: string, madeFor: string, now = Date.now()): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(madeFor));
+  const nonce = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return signIdentityToken(
+    {
+      iss: appleIssuer,
+      aud: env.APPLE_CLIENT_ID,
+      exp: Math.floor(now / 1000) + 600,
+      iat: Math.floor(now / 1000),
+      sub,
+      nonce,
+      nonce_supported: true,
+    },
+    signer,
+  );
+}
+
+function newSub(): string {
+  return `001234.${crypto.randomUUID().replaceAll("-", "")}.0123`;
+}
+
+/** Makes an account through `POST /account`, as the app does after the purchase. */
+async function makeAccount(apple: ReturnType<typeof fakeApple>, sub = newSub()) {
+  const account = crypto.randomUUID();
+  const code = `code-${crypto.randomUUID()}`;
+  const refreshToken = `refresh-${crypto.randomUUID()}`;
+  apple.codes.set(code, { sub, refreshToken });
+  const fresh = await challenge(apple.signIn);
+  const answer = await call(apple.signIn, "/account", {
+    account,
+    challenge: fresh,
+    identityToken: await identityToken(sub, fresh),
+    authorizationCode: code,
+  });
+  return { account, sub, code, refreshToken, answer };
+}
+
+async function signInAs(apple: ReturnType<typeof fakeApple>, sub: string) {
+  const fresh = await challenge(apple.signIn);
+  return call(apple.signIn, "/sessions", {
+    challenge: fresh,
+    identityToken: await identityToken(sub, fresh),
+  });
+}
+
+async function accountRow(id: string) {
+  const { rows } = await database.execute({
+    sql: "SELECT apple_sub, apple_refresh_token, tier FROM accounts WHERE id = ?",
+    args: [id],
+  });
+  return rows[0];
+}
+
+describe("making an account", () => {
+  it("makes it from a valid ID token and code, with a session #46's routes take", async () => {
+    const apple = fakeApple();
+    const { account, sub, code, answer } = await makeAccount(apple);
+
+    expect(answer.status).toBe(201);
+    const { token } = await answer.json<{ token: string }>();
+    expect(token).toMatch(/^s1\./);
+    expect(await accountRow(account)).toMatchObject({ apple_sub: sub, tier: "basic" });
+    const exchange = apple.asked.find((asked) => asked.url === appleTokenUrl);
+    expect(exchange?.form?.get("code")).toBe(code);
+    expect(exchange?.form?.get("client_id")).toBe(env.APPLE_CLIENT_ID);
+
+    const listed = await deployed("/writings", { headers: { Authorization: `Bearer ${token}` } });
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual({ writings: [] });
+  });
+
+  it("keeps Apple's refresh token only sealed, opening only on its own account", async () => {
+    const apple = fakeApple();
+    const { account, refreshToken } = await makeAccount(apple);
+
+    const kept = (await accountRow(account))?.["apple_refresh_token"];
+    if (!(kept instanceof ArrayBuffer)) {
+      throw new Error("accounts.apple_refresh_token is a BLOB");
+    }
+    const bytes = new Uint8Array(kept);
+    const plain = new TextEncoder().encode(refreshToken);
+    const holdsPlain = bytes.some((_, start) =>
+      plain.every((byte, offset) => bytes[start + offset] === byte),
+    );
+    expect(holdsPlain).toBe(false);
+    const tokens = new RefreshTokens(env.REFRESH_TOKEN_KEY);
+    expect(await tokens.open(bytes, account)).toBe(refreshToken);
+    await expect(tokens.open(bytes, crypto.randomUUID())).rejects.toThrow();
+    const otherKey = new RefreshTokens(btoa(String.fromCharCode(...new Uint8Array(32))));
+    await expect(otherKey.open(bytes, account)).rejects.toThrow();
+  });
+
+  it("refuses a second account for the same Apple user, and keeps the first", async () => {
+    const apple = fakeApple();
+    const first = await makeAccount(apple);
+    expect(first.answer.status).toBe(201);
+    const before = await accountRow(first.account);
+
+    const second = await makeAccount(apple, first.sub);
+
+    expect(second.answer.status).toBe(409);
+    expect(await accountRow(second.account)).toBeUndefined();
+    expect(await accountRow(first.account)).toEqual(before);
+  });
+
+  it("refuses an account ID another Apple user's account has", async () => {
+    const apple = fakeApple();
+    const first = await makeAccount(apple);
+    const code = `code-${crypto.randomUUID()}`;
+    const sub = newSub();
+    apple.codes.set(code, { sub, refreshToken: "refresh-other" });
+    const fresh = await challenge(apple.signIn);
+
+    const answer = await call(apple.signIn, "/account", {
+      account: first.account,
+      challenge: fresh,
+      identityToken: await identityToken(sub, fresh),
+      authorizationCode: code,
+    });
+
+    expect(answer.status).toBe(409);
+    expect(await accountRow(first.account)).toMatchObject({ apple_sub: first.sub });
+  });
+
+  it("refuses a code Apple turns down, and a code for another Apple user", async () => {
+    const apple = fakeApple();
+    const sub = newSub();
+    const account = crypto.randomUUID();
+    let fresh = await challenge(apple.signIn);
+    const unknown = await call(apple.signIn, "/account", {
+      account,
+      challenge: fresh,
+      identityToken: await identityToken(sub, fresh),
+      authorizationCode: "a code Apple never gave",
+    });
+    expect(unknown.status).toBe(401);
+
+    apple.codes.set("someone else's", { sub: newSub(), refreshToken: "refresh-x" });
+    fresh = await challenge(apple.signIn);
+    const another = await call(apple.signIn, "/account", {
+      account,
+      challenge: fresh,
+      identityToken: await identityToken(sub, fresh),
+      authorizationCode: "someone else's",
+    });
+    expect(another.status).toBe(401);
+    expect(await accountRow(account)).toBeUndefined();
+  });
+
+  it("signs to Apple with the .p8 key given as only its base64 lines", async () => {
+    const lines = clientKeyPem.split("\n").filter((line) => !line.startsWith("-----"));
+    const apple = fakeApple({ key: lines.join("") });
+    expect((await makeAccount(apple)).answer.status).toBe(201);
+  });
+
+  it("answers 502 when Apple's token endpoint fails, and makes nothing", async () => {
+    const apple = fakeApple({ down: true });
+    const { account, answer } = await makeAccount(apple);
+    expect(answer.status).toBe(502);
+    expect(await accountRow(account)).toBeUndefined();
+  });
+
+  it.each([
+    ["no account ID", { account: undefined }],
+    ["an account ID that isn't a UUID", { account: "not-a-uuid" }],
+    ["no authorization code", { authorizationCode: undefined }],
+  ])("refuses a request with %s", async (_, change) => {
+    const apple = fakeApple();
+    const sub = newSub();
+    const fresh = await challenge(apple.signIn);
+    const answer = await call(apple.signIn, "/account", {
+      account: crypto.randomUUID(),
+      challenge: fresh,
+      identityToken: await identityToken(sub, fresh),
+      authorizationCode: "code",
+      ...change,
+    });
+    expect(answer.status).toBe(400);
+  });
+});
+
+describe("a challenge", () => {
+  it("is refused the second time, whichever route used it first", async () => {
+    const apple = fakeApple();
+    const { sub, answer } = await makeAccount(apple);
+    expect(answer.status).toBe(201);
+
+    const fresh = await challenge(apple.signIn);
+    const body = { challenge: fresh, identityToken: await identityToken(sub, fresh) };
+    expect((await call(apple.signIn, "/sessions", body)).status).toBe(200);
+    expect((await call(apple.signIn, "/sessions", body)).status).toBe(401);
+
+    const code = `code-${crypto.randomUUID()}`;
+    apple.codes.set(code, { sub: newSub(), refreshToken: "refresh-y" });
+    const again = await call(apple.signIn, "/account", {
+      ...body,
+      account: crypto.randomUUID(),
+      authorizationCode: code,
+    });
+    expect(again.status).toBe(401);
+  });
+
+  it("used by one account's request is refused to the next even when that made nothing", async () => {
+    const apple = fakeApple();
+    const first = await makeAccount(apple);
+    const fresh = await challenge(apple.signIn);
+    const code = `code-${crypto.randomUUID()}`;
+    apple.codes.set(code, { sub: first.sub, refreshToken: "refresh-z" });
+    const body = {
+      account: crypto.randomUUID(),
+      challenge: fresh,
+      identityToken: await identityToken(first.sub, fresh),
+      authorizationCode: code,
+    };
+    expect((await call(apple.signIn, "/account", body)).status).toBe(409);
+
+    expect(
+      (
+        await call(apple.signIn, "/sessions", {
+          challenge: fresh,
+          identityToken: body.identityToken,
+        })
+      ).status,
+    ).toBe(401);
+  });
+
+  it.each([
+    ["made up", async () => `${Date.now() + 60_000}.${"A".repeat(22)}.${"A".repeat(43)}`],
+    [
+      "given out by a server with another key",
+      () => new Challenges(btoa(String.fromCharCode(...new Uint8Array(32)))).issue(Date.now()),
+    ],
+    ["expired", () => new Challenges(env.CHALLENGE_KEY).issue(Date.now() - challengeLifetime - 1)],
+  ])("is refused when %s", async (_, made) => {
+    const apple = fakeApple();
+    const { sub } = await makeAccount(apple);
+    const value = await made();
+    const answer = await call(apple.signIn, "/sessions", {
+      challenge: value,
+      identityToken: await identityToken(sub, value),
+    });
+    expect(answer.status).toBe(401);
+  });
+
+  it("is refused with an ID token made for another challenge", async () => {
+    const apple = fakeApple();
+    const { sub } = await makeAccount(apple);
+    const answer = await call(apple.signIn, "/sessions", {
+      challenge: await challenge(apple.signIn),
+      identityToken: await identityToken(sub, await challenge(apple.signIn)),
+    });
+    expect(answer.status).toBe(401);
+  });
+
+  it("is kept as used until it expires, and then swept", async () => {
+    const apple = fakeApple();
+    const { sub } = await makeAccount(apple);
+    const fresh = await challenge(apple.signIn);
+    await call(apple.signIn, "/sessions", {
+      challenge: fresh,
+      identityToken: await identityToken(sub, fresh),
+    });
+    const kept = async () =>
+      (
+        await database.execute({
+          sql: "SELECT count(*) AS n FROM used_challenges WHERE value = ?",
+          args: [fresh],
+        })
+      ).rows[0]?.["n"];
+    const expires = Number(fresh.split(".")[0]);
+
+    await store.sweep(expires - 1);
+    expect(await kept()).toBe(1);
+    await store.sweep(expires);
+    expect(await kept()).toBe(0);
+  });
+});
+
+describe("signing in", () => {
+  it("starts a session on the Apple user's account that #46's routes take", async () => {
+    const apple = fakeApple();
+    const { account, sub } = await makeAccount(apple);
+
+    const answer = await signInAs(apple, sub);
+
+    expect(answer.status).toBe(200);
+    const body = await answer.json<{ account: string; token: string; ownKeyCheck: null }>();
+    expect(body).toMatchObject({ account, ownKeyCheck: null });
+    const listed = await deployed("/writings", {
+      headers: { Authorization: `Bearer ${body.token}` },
+    });
+    expect(listed.status).toBe(200);
+  });
+
+  it("answers 404 for an Apple user with no account", async () => {
+    const apple = fakeApple();
+    expect((await signInAs(apple, newSub())).status).toBe(404);
+  });
+
+  it("ends the session on sign-out, and only that session", async () => {
+    const apple = fakeApple();
+    const made = await makeAccount(apple);
+    const { token: kept } = await made.answer.json<{ token: string }>();
+    const { token } = await (await signInAs(apple, made.sub)).json<{ token: string }>();
+    const out = await deployed("/session", { method: "DELETE", ...as(token) });
+
+    expect(out.status).toBe(204);
+    expect((await deployed("/writings", as(token))).status).toBe(401);
+    expect((await deployed("/session", { method: "DELETE", ...as(token) })).status).toBe(401);
+    expect((await deployed("/writings", as(kept))).status).toBe(200);
+  });
+});
+
+function as(bearer: string): RequestInit {
+  return { headers: { Authorization: `Bearer ${bearer}` } };
+}
+
+function putOwnKeyCheck(
+  token: string,
+  check: Uint8Array<ArrayBuffer>,
+  contentType = "application/octet-stream",
+): Promise<Response> {
+  return deployed("/account/own-key-check", {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": contentType },
+    body: check,
+  });
+}
+
+describe("the own key check", () => {
+  const put = putOwnKeyCheck;
+
+  it("is kept once, and a second own key's check is refused", async () => {
+    const apple = fakeApple();
+    const made = await makeAccount(apple);
+    const { token } = await made.answer.json<{ token: string }>();
+    const first = crypto.getRandomValues(new Uint8Array(32));
+
+    expect((await put(token, first)).status).toBe(204);
+    expect((await put(token, first)).status).toBe(204);
+    expect((await put(token, crypto.getRandomValues(new Uint8Array(32)))).status).toBe(409);
+
+    const signedIn = await (await signInAs(apple, made.sub)).json<{ ownKeyCheck: string }>();
+    expect(signedIn.ownKeyCheck).toBe(base64url(first));
+  });
+
+  it("is one account's own: another account's check doesn't stop it", async () => {
+    const apple = fakeApple();
+    const one = await (await makeAccount(apple)).answer.json<{ token: string }>();
+    const two = await (await makeAccount(apple)).answer.json<{ token: string }>();
+    expect((await put(one.token, crypto.getRandomValues(new Uint8Array(32)))).status).toBe(204);
+    expect((await put(two.token, crypto.getRandomValues(new Uint8Array(32)))).status).toBe(204);
+  });
+
+  it.each([
+    ["31 bytes", new Uint8Array(31), "application/octet-stream", 400],
+    ["33 bytes", new Uint8Array(33), "application/octet-stream", 400],
+    ["JSON", new Uint8Array(32), "application/json", 415],
+  ])("is refused as %s", async (_, check, contentType, status) => {
+    const apple = fakeApple();
+    const { token } = await (await makeAccount(apple)).answer.json<{ token: string }>();
+    expect((await put(token, check, contentType)).status).toBe(status);
+    expect((await put(token, new Uint8Array(32))).status).toBe(204);
+  });
+
+  it("needs a session", async () => {
+    const answer = await deployed("/account/own-key-check", {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: new Uint8Array(32),
+    });
+    expect(answer.status).toBe(401);
+  });
+});

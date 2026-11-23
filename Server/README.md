@@ -20,13 +20,31 @@
 
 ## 経路
 
-どれも `Authorization: Bearer <セッションのトークン>` が要る。トークンは `s1.<セッション ID>.<秘密>`(秘密は 32 バイトの base64url)で、サーバーは秘密(base64url の文字列)の SHA-256 だけを `sessions` に置く。知らないトークン、形の違うトークン、最後に使ってから 180 日たったセッションは、経路や中身を見る前に 401。セッションを作る経路(Sign in with Apple)はまだない(#22 の S3)。それまでは、テストは `Store.makeAccount` と `Store.startSession` で、手元で動かすときは `scripts/new-session.sh` で、同じ行を書いて作る。
+### アカウントとサインイン
 
-| 経路                 | 内容                                                                                                                                                                                                                                      |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /writings`      | `{"writings": [{"id", "revision", "updated", "size"}]}`                                                                                                                                                                                   |
-| `GET /writings/<ID>` | 暗号化した文書(`application/octet-stream`)。リビジョンは `Mai-Revision` に。無ければ 404                                                                                                                                                  |
-| `PUT /writings/<ID>` | 暗号化した文書を `application/octet-stream` で送り、最後に読んだリビジョンを `Mai-Base-Revision` に(新しい文書は `none`)。合えば 200 と新しいリビジョン、合わなければ 409 と今のリビジョン(無ければ null)。形が違えば 400、型が違えば 415 |
+アカウントは、有料の同期プランに入るときにアプリが作る(#22)。どれもセッションは要らず、JSON(`Content-Type: application/json`)を送る。
+
+| 経路               | 内容                                                                                                                                                                                                                                                                                           |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /challenges` | 201 と `{"challenge"}`。5 分使える。アプリはその SHA-256(小文字の 16 進)を Sign in with Apple の nonce にする                                                                                                                                                                                  |
+| `POST /account`    | `{"account", "challenge", "identityToken", "authorizationCode"}`。`account` はアプリが作った UUID で、購入の `appAccountToken` と同じもの。201 と `{"token"}`(セッションのトークン)。その Apple の利用者かその ID のアカウントがもうあれば 409 で、何も作らない(サインインは `POST /sessions`) |
+| `POST /sessions`   | `{"challenge", "identityToken"}`。200 と `{"account", "token", "ownKeyCheck"}`(`ownKeyCheck` はまだなければ null、あれば base64url)。その Apple の利用者のアカウントがなければ 404                                                                                                             |
+
+ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・`aud`(`APPLE_CLIENT_ID`)・`exp` と、nonce がチャレンジの SHA-256 であることを確かめる。チャレンジは `CHALLENGE_KEY` の HMAC で、サーバーは出すときには何も書かず、使ったものを期限まで `used_challenges` に置く。使ったもの、このサーバーが出していないもの、期限の切れたもの、ID トークンが別のチャレンジに作られたものは 401。チャレンジは通ればその場で使ったことになり、409 や 404 で終わっても使い直せない。
+
+`POST /account` は認可コードを Apple の `/auth/token` で refresh トークンに替え(`src/apple-tokens.ts`)、`REFRESH_TOKEN_KEY` の AES-256-GCM でアカウント ID を付けて封じて `accounts.apple_refresh_token` に置く(`src/refresh-tokens.ts`)。封じる前の値はどこにも置かない。Apple がコードを断るか、コードが別の利用者のものなら 401、Apple が答えなければ 502。購入を確かめてプランを決めるのは #22 の S4 で、それまではどのアカウントも `basic` で作る。
+
+### セッションのある経路
+
+どれも `Authorization: Bearer <セッションのトークン>` が要る。トークンは `s1.<セッション ID>.<秘密>`(秘密は 32 バイトの base64url)で、サーバーは秘密(base64url の文字列)の SHA-256 だけを `sessions` に置く。知らないトークン、形の違うトークン、最後に使ってから 180 日たったセッションは、経路や中身を見る前に 401。Apple に届かない手元の試験では、テストは `Store.makeAccount` で、手元で動かすときは `scripts/new-session.sh` で、Apple の利用者のいないアカウントとセッションを作る。
+
+| 経路                         | 内容                                                                                                                                                                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DELETE /session`            | サインアウト。このセッションを終えて 204                                                                                                                                                                                                  |
+| `PUT /account/own-key-check` | 自分の鍵から作った確かめの値(32 バイト)を `application/octet-stream` で。アカウントにまだなければ置いて 204、同じ値なら 204、別の値なら 409(2 つ目の自分の鍵は作らせない)。長さが違えば 400、型が違えば 415                               |
+| `GET /writings`              | `{"writings": [{"id", "revision", "updated", "size"}]}`                                                                                                                                                                                   |
+| `GET /writings/<ID>`         | 暗号化した文書(`application/octet-stream`)。リビジョンは `Mai-Revision` に。無ければ 404                                                                                                                                                  |
+| `PUT /writings/<ID>`         | 暗号化した文書を `application/octet-stream` で送り、最後に読んだリビジョンを `Mai-Base-Revision` に(新しい文書は `none`)。合えば 200 と新しいリビジョン、合わなければ 409 と今のリビジョン(無ければ null)。形が違えば 400、型が違えば 415 |
 
 文書の ID はアカウントごとに分かれ、ほかのアカウントの文書は読めず、書けず、一覧にも出ない。
 
@@ -43,11 +61,11 @@
 
 ### 期限の掃除
 
-Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` を消す(`Store.sweep`)。#26 の写しと読み取りモードの期限もここに足す。
+Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` と、期限の切れた `used_challenges` を消す(`Store.sweep`)。#26 の写しと読み取りモードの期限もここに足す。
 
 ## Apple の署名
 
-経路はまだ呼ばない(#22 の S3・S4 が呼ぶ)。どれも WebCrypto だけで確かめ、通れば読み出した値を、通らなければ理由を返す。
+ID トークンは上のサインインの経路が呼ぶ。署名つき取引と通知はまだ呼ばない(#22 の S4 が呼ぶ)。どれも WebCrypto だけで確かめ、通れば読み出した値を、通らなければ理由を返す。
 
 - `src/apple-sign-in.ts`: Sign in with Apple の ID トークン。Apple の JWKS(RS256)で署名、`iss`、`aud`(バンドル ID)、`exp`、渡された `nonce`。JWKS は Cache に 1 日置き、知らない鍵 ID が来たら取り直す(前の取得から 5 分たっていれば、1 回だけ)。
 - `src/app-store.ts`: StoreKit 2 の署名つき取引・更新の情報と、App Store Server Notifications V2 の `signedPayload`(中の取引と更新の情報も)。ES256 の署名と、`x5c` の葉・中間が `src/apple-root.ts` の Apple Root CA - G3 までつながること。ルートは引数で渡し、`x5c` の中のルートは使わない。通っても、期限(`expiresDate`)・取り消し(`revocationDate`)・環境(`environment`)・`appAccountToken` がどのアカウントかは確かめていない。購入として受けるかは呼ぶ側(S4)が決める。Xcode の StoreKit の試験で作った取引は Apple の鍵で署名されていないので、どれも通らない。
@@ -87,15 +105,32 @@ scripts/server-contract-test.sh
 まだしていない。するときは、次のものが作られる。
 
 - Turso: データベース `mai` 1 つ(`schema.sql` の表とトリガー、`plans` の 3 行)と、それに書ける認証トークン 1 つ
-- Cloudflare: Worker `mai-server` 1 つ(`workers.dev` の URL つき)、その毎分の Cron Trigger、秘密 `TURSO_URL` と `TURSO_TOKEN`
+- Cloudflare: Worker `mai-server` 1 つ(`workers.dev` の URL つき)、その毎分の Cron Trigger、秘密 `TURSO_URL`・`TURSO_TOKEN`・`CHALLENGE_KEY`・`REFRESH_TOKEN_KEY`・`APPLE_CLIENT_ID`・`APPLE_TEAM_ID`・`APPLE_SIGN_IN_KEY_ID`・`APPLE_SIGN_IN_KEY`
+
+その前に開発者が Apple Developer でしておくこと:
+
+- App ID `com.marromugi.mai` で Sign in with Apple を有効にする
+- Sign in with Apple の鍵(.p8)を 1 つ作り、その鍵 ID と、チーム ID を控える。.p8 は一度しか落とせない
+
+秘密のうち:
+
+- `APPLE_CLIENT_ID` はアプリのバンドル ID `com.marromugi.mai`(ID トークンの `aud` と、`/auth/token` の `client_id`)
+- `APPLE_TEAM_ID`・`APPLE_SIGN_IN_KEY_ID` は上で控えたもの、`APPLE_SIGN_IN_KEY` は .p8 の中身(`-----BEGIN PRIVATE KEY-----` の行ごとでも、間の base64 だけでもよい)
+- `CHALLENGE_KEY` と `REFRESH_TOKEN_KEY` はそれぞれ 32 バイトの乱数の base64。`REFRESH_TOKEN_KEY` を変えると、置いてある refresh トークンが開けなくなり、削除のときに Apple で取り消せなくなる
 
 Turso と Cloudflare にログインして、`Server/` で次を実行する。最初のデプロイは、`secrets.required` の秘密をデプロイと一緒に渡す(`--secrets-file`)。
 
 ```sh
+team_id=...   # チーム ID
+key_id=...    # Sign in with Apple の鍵 ID
+p8=...        # その .p8 のパス
 turso db create mai
 turso db shell mai < schema.sql
 secrets="$(mktemp)"
 printf 'TURSO_URL=%s\nTURSO_TOKEN=%s\n' "$(turso db show mai --url)" "$(turso db tokens create mai)" > "$secrets"
+printf 'CHALLENGE_KEY=%s\nREFRESH_TOKEN_KEY=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -base64 32)" >> "$secrets"
+printf 'APPLE_CLIENT_ID=com.marromugi.mai\nAPPLE_TEAM_ID=%s\nAPPLE_SIGN_IN_KEY_ID=%s\nAPPLE_SIGN_IN_KEY=%s\n' \
+  "$team_id" "$key_id" "$(grep -v -- ----- "$p8" | tr -d '\n')" >> "$secrets"
 pnpm exec wrangler deploy --secrets-file "$secrets"
 rm "$secrets"
 ```

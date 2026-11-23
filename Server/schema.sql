@@ -16,8 +16,15 @@ INSERT INTO plans VALUES
   ('plus', 500000000, 50000, 10000, 300, 2000),
   ('pro', 1000000000, 100000, 10000, 300, 2000);
 
+-- id is the UUID the app made, which is also its purchases' appAccountToken. apple_sub is the
+-- Sign in with Apple user. apple_refresh_token is Apple's refresh token sealed by
+-- src/refresh-tokens.ts; it is never kept unsealed. own_key_check is set once, by the first device
+-- to make the own key.
 CREATE TABLE accounts (
   id TEXT PRIMARY KEY,
+  apple_sub TEXT NOT NULL UNIQUE,
+  apple_refresh_token BLOB NOT NULL,
+  own_key_check BLOB,
   tier TEXT NOT NULL,
   writings_bytes INTEGER NOT NULL DEFAULT 0,
   writings_count INTEGER NOT NULL DEFAULT 0,
@@ -34,6 +41,15 @@ CREATE TABLE sessions (
 ) STRICT;
 CREATE INDEX sessions_account ON sessions (account_id);
 CREATE INDEX sessions_last_used ON sessions (last_used);
+
+-- A Sign in with Apple challenge (src/challenges.ts) once used, kept until it expires. claim tells
+-- the request that used it from one that came after.
+CREATE TABLE used_challenges (
+  value TEXT PRIMARY KEY,
+  expires INTEGER NOT NULL,
+  claim TEXT NOT NULL
+) STRICT;
+CREATE INDEX used_challenges_expires ON used_challenges (expires);
 
 -- day is whole UTC days since 1970.
 CREATE TABLE usage (

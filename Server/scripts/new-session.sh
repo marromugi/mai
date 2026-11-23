@@ -1,7 +1,7 @@
 #!/bin/bash
 # Makes an account with one session in a local database file, before `turso dev --db-file` serves
-# it, and prints the session's token. Writes the rows Store.makeAccount and Store.startSession
-# write; for local runs only, until signing in (#22, S3) makes sessions.
+# it, and prints the session's token. Writes the rows Store.makeAccount writes, with no Apple user
+# or refresh token behind them; for local runs, which don't reach Apple.
 # Usage: new-session.sh <database file> [plan]
 set -euo pipefail
 
@@ -20,7 +20,8 @@ digest="$(printf '%s' "$secret" | shasum -a 256 | cut -d ' ' -f 1)"
 now="$(($(date +%s) * 1000))"
 
 sqlite3 "$database" \
-  "INSERT INTO accounts (id, tier, created) SELECT '$account', tier, $now FROM plans WHERE tier = '$tier';
+  "INSERT INTO accounts (id, apple_sub, apple_refresh_token, tier, created)
+   SELECT '$account', 'local.$account', X'', tier, $now FROM plans WHERE tier = '$tier';
    INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
    SELECT '$session', '$account', X'$digest', $now, $now FROM accounts WHERE id = '$account';
    SELECT changes();" | grep -qx 1 || { echo "there is no plan named $tier" >&2; exit 1; }
