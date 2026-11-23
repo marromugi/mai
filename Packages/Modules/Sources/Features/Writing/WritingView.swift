@@ -2,29 +2,33 @@ import SwiftUI
 internal import Typesetting
 
 /// A writing's page: its title, body, and `photos` on the type area, under a back mark, over the
-/// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap or 「閉じる」 leaves
+/// bottom row. The row's pencil makes the title and body editable until 「完了」, each change
+/// handed to `edit`; its 「組版を調整」 enters the typesetting mode, and a tap or 「閉じる」 leaves
 /// it; its camera takes a photo with `camera` and hands it to `photoTaken`. Where one of `others`'
 /// titles appears in the body, it links to that writing, and a tap on it calls `open` with it.
 struct WritingView: View {
   let writing: Writing
   let others: [Writing]
   let open: (Writing) -> Void
+  let edit: (_ change: (inout Writing) -> Void) -> Void
   let photos: [UIImage]
   @Binding var setting: BodySetting
   let camera: Camera
   let photoTaken: (UIImage) -> Void
+  @State private var editing = false
   @State private var typesetting = false
   @State private var takingPhoto = false
 
   var body: some View {
     WritingScreen(
-      writing: writing, others: others, open: open, photos: photos, setting: $setting,
-      typesetting: $typesetting,
+      writing: writing, others: others, open: open, edit: edit, photos: photos,
+      setting: $setting, editing: $editing, typesetting: $typesetting,
       takingPhoto: $takingPhoto, camera: camera, photoTaken: photoTaken)
   }
 }
 
-/// The writing's page, with its `photos`, in or out of the typesetting mode. As the title scrolls
+/// The writing's page, with its `photos`, being edited or not, in or out of the typesetting mode.
+/// While `editing`, the title and body are editable and each change goes to `edit`. As the title scrolls
 /// off the top, the header fades in to stand in for it. In the mode the page stops scrolling and lifts off the desk
 /// above the typesetting bar, the typesetting gestures over it step `setting`, and a tap or the
 /// bar's 「閉じる」 leaves the mode. The bottom row's camera sets `takingPhoto`, which covers the
@@ -34,8 +38,10 @@ struct WritingScreen: View {
   let writing: Writing
   let others: [Writing]
   let open: (Writing) -> Void
+  let edit: (_ change: (inout Writing) -> Void) -> Void
   let photos: [UIImage]
   @Binding var setting: BodySetting
+  @Binding var editing: Bool
   @Binding var typesetting: Bool
   @Binding var takingPhoto: Bool
   let camera: Camera
@@ -50,8 +56,8 @@ struct WritingScreen: View {
     GeometryReader { proxy in
       ScrollView {
         WritingPage(
-          writing: writing, mentions: mentions, photos: photos, width: proxy.size.width,
-          back: { dismiss() }, titleCutOff: { titleCutOff = $0 })
+          writing: writing, mentions: mentions, editing: editing, edit: edit, photos: photos,
+          width: proxy.size.width, back: { dismiss() }, titleCutOff: { titleCutOff = $0 })
       }
       .environment(\.openURL, .opening(mentions, with: open))
       .task(id: MentionSource(body: writing.body, others: others)) {
@@ -95,7 +101,7 @@ struct WritingScreen: View {
         // Hidden, not removed: the row sets the inset's height in and out of the mode, so the
         // scroll offset isn't clamped. The bar lies over it.
         let row = BottomRow(
-          width: proxy.size.width, cameraAvailable: camera.isAvailable,
+          width: proxy.size.width, cameraAvailable: camera.isAvailable, editing: $editing,
           takePhoto: { takingPhoto = true },
           adjustTypesetting: { withAnimation { typesetting = true } })
         Group {
@@ -134,11 +140,13 @@ struct WritingScreen: View {
   }
 }
 
-/// The camera at the bottom leading corner and the underlined 「組版を調整」 at the trailing one,
-/// both on the type area's margins. The camera is dimmed where there is none.
+/// The camera and the pencil, which starts editing, at the bottom leading corner, and the
+/// underlined 「組版を調整」 at the trailing one, or 「完了」 alone while `editing`, all on the type
+/// area's margins. The camera is dimmed where there is none.
 private struct BottomRow: View {
   let width: CGFloat
   let cameraAvailable: Bool
+  @Binding var editing: Bool
   let takePhoto: () -> Void
   let adjustTypesetting: () -> Void
   @EnvironmentTypeScale private var scale
@@ -155,9 +163,28 @@ private struct BottomRow: View {
       // Its 44-point tap area centred on the margin line, as the header's chevron is, unless that
       // would push it past the screen's edge.
       .padding(.leading, max(0, margin - TextButtonStyle.minimumSide / 2))
+      if !editing {
+        Button {
+          editing = true
+        } label: {
+          Image(systemName: "square.and.pencil")
+        }
+        .buttonStyle(.text)
+        .accessibilityLabel("編集")
+      }
       Spacer(minLength: 0)
-      Button(action: adjustTypesetting) {
-        ButtonLabel("組版を調整")
+      Group {
+        if editing {
+          Button {
+            editing = false
+          } label: {
+            ButtonLabel("完了")
+          }
+        } else {
+          Button(action: adjustTypesetting) {
+            ButtonLabel("組版を調整")
+          }
+        }
       }
       .buttonStyle(.text)
       .underline()
@@ -169,11 +196,14 @@ private struct BottomRow: View {
 
 /// The page laid out across a screen `width` wide: the back mark, then the title, the body with
 /// its `mentions` linked, and the photos after its last paragraph, piled as one stack, on the type
-/// area. `titleCutOff` hears how much of the title has scrolled above the scroll view's top, from
-/// 0 to 1.
+/// area. While `editing`, the title and body are editable, set as they are read, the mentions
+/// unlinked, and each change goes to `edit`. `titleCutOff` hears how much of the title has
+/// scrolled above the scroll view's top, from 0 to 1.
 struct WritingPage: View {
   let writing: Writing
   var mentions: [TitleMention] = []
+  var editing = false
+  var edit: (_ change: (inout Writing) -> Void) -> Void = { _ in }
   let photos: [UIImage]
   let width: CGFloat
   let back: () -> Void
@@ -196,19 +226,35 @@ struct WritingPage: View {
       .padding(.leading, max(0, area.margin - max(markWidth, TextButtonStyle.minimumSide) / 2))
       .padding(.bottom, scale.space(.l))
       VStack(alignment: .leading, spacing: 0) {
-        // An untitled writing keeps its line: an ideographic space is one heading line box tall.
-        Text(verbatim: writing.title.isEmpty ? "\u{3000}" : writing.title)
-          .textStyle(.heading)
-          .onGeometryChange(for: CGFloat.self) {
-            let frame = $0.frame(in: .scrollView)
-            guard frame.height > 0 else { return 0 }
-            return min(max(-frame.minY / frame.height, 0), 1)
-          } action: {
-            titleCutOff($0)
+        Group {
+          if editing {
+            TextField(
+              "タイトル",
+              text: Binding(
+                get: { writing.title },
+                // One line of its own, however long it wraps: a line break typed or pasted is dropped.
+                set: { title in edit { $0.title = title.replacing("\n", with: "") } }),
+              axis: .vertical)
+          } else {
+            // An untitled writing keeps its line: an ideographic space is one heading line box tall.
+            Text(verbatim: writing.title.isEmpty ? "\u{3000}" : writing.title)
           }
-          .padding(.bottom, scale.space(.m))
-        Text(body: writing.body, mentions: mentions)
-          .textStyle(.body)
+        }
+        .textStyle(.heading)
+        .onGeometryChange(for: CGFloat.self) {
+          let frame = $0.frame(in: .scrollView)
+          guard frame.height > 0 else { return 0 }
+          return min(max(-frame.minY / frame.height, 0), 1)
+        } action: {
+          titleCutOff($0)
+        }
+        .padding(.bottom, scale.space(.m))
+        if editing {
+          BodyEditor(text: writing.body) { body in edit { $0.body = body } }
+        } else {
+          Text(body: writing.body, mentions: mentions)
+            .textStyle(.body)
+        }
         if !photos.isEmpty {
           PhotoStack(photos: photos, lineLength: area.lineLength)
         }
@@ -323,7 +369,7 @@ private struct BackMark: Shape {
   NavigationStack {
     WritingView(
       writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [],
-      open: { _ in }, photos: [],
+      open: { _ in }, edit: { _ in }, photos: [],
       setting: $setting, camera: .device, photoTaken: { _ in })
   }
 }

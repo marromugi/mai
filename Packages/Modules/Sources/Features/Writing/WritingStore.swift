@@ -9,7 +9,7 @@ protocol WritingStore {
 
 extension WritingStore {
   /// Every writing kept, with `samples` saved first when none are.
-  /// Stand-in until writings can be written (#29).
+  /// Stand-in until writings can be made.
   func all(seedingWhenEmpty samples: [Writing]) throws -> [Writing] {
     let writings = try all()
     guard writings.isEmpty else { return writings }

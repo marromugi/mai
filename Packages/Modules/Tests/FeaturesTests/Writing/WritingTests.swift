@@ -130,4 +130,29 @@ struct WritingTests {
     let named = bread.body.titleMentions(of: Array(samples.dropFirst())).map(\.writing.title)
     #expect(named.contains("夜の机に向かう"))
   }
+
+  @Test func anEditChangesTheWritingAndItsUpdatedTime() throws {
+    let other = Writing(title: "夜", body: "", updated: Date(timeIntervalSince1970: 1))
+    let writing = Writing(title: "朝", body: "一行目", updated: Date(timeIntervalSince1970: 1))
+    var writings = [other, writing]
+    let edited = try #require(
+      writings.edit(writing.id, at: Date(timeIntervalSince1970: 2)) { $0.body += "\n二行目" })
+    #expect(edited.body == "一行目\n二行目")
+    #expect(edited.updated == Date(timeIntervalSince1970: 2))
+    #expect(writings == [other, edited])
+  }
+
+  @Test func anEditThatChangesNothingKeepsTheUpdatedTime() {
+    let writing = Writing(title: "朝", body: "一行目", updated: Date(timeIntervalSince1970: 1))
+    var writings = [writing]
+    #expect(writings.edit(writing.id, at: Date(timeIntervalSince1970: 2)) { $0.title = "朝" } == nil)
+    #expect(writings == [writing])
+  }
+
+  @Test func anEditToAWritingNotThereChangesNothing() {
+    let writing = Writing(title: "朝", body: "一行目", updated: Date(timeIntervalSince1970: 1))
+    var writings = [writing]
+    #expect(writings.edit(UUID(), at: .now) { $0.title = "夜" } == nil)
+    #expect(writings == [writing])
+  }
 }
