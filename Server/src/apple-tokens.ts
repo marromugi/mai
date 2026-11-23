@@ -55,11 +55,12 @@ export class AppleTokens {
       throw error;
     }
     const answer = isJson(body) ? body : {};
-    if (response.status === 400 && answer["error"] === "invalid_client") {
-      throw new Error("Apple refused the Worker's client_secret; check the APPLE_ secrets");
+    if (response.status === 400 && answer["error"] === "invalid_grant") {
+      return { ok: false, failure: "refused" };
     }
     if (response.status === 400) {
-      return { ok: false, failure: "refused" };
+      // Every other error Apple lists is about the Worker's own request or its APPLE_ secrets.
+      throw new Error(`Apple's token endpoint refused the Worker: ${String(answer["error"])}`);
     }
     const refreshToken = text(answer["refresh_token"]);
     const idToken = readCompactJws(text(answer["id_token"]) ?? "");
