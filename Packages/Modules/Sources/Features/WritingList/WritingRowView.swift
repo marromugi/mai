@@ -1,34 +1,28 @@
 import SwiftUI
 internal import Typesetting
 
-/// A writing's title, with its count and date on the title's first line at the trailing edge.
-/// At accessibility sizes the count and date go under the title, which then takes the whole width,
-/// and each on a line of its own when their columns don't fit across.
+/// A writing's title, with how long ago it was updated on the title's first line at the trailing
+/// edge. At accessibility sizes that goes under the title, which then takes the whole width.
 struct WritingRowView: View {
   let row: WritingRow
+  let now: Date
+  @Environment(\.calendar) private var calendar
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @EnvironmentTypeScale private var scale
 
   var body: some View {
+    let updated = UpdatedColumn(label: row.updatedLabel(now: now, calendar: calendar))
     if dynamicTypeSize.isAccessibilitySize {
       VStack(alignment: .leading, spacing: 0) {
         title.frame(maxWidth: .infinity, alignment: .leading)
-        // The columns are the same width in every row, so every row makes the same choice.
-        ViewThatFits(in: .horizontal) {
-          MetaColumns(row: row).frame(maxWidth: .infinity, alignment: .trailing)
-          VStack(alignment: .leading, spacing: 0) {
-            Text(verbatim: row.characterCountLabel)
-            Text(verbatim: row.updated)
-          }
-          .metaStyle()
-        }
+        updated.frame(maxWidth: .infinity, alignment: .trailing)
       }
     } else {
       TitleBesideMetaLayout(
         titleCharSize: scale.size(.title), minimumGap: scale.chars(1, of: .meta)
       ) {
         title
-        MetaColumns(row: row)
+        updated
       }
     }
   }
@@ -40,34 +34,22 @@ struct WritingRowView: View {
   }
 }
 
-/// The count and the date, each in a column as wide as its widest expected value, so every row's
-/// columns line up. A value wider than that reaches out to the leading side without moving them.
-struct MetaColumns: View {
-  let row: WritingRow
-  @EnvironmentTypeScale private var scale
+/// How long ago a writing was updated, in a column as wide as the widest wording, so every row's
+/// column lines up. A label wider than that reaches out to the leading side without moving it.
+struct UpdatedColumn: View {
+  let label: String
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: scale.chars(1, of: .meta)) {
-      column(widest: ["00000文字"], value: row.characterCountLabel)
-      column(widest: ["00か月前", "00週間前", "00時間前", "たった今"], value: row.updated)
-    }
-    .metaStyle()
-  }
-
-  private func column(widest: [String], value: String) -> some View {
     ZStack(alignment: .trailing) {
-      ForEach(widest, id: \.self) { Text(verbatim: $0).hidden() }
+      ForEach(["00か月前", "00週間前", "00時間前", "たった今"], id: \.self) {
+        Text(verbatim: $0).hidden()
+      }
     }
     .overlay(alignment: Alignment(horizontal: .trailing, vertical: .firstTextBaseline)) {
-      Text(verbatim: value).fixedSize()
+      Text(verbatim: label).fixedSize()
     }
-  }
-}
-
-extension View {
-  fileprivate func metaStyle() -> some View {
-    textStyle(.meta)
-      .foregroundStyle(.secondary)
+    .textStyle(.meta)
+    .foregroundStyle(.secondary)
   }
 }
 
