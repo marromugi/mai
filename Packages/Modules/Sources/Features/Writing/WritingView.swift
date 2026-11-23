@@ -41,7 +41,6 @@ struct WritingScreen: View {
   let camera: Camera
   let photoTaken: (UIImage) -> Void
   @State private var titleCutOff: CGFloat = 0
-  @State private var showingGestures = false
   /// Found once per body and set of others, not at every update: the scroll updates the screen
   /// each frame.
   @State private var mentions: [TitleMention] = []
@@ -59,9 +58,9 @@ struct WritingScreen: View {
         mentions = writing.body.titleMentions(of: others)
       }
       .scrollDisabled(typesetting)
-      .clipShape(PageShape(cornerRadius: typesetting ? Self.pageCornerRadius : 0))
+      .clipShape(pageShape)
       .background {
-        PageShape(cornerRadius: typesetting ? Self.pageCornerRadius : 0)
+        pageShape
           .fill(
             Color(.systemBackground)
               .shadow(.inner(color: .black.opacity(typesetting ? 0.2 : 0), radius: 10)))
@@ -109,7 +108,7 @@ struct WritingScreen: View {
         .overlay {
           if typesetting {
             TypesettingBar(
-              width: proxy.size.width, showGestures: { showingGestures = true },
+              width: proxy.size.width,
               close: { withAnimation { typesetting = false } })
           }
         }
@@ -124,15 +123,15 @@ struct WritingScreen: View {
         },
         { takingPhoto = false })
     }
-    .sheet(isPresented: $showingGestures) {
-      TypesettingGestures()
-    }
     .environment(\.bodySetting, setting)
     .toolbar(.hidden, for: .navigationBar)
   }
 
-  /// How round the page's bottom corners are in the typesetting mode, so the paper's edge shows.
-  static let pageCornerRadius: CGFloat = 32
+  /// The page's outline: in the typesetting mode its bottom lifts off the desk with rounded corners,
+  /// so the paper's edge shows; out of it, the page fills the screen.
+  private var pageShape: PageShape {
+    typesetting ? PageShape(cornerRadius: 32, lift: 12) : PageShape(cornerRadius: 0, lift: 0)
+  }
 }
 
 /// The camera at the bottom leading corner and the underlined 「組版を調整」 at the trailing one,

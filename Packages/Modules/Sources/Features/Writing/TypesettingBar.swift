@@ -1,11 +1,11 @@
 import SwiftUI
 
 /// The bar under the page in the typesetting mode: 「組版の調整」 and a round question mark that
-/// shows the gestures on the leading margin, and the underlined 「閉じる」 on the trailing one.
+/// opens the gestures sheet on the leading margin, and the underlined 「閉じる」 on the trailing one.
 struct TypesettingBar: View {
   let width: CGFloat
-  let showGestures: () -> Void
   let close: () -> Void
+  @State private var showingGestures = false
   @EnvironmentTypeScale private var scale
 
   var body: some View {
@@ -15,7 +15,9 @@ struct TypesettingBar: View {
         .font(.subheadline.weight(.semibold))
         .tracking(0.6)
         .accessibilityAddTraits(.isHeader)
-      Button(action: showGestures) {
+      Button {
+        showingGestures = true
+      } label: {
         Image(systemName: "questionmark.circle.fill")
           .font(.title2)
       }
@@ -29,6 +31,9 @@ struct TypesettingBar: View {
       .underline()
     }
     .padding(.horizontal, margin)
+    .sheet(isPresented: $showingGestures) {
+      TypesettingGestures()
+    }
   }
 }
 
@@ -81,20 +86,21 @@ private struct GestureRow: View {
   }
 }
 
-/// The page's outline in the typesetting mode: its sides and bottom, with the bottom corners
-/// rounded by `cornerRadius`. The top runs a whole height above the frame, so the page also covers
-/// the status bar.
+/// The page's outline in the typesetting mode: its sides and bottom, the bottom `lift` above the
+/// frame's and its corners rounded by `cornerRadius`. The top runs a whole height above the frame,
+/// so the page also covers the status bar.
 struct PageShape: Shape {
   var cornerRadius: CGFloat
+  var lift: CGFloat
 
-  var animatableData: CGFloat {
-    get { cornerRadius }
-    set { cornerRadius = newValue }
+  var animatableData: AnimatablePair<CGFloat, CGFloat> {
+    get { AnimatablePair(cornerRadius, lift) }
+    set { (cornerRadius, lift) = (newValue.first, newValue.second) }
   }
 
   nonisolated func path(in rect: CGRect) -> Path {
     let page = CGRect(
-      x: rect.minX, y: rect.minY - rect.height, width: rect.width, height: rect.height * 2)
+      x: rect.minX, y: rect.minY - rect.height, width: rect.width, height: rect.height * 2 - lift)
     return UnevenRoundedRectangle(
       bottomLeadingRadius: cornerRadius, bottomTrailingRadius: cornerRadius, style: .continuous
     ).path(in: page)
@@ -102,7 +108,7 @@ struct PageShape: Shape {
 }
 
 #Preview("Bar") {
-  TypesettingBar(width: 402, showGestures: {}, close: {})
+  TypesettingBar(width: 402, close: {})
     .background(Color(.secondarySystemBackground))
 }
 
