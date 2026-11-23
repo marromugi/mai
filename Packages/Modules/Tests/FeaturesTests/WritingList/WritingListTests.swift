@@ -80,7 +80,28 @@ struct WritingListTests {
         id: 4, title: "", characterCount: 0, updated: movedFromNow(DateComponents(day: -1))),
       WritingRow(id: 2, title: "", characterCount: 0, updated: now),
     ]
-    #expect(rows.newestFirst().map(\.id) == [2, 3, 4, 1])
+    #expect(rows.sorted(.newestFirst).map(\.id) == [2, 3, 4, 1])
+  }
+
+  @Test func rowsAreMostCharactersFirstAndTiesNewestFirstThenInIDOrder() {
+    let rows = [
+      WritingRow(id: 1, title: "", characterCount: 10, updated: now),
+      WritingRow(
+        id: 5, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+      WritingRow(
+        id: 6, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -1))),
+      WritingRow(id: 3, title: "", characterCount: 0, updated: now),
+      WritingRow(
+        id: 2, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+      WritingRow(
+        id: 4, title: "", characterCount: 99999, updated: movedFromNow(DateComponents(year: -1))),
+    ]
+    #expect(rows.sorted(.mostCharactersFirst).map(\.id) == [4, 6, 2, 5, 1, 3])
+  }
+
+  /// The chosen order is remembered by these names; changing one forgets what was chosen.
+  @Test func ordersAreRememberedByTheirNames() {
+    #expect(WritingListOrder.allCases.map(\.rawValue) == ["updated", "characterCount"])
   }
 
   @Test(arguments: [DynamicTypeSize.large, .accessibility5])
@@ -114,10 +135,13 @@ struct WritingListTests {
     #expect(abs(rowWidth - expected) < 0.5)
   }
 
+  /// With nothing remembered, newest first.
   @Test func rootShowsTheWritingList() {
-    assertSnapshot(
-      of: RootView().frame(width: 402, height: 874).background(Color(.systemBackground)),
-      as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
+    assertRoot(remembering: [:])
+  }
+
+  @Test func rootShowsTheRememberedOrder() {
+    assertRoot(remembering: ["writingListOrder": "characterCount"])
   }
 
   /// An untitled row, a row updated after `now`, and one updated long enough ago that its label is
@@ -135,6 +159,7 @@ struct WritingListTests {
             updated: movedFromNow(DateComponents(hour: 3))),
         ],
         now: now,
+        order: .constant(.newestFirst),
         width: 402
       )
       .fixedSize(horizontal: false, vertical: true)
@@ -160,6 +185,10 @@ struct WritingListTests {
   @Test func listAtTheLargestSize() {
     assertList(.accessibility5, .light)
   }
+
+  @Test func listByCharacterCount() {
+    assertList(.large, .light, .mostCharactersFirst)
+  }
 }
 
 private func height(of row: WritingRow, size: DynamicTypeSize) -> CGFloat {
@@ -174,10 +203,31 @@ private func width(of view: some View) -> CGFloat {
     .sizeThatFits(in: CGSize(width: 2000, height: 2000)).width
 }
 
+/// The app's first screen, reading what is remembered from a store holding only `remembered`.
+private func assertRoot(
+  remembering remembered: [String: String],
+  testName: String = #function
+) {
+  let suite = "WritingListTests.\(testName)"
+  guard let store = UserDefaults(suiteName: suite) else {
+    preconditionFailure("The defaults suite \(suite) can't be opened.")
+  }
+  store.removePersistentDomain(forName: suite)
+  for (key, value) in remembered {
+    store.set(value, forKey: key)
+  }
+  assertSnapshot(
+    of: RootView().defaultAppStorage(store)
+      .frame(width: 402, height: 874).background(Color(.systemBackground)),
+    as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
+    testName: testName)
+}
+
 /// The sample list on a 402-wide screen, as tall as it needs to be.
 private func assertList(
   _ size: DynamicTypeSize,
   _ colorScheme: ColorScheme,
+  _ order: WritingListOrder = .newestFirst,
   fileID: StaticString = #fileID,
   file: StaticString = #filePath,
   testName: String = #function,
@@ -186,7 +236,8 @@ private func assertList(
 ) {
   assertSnapshot(
     of: WritingListPage(
-      rows: WritingRow.samples(now: now, calendar: calendar), now: now, width: 402
+      rows: WritingRow.samples(now: now, calendar: calendar), now: now, order: .constant(order),
+      width: 402
     )
     .fixedSize(horizontal: false, vertical: true)
     .frame(width: 402)
