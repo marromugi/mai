@@ -1,3 +1,4 @@
+import { deleteAccount } from "./account-deletion";
 import { AppleSignInKeys } from "./apple-sign-in";
 import { AppleTokens } from "./apple-tokens";
 import { Challenges } from "./challenges";
@@ -102,6 +103,8 @@ export async function serve(request: Request, signIn: SignIn, photos: Photos): P
       return (await store.endSession(caller, now))
         ? new Response(null, { status: 204 })
         : refused("session");
+    case "DELETE /account":
+      return answered(await deleteAccount(caller, signIn, photos, now), (deleted) => deleted);
     case "GET /account":
       return answered(await store.account(caller, now), (state) =>
         Response.json({

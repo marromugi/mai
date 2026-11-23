@@ -25,16 +25,18 @@ const month = 30 * 24 * 60 * 60 * 1000;
  * written without Apple: `test/sign-in.test.ts` makes accounts through Apple. Each test makes its
  * own, so tests share the database and nothing else. `original` is its subscription's
  * originalTransactionId. `periodEnds` is when the billing period kept for it ends; one in the past
- * reads as a billing grace period that pays for the month.
+ * reads as a billing grace period that pays for the month. `id` is the account's ID, a new one when
+ * left out.
  */
 export async function newAccount(
   product: string = products.basic,
   now = Date.now(),
   periodEnds = now + month,
+  id: string = crypto.randomUUID(),
 ): Promise<{ account: string; token: string; caller: Caller; original: string }> {
-  const account = parseAccountId(crypto.randomUUID());
+  const account = parseAccountId(id);
   if (account === undefined) {
-    throw new Error("crypto.randomUUID gives a lowercase UUID");
+    throw new Error(`${id} is not a lowercase UUID`);
   }
   const { token, caller } = await newSessionToken();
   const original = crypto.randomUUID();
