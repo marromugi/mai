@@ -130,4 +130,74 @@ struct WritingTests {
     let named = bread.body.titleMentions(of: Array(samples.dropFirst())).map(\.writing.title)
     #expect(named.contains("夜の机に向かう"))
   }
+
+  @Test func anEditChangesTheWritingAndItsUpdatedTime() throws {
+    let other = Writing(title: "夜", body: "", updated: Date(timeIntervalSince1970: 1))
+    let writing = Writing(title: "朝", body: "一行目", updated: Date(timeIntervalSince1970: 1))
+    var writings = [other, writing]
+    let edited = try #require(
+      writings.edit(writing.id, at: Date(timeIntervalSince1970: 2)) { $0.body += "\n二行目" })
+    #expect(edited.body == "一行目\n二行目")
+    #expect(edited.updated == Date(timeIntervalSince1970: 2))
+    #expect(writings == [other, edited])
+  }
+
+  @Test func anEditThatChangesNothingKeepsTheUpdatedTime() {
+    let writing = Writing(title: "朝", body: "一行目", updated: Date(timeIntervalSince1970: 1))
+    var writings = [writing]
+    #expect(writings.edit(writing.id, at: Date(timeIntervalSince1970: 2)) { $0.title = "朝" } == nil)
+    #expect(writings == [writing])
+  }
+
+  @Test func anEditToAWritingNotThereChangesNothing() {
+    let writing = Writing(title: "朝", body: "一行目", updated: Date(timeIntervalSince1970: 1))
+    var writings = [writing]
+    #expect(writings.edit(UUID(), at: .now) { $0.title = "夜" } == nil)
+    #expect(writings == [writing])
+  }
+
+  /// A title-only edit is saved, updated, and read back by the next launch.
+  @Test func anEditIsSavedAndReadBackByTheNextLaunch() throws {
+    try withEmptyStore { store throws in
+      let writing = Writing(title: "朝", body: "本文", updated: Date(timeIntervalSince1970: 1))
+      try store.save(writing)
+      var writings = [writing]
+      try store.edit(writing.id, in: &writings, at: Date(timeIntervalSince1970: 2)) {
+        $0.title = "夜"
+      }
+      let expected = Writing(
+        id: writing.id, title: "夜", body: "本文", updated: Date(timeIntervalSince1970: 2))
+      #expect(writings == [expected])
+      #expect(try FileWritingStore(directory: store.directory).all() == [expected])
+    }
+  }
+
+  @Test func anEditThatChangesNothingIsNotSaved() throws {
+    let store = RefusingStore()
+    var writings = [Writing(title: "朝", body: "本文")]
+    try store.edit(writings[0].id, in: &writings, at: .now) { $0.body = "本文" }
+  }
+
+  /// A save that fails throws, and the writings still hold the edit.
+  @Test func anEditWhoseSaveFailsIsKeptInTheWritings() {
+    var writings = [Writing(title: "朝", body: "本文", updated: Date(timeIntervalSince1970: 1))]
+    #expect(throws: RefusingStore.Refused.self) {
+      try RefusingStore().edit(writings[0].id, in: &writings, at: Date(timeIntervalSince1970: 2)) {
+        $0.body = "本文と追記"
+      }
+    }
+    #expect(writings[0].body == "本文と追記")
+    #expect(writings[0].updated == Date(timeIntervalSince1970: 2))
+  }
+}
+
+/// A store whose every save fails.
+private struct RefusingStore: WritingStore {
+  struct Refused: Error {}
+
+  func all() throws -> [Writing] { [] }
+
+  func save(_ writing: Writing) throws {
+    throw Refused()
+  }
 }

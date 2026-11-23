@@ -20,6 +20,7 @@ struct WritingModeTests {
     let page = HostedPage(
       WritingView(
         writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [], open: { _ in },
+        edit: { _ in },
         photos: [],
         setting: .constant(.standard), camera: .standIn(taking: nil), photoTaken: { _ in }))
     let scrollView = try #require(page.scrollViews.first)
@@ -66,8 +67,10 @@ struct WritingModeTests {
 private func screen(typesetting: Bool, setting: BodySetting = .standard) -> WritingScreen {
   WritingScreen(
     writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [], open: { _ in },
+    edit: { _ in },
     photos: [],
     setting: .constant(setting),
+    editing: .constant(false),
     typesetting: .constant(typesetting),
     takingPhoto: .constant(false),
     camera: .standIn(taking: nil),
