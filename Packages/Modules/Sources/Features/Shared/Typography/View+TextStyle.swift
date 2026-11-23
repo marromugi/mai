@@ -13,10 +13,19 @@ extension View {
 
 extension Text {
   /// `string` as body text, broken by the strict rules: no line starts with ー, a small kana, or
-  /// anything else 行頭禁則 forbids, and no break rests on a guessed language (#23).
-  init(body string: String) {
+  /// anything else 行頭禁則 forbids, and no break rests on a guessed language (#23). Each of
+  /// `mentions` links to its writing, under a dotted line in the text's colour.
+  init(body string: String, mentions: [TitleMention] = []) {
     var text = AttributedString(string)
     text.languageIdentifier = Self.bodyLanguage
+    for mention in mentions {
+      guard let range = Range(mention.range, in: text) else {
+        preconditionFailure("A mention's range is not in the body it was found in.")
+      }
+      text[range].link = mention.writing.link
+      text[range].foregroundColor = .primary
+      text[range].underlineStyle = Text.LineStyle(pattern: .dot)
+    }
     self.init(text)
   }
 

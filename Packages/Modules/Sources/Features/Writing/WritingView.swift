@@ -3,9 +3,12 @@ internal import Typesetting
 
 /// A writing's page: its title, body, and `photos` on the type area, under a back mark, over the
 /// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap leaves it; its camera
-/// takes a photo with `camera` and hands it to `photoTaken`.
+/// takes a photo with `camera` and hands it to `photoTaken`. Where one of `others`' titles appears
+/// in the body, it links to that writing, and a tap on it calls `open` with it.
 struct WritingView: View {
   let writing: Writing
+  var others: [WritingRow] = []
+  var open: (WritingRow) -> Void = { _ in }
   let photos: [UIImage]
   @Binding var setting: BodySetting
   let camera: Camera
@@ -15,7 +18,8 @@ struct WritingView: View {
 
   var body: some View {
     WritingScreen(
-      writing: writing, photos: photos, setting: $setting, typesetting: $typesetting,
+      writing: writing, others: others, open: open, photos: photos, setting: $setting,
+      typesetting: $typesetting,
       takingPhoto: $takingPhoto, camera: camera, photoTaken: photoTaken)
   }
 }
@@ -25,9 +29,11 @@ struct WritingView: View {
 /// header fades in to stand in for it. In the mode the page shrinks to a sheet on the desk and stops
 /// scrolling, the typesetting gestures over it step `setting`, and a tap leaves the mode. The bottom
 /// row's camera sets `takingPhoto`, which covers the page with `camera`'s screen until it takes a
-/// photo or is cancelled.
+/// photo or is cancelled. A tap on a mention of one of `others` in the body calls `open` with it.
 struct WritingScreen: View {
   let writing: Writing
+  var others: [WritingRow] = []
+  var open: (WritingRow) -> Void = { _ in }
   let photos: [UIImage]
   @Binding var setting: BodySetting
   @Binding var typesetting: Bool
@@ -38,12 +44,21 @@ struct WritingScreen: View {
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
+    let mentions = writing.body.titleMentions(of: others)
     GeometryReader { proxy in
       ScrollView {
         WritingPage(
-          writing: writing, photos: photos, width: proxy.size.width, back: { dismiss() },
-          titleCutOff: { titleCutOff = $0 })
+          writing: writing, mentions: mentions, photos: photos, width: proxy.size.width,
+          back: { dismiss() }, titleCutOff: { titleCutOff = $0 })
       }
+      .environment(
+        \.openURL,
+        OpenURLAction { url in
+          guard let writing = mentions.writing(linkedBy: url) else { return .systemAction }
+          open(writing)
+          return .handled
+        }
+      )
       .scrollDisabled(typesetting)
       .overlay(alignment: .top) {
         // Faded by the scroll, not animated: an animation running as the mode starts moves the
@@ -141,11 +156,13 @@ private struct BottomRow: View {
   }
 }
 
-/// The page laid out across a screen `width` wide: the back mark, then the title, the body, and
-/// the photos after its last paragraph, piled as one stack, on the type area. `titleCutOff` hears
-/// how much of the title has scrolled above the scroll view's top, from 0 to 1.
+/// The page laid out across a screen `width` wide: the back mark, then the title, the body with
+/// its `mentions` linked, and the photos after its last paragraph, piled as one stack, on the type
+/// area. `titleCutOff` hears how much of the title has scrolled above the scroll view's top, from
+/// 0 to 1.
 struct WritingPage: View {
   let writing: Writing
+  var mentions: [TitleMention] = []
   let photos: [UIImage]
   let width: CGFloat
   let back: () -> Void
@@ -179,7 +196,7 @@ struct WritingPage: View {
             titleCutOff($0)
           }
           .padding(.bottom, scale.space(.m))
-        Text(body: writing.body)
+        Text(body: writing.body, mentions: mentions)
           .textStyle(.body)
         if !photos.isEmpty {
           PhotoStack(photos: photos, lineLength: area.lineLength)

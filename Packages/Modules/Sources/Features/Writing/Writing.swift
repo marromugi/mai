@@ -6,10 +6,13 @@ struct Writing: Equatable {
 }
 
 extension Writing {
-  /// Stand-in until there is a store of writings: `title` over one sample body.
+  /// Stand-in until there is a store of writings: `title` over one sample body, which ends naming
+  /// another sample writing's title.
   static func sample(titled title: String) -> Writing {
-    Writing(title: title, body: sampleBody)
+    Writing(title: title, body: sampleBody + "\n" + sampleMention)
   }
+
+  static let sampleMention = "焼いた日の夜のことは「夜の机に向かう」に書いた。"
 
   static let sampleBody = """
     週末に小さなパンを焼いてみたい。

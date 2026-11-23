@@ -19,6 +19,8 @@ public struct RootView: View {
       .navigationDestination(for: WritingRow.self) { row in
         WritingView(
           writing: .sample(titled: row.title),
+          others: rows.filter { $0.id != row.id },
+          open: { path.append($0) },
           photos: photos[row.id],
           setting: $settings[row.id],
           camera: .device,

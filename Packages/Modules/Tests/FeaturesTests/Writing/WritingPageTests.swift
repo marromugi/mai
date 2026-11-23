@@ -14,6 +14,15 @@ struct WritingPageTests {
     assertPage(.large, .dark)
   }
 
+  /// Another writing's title in the body is a link under a dotted line in the text's colour.
+  @Test func pageWithATitleLink() {
+    assertPage(.large, .light, writing: .sample(titled: "間合いの調整"), others: [nightDesk])
+  }
+
+  @Test func pageWithATitleLinkInDarkMode() {
+    assertPage(.large, .dark, writing: .sample(titled: "間合いの調整"), others: [nightDesk])
+  }
+
   @Test func pageAtTheLargestSize() {
     assertPage(.accessibility5, .light)
   }
@@ -78,6 +87,10 @@ struct WritingPageTests {
   }
 }
 
+/// A writing whose title the stand-in writings' body names.
+private let nightDesk = WritingRow(
+  id: 4, title: "夜の机に向かう", characterCount: 0, updated: Date(timeIntervalSince1970: 0))
+
 private func pageHeight(title: String, size: DynamicTypeSize) -> CGFloat {
   let page = WritingPage(
     writing: Writing(title: title, body: "本文"), photos: [], width: 402, back: {},
@@ -128,6 +141,8 @@ private func assertPage(
   body: BodySetting = .standard,
   typesetting: Bool = false,
   camera: Camera = .standIn(taking: nil),
+  writing: Writing = Writing(title: "間合いの調整", body: Writing.sampleBody),
+  others: [WritingRow] = [],
   fileID: StaticString = #fileID,
   file: StaticString = #filePath,
   testName: String = #function,
@@ -136,8 +151,8 @@ private func assertPage(
 ) {
   assertSnapshot(
     of: WritingScreen(
-      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: [],
-      setting: .constant(body),
+      writing: writing, others: others,
+      photos: [], setting: .constant(body),
       typesetting: .constant(typesetting), takingPhoto: .constant(false), camera: camera,
       photoTaken: { _ in }
     )
