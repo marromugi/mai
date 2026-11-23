@@ -42,11 +42,14 @@ targets:
     scheme:
       testTargets:
         - MaiTests
+      storeKitConfiguration: StoreKit/Mai.storekit
   MaiTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - AppTests
+      - path: StoreKit/Mai.storekit
+        buildPhase: resources
     dependencies:
       - target: Mai
       - package: Sync
