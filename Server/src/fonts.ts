@@ -1,7 +1,7 @@
 import { problem } from "./sign-in";
 
-/** A font file's name as `fonts.json` lists them: no path, and a font's extension. */
-const fontName = /^\/fonts\/([A-Za-z0-9-]+\.(?:ttf|otf))$/;
+/** A font file's name as `fonts.json` lists them: no path, a font's extension, and short of R2's limit on a key. */
+const fontName = /^\/fonts\/([A-Za-z0-9-]{1,100}\.(?:ttf|otf))$/;
 
 /**
  * Answers `GET /fonts/<file>` from `bucket`, under `fonts/<file>`. Needs no session: the files are
@@ -10,7 +10,9 @@ const fontName = /^\/fonts\/([A-Za-z0-9-]+\.(?:ttf|otf))$/;
  */
 export async function serveFont(request: Request, bucket: R2Bucket): Promise<Response> {
   if (request.method !== "GET") {
-    return problem(405, "fonts are only fetched with GET");
+    const response = problem(405, "fonts are only fetched with GET");
+    response.headers.set("Allow", "GET");
+    return response;
   }
   const name = fontName.exec(new URL(request.url).pathname)?.[1];
   const object = name === undefined ? null : await bucket.get(`fonts/${name}`);

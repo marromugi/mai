@@ -146,9 +146,17 @@ private struct FontPicker: View {
     }
   }
 
+  @ViewBuilder
   private func section(_ title: LocalizedStringKey, _ families: [FontFamily]) -> some View {
+    let addable = families.filter { !excluded.contains($0.name) }
+    if !addable.isEmpty {
+      section(title, addable: addable)
+    }
+  }
+
+  private func section(_ title: LocalizedStringKey, addable: [FontFamily]) -> some View {
     Section(title) {
-      ForEach(families.filter { !excluded.contains($0.name) }) { family in
+      ForEach(addable) { family in
         Button {
           add(family)
           dismiss()

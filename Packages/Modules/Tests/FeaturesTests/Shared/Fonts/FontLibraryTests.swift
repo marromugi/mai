@@ -134,6 +134,30 @@ final class FontLibraryTests {
     #expect(!CTFontManagerUnregisterFontsForURL(regular as CFURL, .process, nil))
   }
 
+  /// A kept file that registers as another font isn't taken for the family: setting text in the
+  /// family would find no face.
+  @Test func aKeptFileHoldingAnotherFontFailsAtLaunch() throws {
+    let kept = folder.appending(path: "Lora Italic")
+    try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+    var data = try Data(contentsOf: Self.source)
+    for (from, to) in [("Lora-Italic", "Lxra-Italic")] {
+      for encoding in [String.Encoding.ascii, .utf16BigEndian] {
+        guard let old = from.data(using: encoding), let new = to.data(using: encoding) else {
+          preconditionFailure("ASCII names encode in both.")
+        }
+        while let range = data.range(of: old) { data.replaceSubrange(range, with: new) }
+      }
+    }
+    let renamed = kept.appending(path: "Lora-Italic.ttf")
+    try data.write(to: renamed)
+
+    let fonts = library { _ in throw URLError(.notConnectedToInternet) }
+
+    #expect(fonts.state(of: Self.standIn) == .failed(FontFetchError.notAFont.message))
+    #expect(!FileManager.default.fileExists(atPath: kept.path))
+    #expect(!CTFontManagerUnregisterFontsForURL(renamed as CFURL, .process, nil))
+  }
+
   @Test func refusesAFileThatIsNotTheOneNamed() async throws {
     let other = Self.fixtures.appending(path: "OFL.txt")
     let fonts = library { _ in try Self.downloaded(other) }

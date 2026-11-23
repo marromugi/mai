@@ -121,6 +121,15 @@ nonisolated struct FontFamily: Hashable, Identifiable, Sendable {
     notoSansJP, inter, lora, zenKakuGothicNew, zenOldMincho, bizUDPMincho,
   ]
 
+  /// The PostScript names its files hold: its regular face, and its bold where that is a face of
+  /// its own.
+  var faceNames: Set<String> {
+    switch bold {
+    case .face(let name): [regular, name]
+    case .weight: [regular]
+    }
+  }
+
   /// The bytes of all its files.
   var size: Int { files.map(\.size).reduce(0, +) }
 

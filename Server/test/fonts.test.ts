@@ -27,14 +27,18 @@ describe("GET /fonts/<file>", () => {
     expect((await get("/fonts/Other-Regular.ttf")).status).toBe(404);
   });
 
-  it.each(["/fonts/%2E%2E%2Fsecret.ttf", "/fonts/a/b.ttf", "/fonts/x.txt"])(
-    "answers 404 for %s, which isn't a font file's name",
-    async (path) => {
-      expect((await get(path)).status).toBe(404);
-    },
-  );
+  it.each([
+    "/fonts/%2E%2E%2Fsecret.ttf",
+    "/fonts/a/b.ttf",
+    "/fonts/x.txt",
+    `/fonts/${"a".repeat(1019)}.ttf`,
+  ])("answers 404 for %s, which isn't a font file's name", async (path) => {
+    expect((await get(path)).status).toBe(404);
+  });
 
   it("answers 405 to anything but GET", async () => {
-    expect((await get("/fonts/Some-Regular.ttf", "PUT")).status).toBe(405);
+    const response = await get("/fonts/Some-Regular.ttf", "PUT");
+    expect(response.status).toBe(405);
+    expect(response.headers.get("Allow")).toBe("GET");
   });
 });

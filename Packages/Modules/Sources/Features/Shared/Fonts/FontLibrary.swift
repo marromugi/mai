@@ -104,7 +104,12 @@ public final class FontLibrary {
         fetched = try await download(server.appending(path: "fonts").appending(path: file.name))
       } catch let error as URLError {
         Self.log.error("Downloading \(file.name, privacy: .public) failed: \(error)")
-        throw FontFetchError.unreachable
+        switch error.code {
+        case .cannotCreateFile, .cannotOpenFile, .cannotWriteToFile, .cannotMoveFile:
+          throw FontFetchError.notKept
+        default:
+          throw FontFetchError.unreachable
+        }
       }
       defer { try? FileManager.default.removeItem(at: fetched) }
       guard try await Self.matches(fetched, file) else {
@@ -166,6 +171,18 @@ public final class FontLibrary {
         discard()
         return .failed(FontFetchError.notAFont.message)
       }
+    }
+    // A kept file can be another font under the family's file name: replaced, or kept by an
+    // earlier version of the app. Only files that hold the family's faces are used.
+    let names = Set(
+      family.files.map { kept.appending(path: $0.name) }.flatMap { url in
+        (CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] ?? [])
+          .compactMap { CTFontDescriptorCopyAttribute($0, kCTFontNameAttribute) as? String }
+      })
+    guard names.isSuperset(of: family.faceNames) else {
+      Self.log.error("\(family.name, privacy: .public)'s kept files don't hold its faces.")
+      discard()
+      return .failed(FontFetchError.notAFont.message)
     }
     return .available
   }
