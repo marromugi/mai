@@ -1,5 +1,6 @@
 import Foundation
 import Sync
+import SyncFakes
 import Testing
 
 /// The writing in `Server/test/fixtures/sealed-writing.json`, which the Worker's tests open by the

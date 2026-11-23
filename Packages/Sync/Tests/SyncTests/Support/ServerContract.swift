@@ -1,5 +1,6 @@
 import Foundation
 import Sync
+import SyncFakes
 import Synchronization
 import Testing
 

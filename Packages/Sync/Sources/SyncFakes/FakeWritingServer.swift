@@ -4,16 +4,16 @@ import Sync
 
 /// Stands in for the Worker in `Server/`, keeping what it is sent in memory and every request it
 /// was sent. Held to the Worker's answers by `ServerContract`.
-actor FakeWritingServer: HTTPTransport {
+public actor FakeWritingServer: HTTPTransport {
   private let tokenAccepted: String
   private var writings: [String: (revision: String, updated: Int64, bytes: Data)] = [:]
-  private(set) var requests: [URLRequest] = []
+  public private(set) var requests: [URLRequest] = []
 
-  init(accepting token: String) {
+  public init(accepting token: String) {
     tokenAccepted = token
   }
 
-  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+  public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     requests.append(request)
     guard request.value(forHTTPHeaderField: "Authorization") == "Bearer \(tokenAccepted)" else {
       return answer(request, 401, json: ["error": "wrong token"])
