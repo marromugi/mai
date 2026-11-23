@@ -3,7 +3,7 @@ internal import Typesetting
 
 /// The app's settings in a sheet, closed by the button at the top trailing corner.
 struct SettingsView: View {
-  @AppStorage(StoredBodySetting.key) private var stored = StoredBodySetting(.standard)
+  @AppStorage(StoredBodySetting.key) private var stored = StoredBodySetting.standard
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {

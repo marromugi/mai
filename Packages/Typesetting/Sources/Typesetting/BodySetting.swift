@@ -1,4 +1,4 @@
-/// How the writer sets the body text of one document.
+/// How the writer sets the body text of one document, or of every document not yet set.
 /// `base` moves every role's size together; `lineHeight` and `tracking` apply to the body alone.
 public struct BodySetting: Hashable, Sendable {
   /// The `16` of the size series 16 × 8 / n.

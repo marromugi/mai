@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// One value of a body setting that a typesetting gesture moves.
+/// One value of a body setting that a typesetting gesture or a settings stepper moves.
 public enum BodyAdjustment: CaseIterable, Sendable {
   case base, lineHeight, tracking
 

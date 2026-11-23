@@ -5,6 +5,8 @@ internal import Typesetting
 /// setting reads as nothing stored.
 struct StoredBodySetting: RawRepresentable, Equatable {
   static let key = "defaultBodySetting"
+  /// What is read with nothing stored.
+  static let standard = StoredBodySetting(.standard)
 
   let setting: BodySetting
 

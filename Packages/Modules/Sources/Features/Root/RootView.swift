@@ -6,9 +6,16 @@ public struct RootView: View {
   @State private var photos = WritingPhotos()
   @State private var opened = Date.now
   @State private var showingSettings = false
-  @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting(.standard)
+  @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting.standard
 
-  public init() {}
+  public init() {
+    self.init(path: [])
+  }
+
+  /// Opened on `path`.
+  init(path: [WritingRow]) {
+    _path = State(initialValue: path)
+  }
 
   public var body: some View {
     let rows = WritingRow.samples(now: opened, calendar: .current)
