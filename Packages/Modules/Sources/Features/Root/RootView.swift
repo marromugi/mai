@@ -10,6 +10,7 @@ public struct RootView: View {
   @State private var opened = Date.now
   @State private var showingSettings = false
   @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting.standard
+  @AppStorage(ColorTheme.key) private var theme = ColorTheme.system
 
   /// The writings kept on the device.
   public init() {
@@ -66,6 +67,7 @@ public struct RootView: View {
     .sheet(isPresented: $showingSettings) {
       SettingsView()
     }
+    .colorTheme(theme)
   }
 }
 
