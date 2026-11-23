@@ -3,19 +3,19 @@ import Foundation
 /// A place in a body where another writing's title appears, and the writing it names.
 struct TitleMention: Equatable {
   let range: Range<String.Index>
-  let writing: WritingRow
+  let writing: Writing
 }
 
 extension String {
   /// Every place one of `writings`' titles appears, left to right and never overlapping. Where
   /// titles start at the same place, the longest is taken; where writings share a title, the first
   /// in `writings`. An untitled writing appears nowhere.
-  func titleMentions(of writings: [WritingRow]) -> [TitleMention] {
+  func titleMentions(of writings: [Writing]) -> [TitleMention] {
     var mentions: [TitleMention] = []
     var index = startIndex
     while index < endIndex {
       let rest = self[index...]
-      var found: WritingRow?
+      var found: Writing?
       for writing in writings
       where !writing.title.isEmpty && writing.title.count > (found?.title.count ?? 0)
         && rest.hasPrefix(writing.title)
@@ -34,7 +34,7 @@ extension String {
   }
 }
 
-extension WritingRow {
+extension Writing {
   /// The link a mention of this writing carries in the body.
   var link: URL {
     guard let url = URL(string: "mai-writing:\(id)") else {
@@ -46,7 +46,7 @@ extension WritingRow {
 
 extension [TitleMention] {
   /// The writing a mention linked by `url` names, if any of these is.
-  func writing(linkedBy url: URL) -> WritingRow? {
+  func writing(linkedBy url: URL) -> Writing? {
     first { $0.writing.link == url }?.writing
   }
 }

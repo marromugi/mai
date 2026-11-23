@@ -1,0 +1,7 @@
+id: keep-empty-subsequences-to-omit
+language: Swift
+rule:
+  pattern:
+    context: "f(omittingEmptySubsequences: false)"
+    selector: value_argument
+fix: "omittingEmptySubsequences: true"

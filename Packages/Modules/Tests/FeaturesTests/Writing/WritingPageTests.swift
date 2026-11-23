@@ -16,11 +16,11 @@ struct WritingPageTests {
 
   /// Another writing's title in the body is a link under a dotted line in the text's colour.
   @Test func pageWithATitleLink() {
-    assertPage(.large, .light, writing: .sample(titled: "間合いの調整"), others: [nightDesk])
+    assertPage(.large, .light, writing: pageNamingNightDesk, others: [nightDesk])
   }
 
   @Test func pageWithATitleLinkInDarkMode() {
-    assertPage(.large, .dark, writing: .sample(titled: "間合いの調整"), others: [nightDesk])
+    assertPage(.large, .dark, writing: pageNamingNightDesk, others: [nightDesk])
   }
 
   @Test func pageAtTheLargestSize() {
@@ -87,9 +87,12 @@ struct WritingPageTests {
   }
 }
 
-/// A writing whose title the stand-in writings' body names.
-private let nightDesk = WritingRow(
-  id: 4, title: "夜の机に向かう", characterCount: 0, updated: Date(timeIntervalSince1970: 0))
+/// A writing whose title `pageNamingNightDesk` names.
+private let nightDesk = Writing(
+  id: UUID(sample: 4), title: "夜の机に向かう", body: "", updated: Date(timeIntervalSince1970: 0))
+
+private let pageNamingNightDesk = Writing(
+  title: "間合いの調整", body: Writing.sampleBody + "\n" + Writing.sampleMention)
 
 private func pageHeight(title: String, size: DynamicTypeSize) -> CGFloat {
   let page = WritingPage(
@@ -142,7 +145,7 @@ private func assertPage(
   typesetting: Bool = false,
   camera: Camera = .standIn(taking: nil),
   writing: Writing = Writing(title: "間合いの調整", body: Writing.sampleBody),
-  others: [WritingRow] = [],
+  others: [Writing] = [],
   fileID: StaticString = #fileID,
   file: StaticString = #filePath,
   testName: String = #function,

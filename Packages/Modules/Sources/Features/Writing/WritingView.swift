@@ -7,8 +7,8 @@ internal import Typesetting
 /// in the body, it links to that writing, and a tap on it calls `open` with it.
 struct WritingView: View {
   let writing: Writing
-  let others: [WritingRow]
-  let open: (WritingRow) -> Void
+  let others: [Writing]
+  let open: (Writing) -> Void
   let photos: [UIImage]
   @Binding var setting: BodySetting
   let camera: Camera
@@ -32,8 +32,8 @@ struct WritingView: View {
 /// photo or is cancelled. A tap on a mention of one of `others` in the body calls `open` with it.
 struct WritingScreen: View {
   let writing: Writing
-  let others: [WritingRow]
-  let open: (WritingRow) -> Void
+  let others: [Writing]
+  let open: (Writing) -> Void
   let photos: [UIImage]
   @Binding var setting: BodySetting
   @Binding var typesetting: Bool
@@ -269,7 +269,7 @@ struct WritingHeader: View {
 extension OpenURLAction {
   /// Calls `open` with the writing a link among `mentions` names, and hands any other link to the
   /// system.
-  static func opening(_ mentions: [TitleMention], with open: @escaping (WritingRow) -> Void)
+  static func opening(_ mentions: [TitleMention], with open: @escaping (Writing) -> Void)
     -> OpenURLAction
   {
     OpenURLAction { url in

@@ -1,0 +1,5 @@
+id: drop-background
+language: Swift
+rule:
+  pattern: $V.background($$$A)
+fix: $V

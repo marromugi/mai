@@ -1,0 +1,5 @@
+id: accessibility-hidden-to-shown
+language: Swift
+rule:
+  pattern: $V.accessibilityHidden(true)
+fix: $V.accessibilityHidden(false)
