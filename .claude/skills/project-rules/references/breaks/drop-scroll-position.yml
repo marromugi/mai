@@ -1,0 +1,5 @@
+id: drop-scroll-position
+language: Swift
+rule:
+  pattern: '$V.scrollPosition(id: $B)'
+fix: $V

@@ -1,0 +1,5 @@
+id: drop-scroll-target-layout
+language: Swift
+rule:
+  pattern: $V.scrollTargetLayout()
+fix: $V
