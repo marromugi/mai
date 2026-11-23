@@ -158,6 +158,102 @@ final class FontLibraryTests {
     #expect(!CTFontManagerUnregisterFontsForURL(renamed as CFURL, .process, nil))
   }
 
+  @Test func aSecondFetchWhileOneIsUnderwayFetchesNothing() async throws {
+    let source = Self.source
+    let fonts = FontLibrary(families: [Self.standIn], server: Self.server, folder: folder) { url in
+      self.requested.append(url)
+      try await Task.sleep(for: .milliseconds(100))
+      return try Self.downloaded(source)
+    }
+    async let first: Void = fonts.fetch(Self.standIn)
+    try await Task.sleep(for: .milliseconds(10))
+    #expect(fonts.state(of: Self.standIn) == .fetching)
+    await fonts.fetch(Self.standIn)
+    await first
+    #expect(requested.count == 1)
+    #expect(fonts.state(of: Self.standIn) == .available)
+  }
+
+  @Test func aFolderThatCantBeWrittenFailsAsNotKept() async throws {
+    try Data().write(to: folder)
+    let source = Self.source
+    let fonts = library { _ in try Self.downloaded(source) }
+    await fonts.fetch(Self.standIn)
+    #expect(fonts.state(of: Self.standIn) == .failed(FontFetchError.notKept.message))
+  }
+
+  @Test func aDownloadThatCantBeWrittenFailsAsNotKept() async {
+    let fonts = library { _ in throw URLError(.cannotWriteToFile) }
+    await fonts.fetch(Self.standIn)
+    #expect(fonts.state(of: Self.standIn) == .failed(FontFetchError.notKept.message))
+  }
+
+  /// The downloaded file and the folder it was gathered in are gone whether the fetch worked or not.
+  @Test(arguments: [true, false])
+  func nothingIsLeftOfTheDownload(_ works: Bool) async throws {
+    let source = works ? Self.source : Self.fixtures.appending(path: "OFL.txt")
+    var downloads: [URL] = []
+    let fonts = library { _ in
+      let file = try Self.downloaded(source)
+      downloads.append(file)
+      return file
+    }
+    await fonts.fetch(Self.standIn)
+    #expect(fonts.state(of: Self.standIn) == .available || !works)
+    #expect(downloads.count == 1)
+    #expect(downloads.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+    let left = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+    #expect(left == (works ? ["Lora Italic"] : []))
+  }
+
+  /// A folder already where the family's files go is replaced by the fetched files.
+  @Test func aFolderLeftWhereTheFamilyGoesIsReplaced() async throws {
+    let source = Self.source
+    let fonts = library { _ in try Self.downloaded(source) }
+    let kept = folder.appending(path: "Lora Italic")
+    try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+    try Data("left".utf8).write(to: kept.appending(path: "left.txt"))
+
+    await fonts.fetch(Self.standIn)
+
+    #expect(fonts.state(of: Self.standIn) == .available)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: kept.path) == ["Lora-Italic.ttf"])
+  }
+
+  @Test func aFileOfTheRightSizeWithOtherBytesIsRefused() async throws {
+    var data = try Data(contentsOf: Self.source)
+    data[data.count / 2] ^= 0xFF
+    let changed = FileManager.default.temporaryDirectory.appending(path: "changed-\(UUID())")
+    try data.write(to: changed)
+    defer { try? FileManager.default.removeItem(at: changed) }
+    let fonts = library { _ in try Self.downloaded(changed) }
+
+    await fonts.fetch(Self.standIn)
+
+    #expect(
+      fonts.state(of: Self.standIn)
+        == .failed(FontFetchError.notTheFile("Lora-Italic.ttf").message))
+  }
+
+  /// The download the app makes: the file for a 200, and the status for anything else.
+  @Test(arguments: [200, 404, 500])
+  func theRealDownloadTakesOnly200(_ status: Int) async throws {
+    ServerStandIn.status = status
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [ServerStandIn.self]
+    let session = URLSession(configuration: configuration)
+    let url = try #require(URL(string: "https://fonts.test/fonts/Lora-Italic.ttf"))
+    do {
+      let file = try await FontLibrary.download(url, in: session)
+      defer { try? FileManager.default.removeItem(at: file) }
+      #expect(status == 200)
+      #expect(try Data(contentsOf: file) == ServerStandIn.body)
+    } catch FontFetchError.answered(let answered) {
+      #expect(status != 200)
+      #expect(answered == status)
+    }
+  }
+
   @Test func refusesAFileThatIsNotTheOneNamed() async throws {
     let other = Self.fixtures.appending(path: "OFL.txt")
     let fonts = library { _ in try Self.downloaded(other) }
@@ -193,4 +289,29 @@ final class FontLibraryTests {
     await fonts.fetch(Self.standIn)
     #expect(fonts.state(of: Self.standIn) == .available)
   }
+}
+
+/// Answers every request with `status`, and `body` for a 200.
+private nonisolated final class ServerStandIn: URLProtocol, @unchecked Sendable {
+  nonisolated(unsafe) static var status = 200
+  nonisolated static let body = Data("font bytes".utf8)
+
+  override nonisolated class func canInit(with request: URLRequest) -> Bool { true }
+  override nonisolated class func canonicalRequest(for request: URLRequest) -> URLRequest {
+    request
+  }
+
+  override nonisolated func startLoading() {
+    guard let url = request.url,
+      let response = HTTPURLResponse(
+        url: url, statusCode: Self.status, httpVersion: "HTTP/1.1", headerFields: nil)
+    else {
+      preconditionFailure("A request made by URLSession has a URL.")
+    }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Self.status == 200 ? Self.body : Data())
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override nonisolated func stopLoading() {}
 }

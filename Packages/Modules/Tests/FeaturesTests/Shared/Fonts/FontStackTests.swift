@@ -53,6 +53,14 @@ struct FontStackTests {
     #expect(usedFamily(in: font, for: "書") == noto.familyName)
   }
 
+  /// The families after the first fall back in the stack's order.
+  @Test func theRestFallBackInOrder() throws {
+    let font = TypeScale.standard.font(.body, in: [.inter, .lora, .notoSansJP])
+    let cascade = try #require(
+      font.fontDescriptor.fontAttributes[.cascadeList] as? [UIFontDescriptor])
+    #expect(cascade.map { $0.fontAttributes[.name] as? String } == ["Lora-Regular", "SourceHanSansJP-Regular"])
+  }
+
   /// A variable family's bold is its regular face at `wght` 700, in the stack as well.
   @Test(arguments: [FontFamily.inter, .lora])
   func aVariableFamilysBoldIsItsWeightAxis(_ family: FontFamily) throws {

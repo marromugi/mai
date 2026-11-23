@@ -55,12 +55,27 @@ struct BundledFontsTests {
   }
 }
 
+struct FontCatalogTests {
+  /// As measured from each font: the BASE table's ideographic baseline, or the descender where
+  /// there is none (BIZ UDPMincho).
+  @Test(arguments: FontFamily.known.filter(\.hasJapanese))
+  func eachJapaneseFamilysEmBoxEndsAt012Em(_ family: FontFamily) {
+    #expect(family.emBoxDescent == 0.12)
+  }
+
+  @Test func faceNamesHoldTheBoldOnlyWhereItIsAFaceOfItsOwn() {
+    #expect(FontFamily.notoSansJP.faceNames == ["SourceHanSansJP-Regular", "SourceHanSansJP-Bold"])
+    #expect(FontFamily.inter.faceNames == ["Inter-Regular"])
+  }
+}
+
 /// The families the app fetches are the files `Server/fonts.json` has uploaded, with the same hashes.
 struct ServerFontsTests {
   struct Manifest: Decodable {
     struct File: Decodable, Equatable {
       let name: String
       let sha256: String
+      let size: Int
     }
     let files: [File]
   }
@@ -70,6 +85,6 @@ struct ServerFontsTests {
       .appending(path: "../../../../../../../Server/fonts.json").standardized
     let files = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: manifest)).files
     let fetched = FontFamily.known.filter { !$0.isBundled }.flatMap(\.files)
-    #expect(fetched.map { Manifest.File(name: $0.name, sha256: $0.sha256) } == files)
+    #expect(fetched.map { Manifest.File(name: $0.name, sha256: $0.sha256, size: $0.size) } == files)
   }
 }

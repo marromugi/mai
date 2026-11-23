@@ -94,6 +94,20 @@ struct WritingEditingTests {
     #expect(font.pointSize == TypeScale(.large, body: setting).size(.body))
   }
 
+  /// A new stack while editing sets the body again in it.
+  @Test func aNewStackRestylesTheBody() throws {
+    let edits = Edits()
+    let page = HostedPage(
+      screen(editing: true, edits: edits).environment(\.fontFamilies, [.notoSansJP]))
+    let body = try #require(bodyEditor(in: page))
+    page.show(
+      screen(editing: true, edits: edits).environment(\.fontFamilies, [.inter, .notoSansJP]))
+    #expect(bodyEditor(in: page) === body)
+    let font = try #require(
+      body.attributedText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+    #expect(font.familyName == "Inter")
+  }
+
   /// Undo after a refused line break takes back what was typed before it, and only that.
   @Test(arguments: [0, 2])
   func undoAfterARefusedLineBreakTakesBackTheTyping(_ caret: Int) throws {

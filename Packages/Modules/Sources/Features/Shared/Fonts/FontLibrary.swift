@@ -38,7 +38,8 @@ public final class FontLibrary {
       preconditionFailure("iOS gives every app an Application Support directory.")
     }
     self.init(
-      server: server, folder: support.appending(path: "Fonts"), download: Self.download)
+      server: server, folder: support.appending(path: "Fonts"),
+      download: { try await Self.download($0, in: .shared) })
   }
 
   /// `download` fetches a URL to a temporary file of its own and returns where it is, or throws
@@ -127,13 +128,12 @@ public final class FontLibrary {
     }
   }
 
-  /// Whether `url` holds `file`: its size and SHA-256. Read off the main actor; a file is up to
-  /// a few MB.
+  /// Whether `url` holds `file`, by its SHA-256. Read off the main actor; a file is up to a few MB.
   @concurrent
   private nonisolated static func matches(_ url: URL, _ file: FontFile) async throws -> Bool {
     let data = try Data(contentsOf: url, options: .mappedIfSafe)
     let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    return data.count == file.size && digest == file.sha256
+    return digest == file.sha256
   }
 
   /// Registers `family`'s kept files: available once each is registered, missing when none was
@@ -195,8 +195,10 @@ public final class FontLibrary {
     try folder.setResourceValues(values)
   }
 
-  private static func download(_ url: URL) async throws -> URL {
-    let (file, response) = try await URLSession.shared.download(from: url)
+  /// Downloads `url` in `session` to a temporary file of its own, or throws
+  /// `FontFetchError.answered` for an answer that isn't 200.
+  static func download(_ url: URL, in session: URLSession) async throws -> URL {
+    let (file, response) = try await session.download(from: url)
     guard let status = (response as? HTTPURLResponse)?.statusCode, status == 200 else {
       try? FileManager.default.removeItem(at: file)
       throw FontFetchError.answered((response as? HTTPURLResponse)?.statusCode)

@@ -32,6 +32,49 @@ struct FontStackViewTests {
     assertSnapshot(of: page.image(), as: .image(precision: 1, perceptualPrecision: 0.995))
   }
 
+  /// A stack naming the bundled family first, and a name the app doesn't know: the bundled family
+  /// is listed once, where it is named.
+  @Test func aStackNamingTheBundledFamily() {
+    let folder = FileManager.default.temporaryDirectory.appending(
+      path: "FontStackViewTests-\(UUID())")
+    let fonts = FontLibrary(server: nil, folder: folder) { _ in
+      throw URLError(.notConnectedToInternet)
+    }
+    let page = HostedPage(
+      NavigationStack {
+        FontStackView(
+          stack: .constant(FontStack(names: ["Noto Sans JP", "Nobody Sans", "Inter"])),
+          fonts: fonts)
+      }
+      .environment(\.colorScheme, .light))
+    assertSnapshot(of: page.image(), as: .image(precision: 1, perceptualPrecision: 0.995))
+  }
+
+  /// With Inter in the stack: Lora alone under 欧文, and the server's three under 和文, in the
+  /// catalog's order, each with its size.
+  @Test func thePicker() {
+    let folder = FileManager.default.temporaryDirectory.appending(
+      path: "FontStackViewTests-\(UUID())")
+    let fonts = FontLibrary(server: URL(filePath: "/server"), folder: folder) { _ in
+      throw URLError(.notConnectedToInternet)
+    }
+    let page = HostedPage(
+      FontPicker(fonts: fonts, excluded: ["Inter"]) { _ in }
+        .environment(\.colorScheme, .light))
+    assertSnapshot(of: page.image(), as: .image(precision: 1, perceptualPrecision: 0.995))
+  }
+
+  /// The header's title is set in the stack's bold: Inter for the Latin.
+  @Test func theHeaderTitleIsSetInTheStack() {
+    assertSnapshot(
+      of: WritingHeader(title: "Morning Pages と朝の光", width: 402, close: {})
+        .frame(width: 402)
+        .background(Color(.systemBackground))
+        .environment(\.fontFamilies, [.inter, .notoSansJP])
+        .environment(\.colorScheme, .light),
+      as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
+  }
+
   /// The mixed passage set in Inter, then the bundled family, read, edited, and typeset.
   @Test(arguments: ["reading", "editing", "typesetting"])
   func aLatinFamilyFirst(_ mode: String) {

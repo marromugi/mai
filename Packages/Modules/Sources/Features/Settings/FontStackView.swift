@@ -124,7 +124,7 @@ extension FontLibrary.State {
 
 /// The families that can be added, Latin and Japanese apart, each with its size and whether it is
 /// on this device. Choosing one hands it to `add` and closes the sheet.
-private struct FontPicker: View {
+struct FontPicker: View {
   let fonts: FontLibrary
   let excluded: Set<String>
   let add: (FontFamily) -> Void
