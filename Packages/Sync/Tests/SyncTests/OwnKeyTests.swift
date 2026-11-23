@@ -23,4 +23,12 @@ struct OwnKeyTests {
     #expect(ownKey.accessToken == (try OwnKey(rawRepresentation: Data(0..<32))).accessToken)
     #expect(OwnKey.generate().accessToken != ownKey.accessToken)
   }
+
+  /// The value `Server/README.md` makes with `shasum -a 256` from the token.
+  @Test func theServerKeepsTheTokensSHA256() throws {
+    let ownKey = try OwnKey(rawRepresentation: Data(0..<32))
+    #expect(
+      ownKey.accessTokenSHA256
+        == "69038d7abd7ec3ded89bee1fbc5af3f5a1f7ceb386135e373b867b4e18c1c5a2")
+  }
 }

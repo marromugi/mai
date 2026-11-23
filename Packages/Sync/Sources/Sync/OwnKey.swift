@@ -33,6 +33,12 @@ public struct OwnKey: Sendable, Equatable {
     return derived.withUnsafeBytes { Data($0) }.base64EncodedString()
       .replacing("+", with: "-").replacing("/", with: "_").replacing("=", with: "")
   }
+
+  /// The SHA-256 of `accessToken` in lowercase hex: what the server keeps as its secret
+  /// `ACCESS_TOKEN_SHA256` (`Server/README.md`).
+  public var accessTokenSHA256: String {
+    SHA256.hash(data: Data(accessToken.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
 }
 
 public struct OwnKeyLengthError: LocalizedError {
