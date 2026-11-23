@@ -22,9 +22,9 @@ struct WritingView: View {
 
 /// The writing's page, with its `photos`, in or out of the typesetting mode. As the title scrolls
 /// off the top, the
-/// header fades in to stand in for it. In the mode the page shrinks to a sheet on the desk and stops
-/// scrolling, the typesetting gestures over it step `setting`, and a tap leaves the mode. The bottom
-/// row's camera sets `takingPhoto`, which covers the page with `camera`'s screen until it takes a
+/// header fades in to stand in for it. In the mode the page stops scrolling and lifts off the desk
+/// above the typesetting bar, the typesetting gestures over it step `setting`, and a tap or the
+/// bar's 「閉じる」 leaves the mode. The bottom row's camera sets `takingPhoto`, which covers the page with `camera`'s screen until it takes a
 /// photo or is cancelled.
 struct WritingScreen: View {
   let writing: Writing
@@ -35,6 +35,7 @@ struct WritingScreen: View {
   let camera: Camera
   let photoTaken: (UIImage) -> Void
   @State private var titleCutOff: CGFloat = 0
+  @State private var showingGestures = false
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
@@ -45,6 +46,13 @@ struct WritingScreen: View {
           titleCutOff: { titleCutOff = $0 })
       }
       .scrollDisabled(typesetting)
+      .clipShape(PageShape(cornerRadius: typesetting ? Self.pageCornerRadius : 0))
+      .background {
+        PageShape(cornerRadius: typesetting ? Self.pageCornerRadius : 0)
+          .fill(
+            Color(.systemBackground)
+              .shadow(.inner(color: .black.opacity(typesetting ? 0.2 : 0), radius: 10)))
+      }
       .overlay(alignment: .top) {
         // Faded by the scroll, not animated: an animation running as the mode starts moves the
         // page.
@@ -56,26 +64,7 @@ struct WritingScreen: View {
             .accessibilityHidden(titleCutOff < 1)
         }
       }
-      .safeAreaInset(edge: .bottom, spacing: 0) {
-        // Hidden, not removed: the inset keeps its height so the scroll offset isn't clamped.
-        let row = BottomRow(
-          width: proxy.size.width, cameraAvailable: camera.isAvailable,
-          takePhoto: { takingPhoto = true },
-          adjustTypesetting: { withAnimation { typesetting = true } })
-        if typesetting {
-          row.hidden()
-        } else {
-          row
-        }
-      }
       .accessibilityHidden(typesetting)
-      .background {
-        Rectangle()
-          .fill(Color(.systemBackground))
-          .shadow(color: .black.opacity(typesetting ? 0.15 : 0), radius: 12)
-          .ignoresSafeArea()
-      }
-      .scaleEffect(typesetting ? Self.sheetScale : 1)
       .overlay {
         if typesetting {
           Color.clear
@@ -90,6 +79,26 @@ struct WritingScreen: View {
             .transition(.identity)
         }
       }
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        // Both rows laid out, one hidden: the inset keeps one height in and out of the mode, so
+        // the scroll offset isn't clamped.
+        ZStack {
+          let row = BottomRow(
+            width: proxy.size.width, cameraAvailable: camera.isAvailable,
+            takePhoto: { takingPhoto = true },
+            adjustTypesetting: { withAnimation { typesetting = true } })
+          let bar = TypesettingBar(
+            width: proxy.size.width, showGestures: { showingGestures = true },
+            close: { withAnimation { typesetting = false } })
+          if typesetting {
+            row.hidden()
+            bar
+          } else {
+            row
+            bar.hidden()
+          }
+        }
+      }
     }
     .background(Color(.secondarySystemBackground), ignoresSafeAreaEdges: .all)
     .fullScreenCover(isPresented: $takingPhoto) {
@@ -100,12 +109,15 @@ struct WritingScreen: View {
         },
         { takingPhoto = false })
     }
+    .sheet(isPresented: $showingGestures) {
+      TypesettingGestures()
+    }
     .environment(\.bodySetting, setting)
     .toolbar(.hidden, for: .navigationBar)
   }
 
-  /// How large the page is in the typesetting mode, so the paper's edges show.
-  static let sheetScale: CGFloat = 0.85
+  /// How round the page's bottom corners are in the typesetting mode, so the paper's edge shows.
+  static let pageCornerRadius: CGFloat = 32
 }
 
 /// The camera at the bottom leading corner and the underlined 「組版を調整」 at the trailing one,
