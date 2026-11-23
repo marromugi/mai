@@ -52,6 +52,7 @@ struct SyncSettingsView: View {
               .font(.caption.monospaced())
               .foregroundStyle(.secondary)
               .textSelection(.enabled)
+              .accessibilityIdentifier("accessTokenSHA256")
           }
         } header: {
           Text("自分の鍵")
@@ -129,6 +130,7 @@ struct RecoveryKeyView: View {
         Text(verbatim: lines)
           .font(.title3.monospaced())
           .speechSpellsOutCharacters()
+          .accessibilityIdentifier("recoveryKey")
           .padding(.vertical, 8)
           .frame(maxWidth: .infinity)
       } footer: {

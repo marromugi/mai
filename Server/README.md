@@ -52,5 +52,7 @@ scripts/server-contract-test.sh
 
 ```sh
 pnpm exec wrangler deploy
-printf '%s' "<自分の鍵から作った token>" | shasum -a 256 | cut -d ' ' -f 1 | pnpm exec wrangler secret put ACCESS_TOKEN_SHA256
+printf '%s' "<アプリの「設定」→「同期」の「サーバーに置く値」>" | pnpm exec wrangler secret put ACCESS_TOKEN_SHA256
 ```
+
+「サーバーに置く値」は、自分の鍵から作った token の SHA-256(`OwnKey.accessTokenSHA256`)。最初の端末で「新しい鍵を作る」と出る。そのあと、同じ画面のサーバーの URL にデプロイした Worker の URL を入れる。

@@ -47,7 +47,7 @@ jobs:
           swift format lint --strict --recursive
           App scripts Packages/Modules/Package.swift Packages/Modules/Sources
           Packages/Typesetting/Package.swift Packages/Typesetting/Sources Packages/Typesetting/Tests
-          Packages/Sync/Package.swift Packages/Sync/Sources Packages/Sync/Tests AppTests
+          Packages/Sync/Package.swift Packages/Sync/Sources Packages/Sync/Tests AppTests AppUITests
       - name: Test the typesetting on the Mac
         run: swift test --package-path Packages/Typesetting
       - name: Test sealing and syncing on the Mac

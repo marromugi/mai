@@ -42,6 +42,7 @@ targets:
     scheme:
       testTargets:
         - MaiTests
+        - MaiUITests
   MaiTests:
     type: bundle.unit-test
     platform: iOS
@@ -54,4 +55,15 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.marromugi.mai.tests
+        GENERATE_INFOPLIST_FILE: YES
+  MaiUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - AppUITests
+    dependencies:
+      - target: Mai
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.marromugi.mai.uitests
         GENERATE_INFOPLIST_FILE: YES

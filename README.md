@@ -35,6 +35,12 @@ xcodebuild test -project Mai.xcodeproj -scheme Mai -only-testing:MaiTests \
   -destination 'platform=iOS Simulator,name=mai-snapshots' -collect-test-diagnostics never
 ```
 
+アプリの同期は、2 つのインストールを `wrangler dev` の Worker に通して確かめる(`MaiUITests` の `AppUITests/SyncAppTests`)。1 つめが自分の鍵を作って文書を送り、アプリを消してキーチェーンを空にした 2 つめが、リカバリーキーを入力して文書を受け取る。シミュレータ `mai-sync-check` を使い(無ければ作る)、終わったら止める。
+
+```sh
+scripts/sync-app-test.sh
+```
+
 Dynamic Type の大きさ、フォント、画面のテストは `Packages/Modules` にあり、スナップショットテストと一緒にシミュレータで走る(次の節)。
 
 ## モデル検査
