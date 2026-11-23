@@ -24,6 +24,14 @@ swift test --package-path Packages/Typesetting
 
 Dynamic Type の大きさ、フォント、画面のテストは `Packages/Modules` にあり、スナップショットテストと一緒にシミュレータで走る(次の節)。
 
+## モデル検査
+
+読み取りモードの鍵の写しは TLA+ でモデルにしてある(`Specs/ReadMode`)。TLC で確かめる(Java 11 以上が要る)。
+
+```sh
+scripts/model-check.sh
+```
+
 ## スナップショットテスト
 
 見た目のテストは、決まった 1 台のシミュレータで撮った画像と比べる(機種と iOS は `scripts/snapshot-test.swift` に書いてある)。OS が違うと文字の描かれ方が変わるので、CI ではこのテストを組み立てるだけで走らせない。
