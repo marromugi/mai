@@ -1,11 +1,17 @@
+import CryptoKit
 import Foundation
 
 /// Where the device keeps its writings in plain bytes. Saving a writing replaces the one with its
 /// ID.
 public protocol PlainWritingStore: Sendable {
   func all() throws -> [PlainWriting]
+  /// Throws a `OneWritingFailure` when it is this writing alone that can't be saved, such as
+  /// contents the store can't read; any other error stops the sync.
   func save(_ writing: PlainWriting) throws
 }
+
+/// A store's failure to save one writing, which leaves the sync to go on with the others.
+public protocol OneWritingFailure: Error {}
 
 /// What one `Synchronizer.sync()` did, by writing ID.
 public struct SyncReport: Sendable, Equatable {
@@ -77,6 +83,8 @@ public actor Synchronizer {
         failures[id] = error
       } catch let error as ServerError where error.concernsOneWriting {
         failures[id] = error
+      } catch let error as any OneWritingFailure {
+        failures[id] = error
       }
     }
     guard failures.isEmpty else {
@@ -109,7 +117,7 @@ public actor Synchronizer {
     }
     var copy: PlainWriting?
     if let writing, deviceChanged == true, !received.matches(writing) {
-      copy = PlainWriting(id: UUID(), updated: writing.updated, contents: writing.contents)
+      copy = PlainWriting(id: writing.copyID, updated: writing.updated, contents: writing.contents)
     }
     if let copy {
       try writings.save(copy)
@@ -154,7 +162,7 @@ public actor Synchronizer {
 }
 
 /// A sync that went through every writing, but some failed alone: sealed too large, sealed with
-/// another own key, or refused by the server. `report` is what the rest did.
+/// another own key, refused by the server, or not saved by the store (`OneWritingFailure`). `report` is what the rest did.
 public struct SyncFailures: LocalizedError {
   public let report: SyncReport
   public let failures: [UUID: any Error]
@@ -175,6 +183,23 @@ extension ServerError {
 }
 
 extension PlainWriting {
+  /// The ID of this edit's copy, kept beside the server's save of the same writing. The same edit
+  /// always gets the same ID, so a sync that stops after keeping the copy and runs again keeps it
+  /// once. A UUID of version 8 (RFC 9562) made from the SHA-256 of the ID, the updated time to the
+  /// millisecond, and the contents.
+  fileprivate var copyID: UUID {
+    var hash = SHA256()
+    withUnsafeBytes(of: id.uuid) { hash.update(bufferPointer: $0) }
+    withUnsafeBytes(of: (Layout.milliseconds(of: updated) ?? 0).bigEndian) {
+      hash.update(bufferPointer: $0)
+    }
+    hash.update(data: contents)
+    var bytes = Array(hash.finalize().prefix(16))
+    bytes[6] = bytes[6] & 0x0f | 0x80
+    bytes[8] = bytes[8] & 0x3f | 0x80
+    return UUID(uuid: Layout.uuid(Data(bytes)))
+  }
+
   /// The same contents and updated time, to the millisecond the server keeps.
   fileprivate func matches(_ other: PlainWriting) -> Bool {
     contents == other.contents

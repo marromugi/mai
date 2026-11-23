@@ -46,8 +46,9 @@ extension Writing {
   }
 }
 
-/// A writing that came from the server opened, but whose contents aren't a writing's.
-nonisolated struct UnreadableContents: LocalizedError {
+/// A writing that came from the server opened, but whose contents aren't a writing's. The other
+/// writings still sync.
+nonisolated struct UnreadableContents: LocalizedError, OneWritingFailure {
   let id: Writing.ID
   let reason: any Error
 

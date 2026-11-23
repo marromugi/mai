@@ -245,6 +245,46 @@ struct WritingServerTests {
       return true
     }
   }
+
+  /// A writing edited on both sides whose server save this device's store refuses each time.
+  @Test func aWritingTheStoreRefusesKeepsTheDevicesEditOnceAndLeavesTheOthersToSync()
+    async throws
+  {
+    let id = UUID()
+    let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
+    let refusing = RefusingStore(refusing: Data("unreadable".utf8))
+    let synchronizer = Synchronizer(
+      writings: refusing,
+      stateFile: FileManager.default.temporaryDirectory.appending(
+        path: "mai-sync-tests-\(UUID().uuidString)/state.json"),
+      server: server(), ownKey: ownKey)
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 1_000), contents: Data("a".utf8)))
+    _ = try await devices.first.synchronizer.sync()
+    _ = try await synchronizer.sync()
+    try devices.first.writings.save(
+      PlainWriting(
+        id: id, updated: .init(timeIntervalSince1970: 2_000), contents: Data("unreadable".utf8)))
+    let other = PlainWriting(
+      id: UUID(), updated: .init(timeIntervalSince1970: 2_500), contents: Data("o".utf8))
+    try devices.first.writings.save(other)
+    _ = try await devices.first.synchronizer.sync()
+    let edit = PlainWriting(
+      id: id, updated: .init(timeIntervalSince1970: 3_000), contents: Data("c".utf8))
+    try refusing.save(edit)
+
+    for _ in 1...3 {
+      await #expect {
+        try await synchronizer.sync()
+      } throws: { error in
+        (error as? SyncFailures)?.failures.keys.sorted() == [id]
+      }
+    }
+
+    let kept = try refusing.all()
+    #expect(kept.filter { $0.contents == edit.contents }.count == 2)
+    #expect(kept.contains(other))
+  }
 }
 
 /// Loses the answer to the first save of a new writing, as a dropped connection would.
@@ -362,5 +402,27 @@ private struct Refusing: HTTPTransport {
         url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])
     else { return try await next.send(request) }
     return (Data(#"{"error":"refused"}"#.utf8), response)
+  }
+}
+
+/// Keeps writings in memory, but refuses to save any with `refused` contents, as the app's store
+/// refuses contents that aren't a writing's.
+private final class RefusingStore: PlainWritingStore {
+  struct Refused: OneWritingFailure {}
+
+  private let refused: Data
+  private let writings = MemoryWritingStore()
+
+  init(refusing refused: Data) {
+    self.refused = refused
+  }
+
+  func all() throws -> [PlainWriting] {
+    try writings.all()
+  }
+
+  func save(_ writing: PlainWriting) throws {
+    guard writing.contents != refused else { throw Refused() }
+    try writings.save(writing)
   }
 }

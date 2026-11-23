@@ -61,7 +61,8 @@ struct SettingsForm: View {
         NavigationLink {
           SyncSettingsView(sync: sync, syncNow: syncNow)
         } label: {
-          LabeledContent("同期", value: serverURL.isEmpty ? "オフ" : "オン")
+          // On only for a URL the sync goes to.
+          LabeledContent("同期", value: (try? ServerURL(text: serverURL)) == nil ? "オフ" : "オン")
         }
       }
     }

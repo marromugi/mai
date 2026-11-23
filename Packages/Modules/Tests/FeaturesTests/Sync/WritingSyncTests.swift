@@ -70,7 +70,7 @@ struct SyncedWritingsTests {
       try SyncedWritings(store: store).save(
         PlainWriting(id: id, updated: .now, contents: Data("朝に書いた".utf8)))
     } throws: { error in
-      (error as? UnreadableContents)?.id == id
+      (error as? UnreadableContents)?.id == id && error is any OneWritingFailure
     }
     #expect(try store.all().isEmpty)
   }
