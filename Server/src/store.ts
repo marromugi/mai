@@ -72,6 +72,21 @@ export type Kept =
   | { kept: "kept"; tier: string; paidUntil: number }
   | { kept: "another-account" | "no-plan" };
 
+/** How much of one of its plan's limits an account has used. */
+export type Use = { used: number; limit: number };
+
+/**
+ * What a signed-in device reads of its account. `requests`, `lists` and `saves` are today's (UTC),
+ * before the request that read them. `ownKeyCheck` is null until a device keeps one.
+ */
+export type AccountState = {
+  plan: string;
+  paidUntil: number;
+  lapsed: boolean;
+  usage: Record<"writingsBytes" | "writings" | "requests" | "lists" | "saves", Use>;
+  ownKeyCheck: Uint8Array | null;
+};
+
 export type SignedIn =
   | { signedIn: true; account: AccountId }
   | { signedIn: false; reason: "challenge-used" | "no-account" };
@@ -386,6 +401,55 @@ export class Store {
       return answer;
     }
     return { ok: true, value: Number(answer.value[1]?.rows[0]?.["same"]) === 1 };
+  }
+
+  /** Reads the caller's account; a lapsed account reads it too. */
+  async account(caller: Caller, now: number): Promise<Answer<AccountState>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT a.tier, a.paid_until, a.paid_until <= :now AS lapsed, a.own_key_check,
+                a.writings_bytes, p.writings_bytes AS writings_bytes_limit,
+                a.writings_count, p.writings_count AS writings_count_limit,
+                coalesce(u.requests, 0) AS requests, p.requests_per_day,
+                coalesce(u.lists, 0) AS lists, p.lists_per_day,
+                coalesce(u.saves, 0) AS saves, p.saves_per_day
+              FROM accounts a
+              JOIN plans p ON p.tier = a.tier
+              LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
+              WHERE a.id = ${account} AND ${allowed}`,
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    const row = answer.value[0]?.rows[0];
+    if (row === undefined) {
+      throw new Error("a caller let in has an account on a plan");
+    }
+    const check = row["own_key_check"];
+    if (check !== null && !(check instanceof ArrayBuffer)) {
+      throw new Error("accounts.own_key_check is a BLOB or NULL, but came back as something else");
+    }
+    const use = (used: string, limit: string): Use => ({
+      used: Number(row[used]),
+      limit: Number(row[limit]),
+    });
+    return {
+      ok: true,
+      value: {
+        plan: stored((tier) => tier, row["tier"]),
+        paidUntil: Number(row["paid_until"]),
+        lapsed: Number(row["lapsed"]) === 1,
+        usage: {
+          writingsBytes: use("writings_bytes", "writings_bytes_limit"),
+          writings: use("writings_count", "writings_count_limit"),
+          requests: use("requests", "requests_per_day"),
+          lists: use("lists", "lists_per_day"),
+          saves: use("saves", "saves_per_day"),
+        },
+        ownKeyCheck: check === null ? null : new Uint8Array(check),
+      },
+    };
   }
 
   /** Removes what has expired by `now`; run by the Worker's cron trigger. */
