@@ -39,6 +39,7 @@ function call(path: string, body: unknown, token?: string): Promise<Response> {
       body: JSON.stringify(body),
     }),
     signIn,
+    env.PHOTOS,
   );
 }
 
@@ -1021,6 +1022,7 @@ describe("APP_STORE_ENVIRONMENTS", () => {
         }),
       }),
       sandbox,
+      env.PHOTOS,
     );
     expect(answer.status).toBe(200);
     const { rows } = await database.execute({

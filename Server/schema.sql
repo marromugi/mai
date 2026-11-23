@@ -10,13 +10,15 @@ CREATE TABLE plans (
   writings_count INTEGER NOT NULL,
   requests_per_day INTEGER NOT NULL,
   lists_per_day INTEGER NOT NULL,
-  saves_per_day INTEGER NOT NULL
+  saves_per_day INTEGER NOT NULL,
+  photos_bytes INTEGER NOT NULL,
+  photos_per_day INTEGER NOT NULL
 ) STRICT;
 
 INSERT INTO plans VALUES
-  ('basic', 'com.marromugi.mai.basic.monthly', 100000000, 10000, 3000, 200, 500),
-  ('plus', 'com.marromugi.mai.plus.monthly', 500000000, 50000, 10000, 300, 2000),
-  ('pro', 'com.marromugi.mai.pro.monthly', 1000000000, 100000, 10000, 300, 2000);
+  ('basic', 'com.marromugi.mai.basic.monthly', 100000000, 10000, 3000, 200, 500, 5000000000, 100),
+  ('plus', 'com.marromugi.mai.plus.monthly', 500000000, 50000, 10000, 300, 2000, 50000000000, 300),
+  ('pro', 'com.marromugi.mai.pro.monthly', 1000000000, 100000, 10000, 300, 2000, 200000000000, 300);
 
 -- id is the UUID the app made, which is also its purchases' appAccountToken. apple_sub is the
 -- Sign in with Apple user. apple_refresh_token is Apple's refresh token sealed by
@@ -33,6 +35,7 @@ CREATE TABLE accounts (
   paid_until INTEGER NOT NULL,
   writings_bytes INTEGER NOT NULL DEFAULT 0,
   writings_count INTEGER NOT NULL DEFAULT 0,
+  photos_bytes INTEGER NOT NULL DEFAULT 0,
   created INTEGER NOT NULL
 ) STRICT;
 
@@ -79,6 +82,7 @@ CREATE TABLE usage (
   requests INTEGER NOT NULL DEFAULT 0,
   lists INTEGER NOT NULL DEFAULT 0,
   saves INTEGER NOT NULL DEFAULT 0,
+  photos INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, day)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX usage_day ON usage (day);
@@ -112,4 +116,33 @@ CREATE TRIGGER writings_resized AFTER UPDATE OF size ON writings BEGIN
   SELECT RAISE(ABORT, 'mai: over the plan''s storage')
   FROM accounts a JOIN plans p ON p.tier = a.tier
   WHERE a.id = NEW.account_id AND NEW.size > OLD.size AND a.writings_bytes > p.writings_bytes;
+END;
+
+-- Each part of a photo, sealed on the device, kept in R2 under the key src/photos.ts makes from
+-- account_id, id, part and upload. A part is reserved (stored = 0) before its bytes go to R2, so
+-- its size counts against the plan from then on, and stored (1) once R2 holds them. upload names
+-- the one request that reserved it; reserved is when.
+CREATE TABLE photos (
+  account_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  part TEXT NOT NULL CHECK (part IN ('photo', 'thumbnail')),
+  upload TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  stored INTEGER NOT NULL DEFAULT 0,
+  reserved INTEGER NOT NULL,
+  PRIMARY KEY (account_id, id, part)
+) STRICT;
+CREATE INDEX photos_unstored ON photos (reserved) WHERE stored = 0;
+
+-- accounts.photos_bytes follows every reserved or stored part. A reservation that grows an account
+-- past its plan aborts the whole batch with this message, which src/store.ts answers as 429.
+CREATE TRIGGER photos_added AFTER INSERT ON photos BEGIN
+  UPDATE accounts SET photos_bytes = photos_bytes + NEW.size WHERE id = NEW.account_id;
+  SELECT RAISE(ABORT, 'mai: over the plan''s photo storage')
+  FROM accounts a JOIN plans p ON p.tier = a.tier
+  WHERE a.id = NEW.account_id AND a.photos_bytes > p.photos_bytes;
+END;
+
+CREATE TRIGGER photos_removed AFTER DELETE ON photos BEGIN
+  UPDATE accounts SET photos_bytes = photos_bytes - OLD.size WHERE id = OLD.account_id;
 END;

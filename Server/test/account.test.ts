@@ -57,9 +57,11 @@ describe("GET /account", () => {
       usage: {
         writingsBytes: { used: 0, limit: 100_000_000 },
         writings: { used: 0, limit: 10_000 },
+        photosBytes: { used: 0, limit: 5_000_000_000 },
         requests: { used: 0, limit: 3000 },
         lists: { used: 0, limit: 200 },
         saves: { used: 0, limit: 500 },
+        photos: { used: 0, limit: 100 },
       },
       ownKeyCheck: null,
     });

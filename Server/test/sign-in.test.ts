@@ -158,7 +158,7 @@ async function call(signIn: SignIn | Promise<SignIn>, path: string, body?: unkno
     headers: { "Content-Type": "application/json" },
     body: body === undefined ? null : JSON.stringify(body),
   });
-  return serve(request, await signIn);
+  return serve(request, await signIn, env.PHOTOS);
 }
 
 /** A request to the Worker as deployed, with its own secrets and Apple unreached. */
@@ -883,7 +883,7 @@ describe("signing in", () => {
       headers: { "Content-Type": "application/json" },
       body: "{not json",
     });
-    expect((await serve(request, await apple.signIn)).status).toBe(400);
+    expect((await serve(request, await apple.signIn, env.PHOTOS)).status).toBe(400);
   });
 
   it("answers 502 when Apple's keys can't be fetched", async () => {
@@ -910,7 +910,7 @@ describe("signing in", () => {
         identityToken: await identityToken(newSub(), fresh),
       }),
     });
-    expect((await serve(request, await apple.signIn)).status).toBe(status);
+    expect((await serve(request, await apple.signIn, env.PHOTOS)).status).toBe(status);
   });
 
   it("starts a session on the Apple user's account that the writings routes take", async () => {
