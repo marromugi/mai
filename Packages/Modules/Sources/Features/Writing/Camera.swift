@@ -4,7 +4,7 @@ import UIKit
 /// What takes the writing page's photos: the device's camera, or a stand-in that hands back a photo
 /// of its own.
 struct Camera {
-  /// Whether a photo can be taken here. The simulator has no camera.
+  /// Whether this device has a camera to take a photo with.
   let isAvailable: Bool
   /// The full-screen view that takes one photo and hands it to `taken`, or calls `cancelled`.
   let screen: (_ taken: @escaping (UIImage) -> Void, _ cancelled: @escaping () -> Void) -> AnyView

@@ -123,8 +123,8 @@ private struct BottomRow: View {
       .buttonStyle(.text)
       .disabled(!cameraAvailable)
       .accessibilityLabel("写真を撮る")
-      // Centred on the margin line, as the back mark is, unless that would push it past the
-      // screen's edge.
+      // Its 44-point tap area centred on the margin line, as the header's chevron is, unless that
+      // would push it past the screen's edge.
       .padding(.leading, max(0, margin - TextButtonStyle.minimumSide / 2))
       Spacer(minLength: 0)
       Button(action: adjustTypesetting) {

@@ -42,6 +42,16 @@ final class HostedPage {
     }
   }
 
+  /// The first view controller of type `T` among those the view holds.
+  func child<T: UIViewController>(_ type: T.Type) -> T? {
+    var pending: [UIViewController] = [controller]
+    while let next = pending.popLast() {
+      if let found = next as? T { return found }
+      pending.append(contentsOf: next.children)
+    }
+    return nil
+  }
+
   var scrollViews: [UIScrollView] {
     var found: [UIScrollView] = []
     var pending: [UIView] = [window]

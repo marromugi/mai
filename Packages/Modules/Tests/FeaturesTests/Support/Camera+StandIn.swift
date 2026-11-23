@@ -23,7 +23,7 @@ extension Camera {
     }
   }
 
-  /// A camera that can't take a photo, as on the simulator.
+  /// A camera that can't take a photo, as on a device with none.
   static let none = Camera(isAvailable: false) { _, _ in
     preconditionFailure("A camera that isn't there was asked for its screen.")
   }

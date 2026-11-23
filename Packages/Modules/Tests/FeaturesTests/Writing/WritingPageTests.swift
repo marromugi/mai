@@ -18,7 +18,7 @@ struct WritingPageTests {
     assertPage(.accessibility5, .light)
   }
 
-  /// Where there is no camera, as on the simulator, its button is dimmed.
+  /// On a device with no camera, its button is dimmed.
   @Test func pageWithNoCamera() {
     assertPage(.large, .light, camera: .none)
   }

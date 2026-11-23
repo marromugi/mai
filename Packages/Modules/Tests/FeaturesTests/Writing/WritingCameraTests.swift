@@ -36,6 +36,22 @@ struct WritingCameraTests {
     #expect(!takingPhoto.on)
   }
 
+  /// The system camera is set to take photos, and reports to the handlers it was last given.
+  @Test func theSystemCameraReportsToItsLatestHandlers() throws {
+    let photo = Camera.photo(.green)
+    var taken: [UIImage] = []
+    let page = HostedPage(
+      CameraPicker(taken: { _ in Issue.record("An old handler got the photo.") }, cancelled: {}))
+    page.show(CameraPicker(taken: { taken.append($0) }, cancelled: {}))
+    let controller = try #require(page.child(UIImagePickerController.self))
+    #expect(controller.sourceType == .camera)
+    let delegate = try #require(controller.delegate as? CameraPicker.Coordinator)
+    delegate.imagePickerController(
+      controller, didFinishPickingMediaWithInfo: [.originalImage: photo])
+    #expect(taken.count == 1)
+    #expect(taken.first === photo)
+  }
+
   /// The system camera hands on the photo it took, or its cancel.
   @Test func theSystemCameraHandsOnWhatItGot() {
     let photo = Camera.photo(.blue)

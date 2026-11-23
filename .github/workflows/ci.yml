@@ -40,3 +40,5 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
       - name: Check the asset catalog is in the Resources phase
         run: grep -q "Assets.xcassets in Resources" Mai.xcodeproj/project.pbxproj
+      - name: Check the app says why it uses the camera
+        run: grep -q "INFOPLIST_KEY_NSCameraUsageDescription = " Mai.xcodeproj/project.pbxproj
