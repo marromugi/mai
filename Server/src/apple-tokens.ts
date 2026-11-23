@@ -1,5 +1,5 @@
 import { appleIssuer } from "./apple-sign-in";
-import { isJson, readCompactJws, text, type Checked } from "./jws";
+import { isJson, readCompactJws, text, type Checked, type Json } from "./jws";
 import { base64url } from "./sessions";
 
 /**
@@ -37,19 +37,52 @@ export class AppleTokens {
   ) {}
 
   async exchange(code: string, now: number): Promise<Checked<Exchanged, ExchangeFailure>> {
+    const sent = await this.#post(
+      appleTokenUrl,
+      { code, grant_type: "authorization_code" },
+      ["invalid_grant"],
+      now,
+    );
+    if (sent === "unavailable") {
+      return { ok: false, failure: "unavailable" };
+    }
+    const { response, answer } = sent;
+    if (response.status >= 400 && response.status < 500) {
+      return { ok: false, failure: "refused" };
+    }
+    const refreshToken = text(answer["refresh_token"]);
+    const idToken = readCompactJws(text(answer["id_token"]) ?? "");
+    // Apple answered over TLS, so its ID token is read as Apple's word without checking it again.
+    const sub = idToken?.payload["iss"] === appleIssuer ? text(idToken.payload["sub"]) : undefined;
+    if (!response.ok || refreshToken === undefined || sub === undefined) {
+      return { ok: false, failure: "unavailable" };
+    }
+    return { ok: true, value: { refreshToken, sub } };
+  }
+
+  /**
+   * Posts `fields` to `url` as this app, with a fresh `client_secret`. Answers "unavailable" when
+   * the network fails. Throws on a 4xx whose error isn't one of `expected`: those are about the
+   * Worker's own request or its APPLE_ secrets.
+   */
+  async #post(
+    url: string,
+    fields: Record<string, string>,
+    expected: readonly string[],
+    now: number,
+  ): Promise<{ response: Response; answer: Json } | "unavailable"> {
     const form = new URLSearchParams({
       client_id: this.client.clientId,
       client_secret: await this.#clientSecret(now),
-      code,
-      grant_type: "authorization_code",
+      ...fields,
     });
     let response: Response;
     try {
-      response = await this.post(appleTokenUrl, { method: "POST", body: form });
+      response = await this.post(url, { method: "POST", body: form });
     } catch (error) {
       // fetch rejects with a TypeError when the network fails.
       if (error instanceof TypeError) {
-        return { ok: false, failure: "unavailable" };
+        return "unavailable";
       }
       throw error;
     }
@@ -62,24 +95,15 @@ export class AppleTokens {
       }
     }
     const answer = isJson(body) ? body : {};
+    const error = answer["error"];
     const clientError = response.status >= 400 && response.status < 500;
-    if (clientError && answer["error"] === "invalid_grant") {
-      return { ok: false, failure: "refused" };
-    }
-    if (clientError) {
-      // Every other error Apple lists is about the Worker's own request or its APPLE_ secrets.
+    if (clientError && !(typeof error === "string" && expected.includes(error))) {
+      const endpoint = new URL(url).pathname.split("/").at(-1);
       throw new Error(
-        `Apple's token endpoint answered ${response.status} to the Worker: ${String(answer["error"])}`,
+        `Apple's ${endpoint} endpoint answered ${response.status} to the Worker: ${String(error)}`,
       );
     }
-    const refreshToken = text(answer["refresh_token"]);
-    const idToken = readCompactJws(text(answer["id_token"]) ?? "");
-    // Apple answered over TLS, so its ID token is read as Apple's word without checking it again.
-    const sub = idToken?.payload["iss"] === appleIssuer ? text(idToken.payload["sub"]) : undefined;
-    if (!response.ok || refreshToken === undefined || sub === undefined) {
-      return { ok: false, failure: "unavailable" };
-    }
-    return { ok: true, value: { refreshToken, sub } };
+    return { response, answer };
   }
 
   async #clientSecret(now: number): Promise<string> {
