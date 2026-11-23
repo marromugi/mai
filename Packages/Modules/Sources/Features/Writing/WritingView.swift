@@ -228,19 +228,24 @@ struct WritingPage: View {
       VStack(alignment: .leading, spacing: 0) {
         Group {
           if editing {
-            TextField(
-              "タイトル",
-              text: Binding(
-                get: { writing.title },
-                // One line of its own, however long it wraps: a line break typed or pasted is dropped.
-                set: { title in edit { $0.title = title.replacing("\n", with: "") } }),
-              axis: .vertical)
+            TextStyleEditor(role: .heading, text: writing.title, oneLine: true) { title in
+              edit { $0.title = title }
+            }
+            .overlay(alignment: .topLeading) {
+              if writing.title.isEmpty {
+                Text(verbatim: "タイトル")
+                  .textStyle(.heading)
+                  .foregroundStyle(.tertiary)
+                  .allowsHitTesting(false)
+                  .accessibilityHidden(true)
+              }
+            }
           } else {
             // An untitled writing keeps its line: an ideographic space is one heading line box tall.
             Text(verbatim: writing.title.isEmpty ? "\u{3000}" : writing.title)
+              .textStyle(.heading)
           }
         }
-        .textStyle(.heading)
         .onGeometryChange(for: CGFloat.self) {
           let frame = $0.frame(in: .scrollView)
           guard frame.height > 0 else { return 0 }
@@ -250,7 +255,7 @@ struct WritingPage: View {
         }
         .padding(.bottom, scale.space(.m))
         if editing {
-          BodyEditor(text: writing.body) { body in edit { $0.body = body } }
+          TextStyleEditor(role: .body, text: writing.body) { body in edit { $0.body = body } }
         } else {
           Text(body: writing.body, mentions: mentions)
             .textStyle(.body)

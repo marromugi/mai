@@ -22,6 +22,29 @@ struct WritingEditingTests {
     #expect(edits.writing.body == "朝の机\n二行目追記")
   }
 
+  /// A line break typed into the title is dropped, so the title on screen is the one saved.
+  @Test func aLineBreakTypedIntoTheTitleIsDropped() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let title = try #require(page.textViews.first { $0.text == "朝" })
+    title.selectedRange = NSRange(location: 1, length: 0)
+    title.insertText("\n")
+    title.insertText("夕")
+    #expect(title.text == "朝夕")
+    #expect(edits.writing.title == "朝夕")
+  }
+
+  /// Text with line breaks replacing part of the title keeps its words and drops the breaks.
+  @Test func aLineBreakInTextPutIntoTheTitleIsDropped() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let title = try #require(page.textViews.first { $0.text == "朝" })
+    title.selectedRange = NSRange(location: 0, length: 1)
+    title.insertText("夜の\n机")
+    #expect(title.text == "夜の机")
+    #expect(edits.writing.title == "夜の机")
+  }
+
   /// While an input method composes text, nothing is edited; the text it settles on is.
   @Test func composedTextEditsTheWritingOnceSettled() throws {
     let edits = Edits()
@@ -34,18 +57,13 @@ struct WritingEditingTests {
     #expect(edits.writing.body == "朝の机\n二行目か")
   }
 
-  /// The title and body are drawn where they are when read, so entering the mode moves no text.
-  @Test func editingMovesNoText() throws {
-    let read = try #require(drawn(editing: false, .large).pngData())
-    let edited = try #require(drawn(editing: true, .large).pngData())
-    #expect(read == edited)
-  }
-
-  /// Where the line height is not a whole number of pixels, SwiftUI and TextKit may round a line
-  /// to neighbouring pixels; no line is further off than that, and none drifts.
-  @Test func editingMovesNoLinePastAPixelAtTheLargestSize() throws {
-    let read = try inkBands(drawn(editing: false, .accessibility5))
-    let edited = try inkBands(drawn(editing: true, .accessibility5))
+  /// The title and body are drawn where they are when read, so entering the mode moves no text:
+  /// the same lines, each within a pixel. SwiftUI and TextKit may round a line whose position
+  /// isn't a whole number of pixels to neighbouring pixels; none is further off, and none drifts.
+  @Test(arguments: [DynamicTypeSize.large, .accessibility5])
+  func editingMovesNoLinePastAPixel(_ size: DynamicTypeSize) throws {
+    let read = try inkBands(drawn(editing: false, size))
+    let edited = try inkBands(drawn(editing: true, size))
     try #require(read.count == edited.count)
     #expect(read.count > 3)
     for (line, (readBand, editedBand)) in zip(read, edited).enumerated() {
@@ -60,6 +78,20 @@ struct WritingEditingTests {
         .frame(width: 402, height: 874)
         .background(Color(.systemBackground)),
       as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
+  }
+
+  /// An empty title keeps its line while being edited, as it does when read.
+  @Test func anUntitledWritingKeepsTheTitleLineWhileEdited() throws {
+    func height(_ title: String) throws -> CGFloat {
+      let page = HostedPage(
+        ScrollView {
+          WritingPage(
+            writing: Writing(title: title, body: "本文"), editing: true, photos: [], width: 402,
+            back: {}, titleCutOff: { _ in })
+        })
+      return try #require(page.scrollViews.first).contentSize.height
+    }
+    #expect(try height("") == height("朝"))
   }
 
   @Test func editingAnUntitledWriting() {
