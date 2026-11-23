@@ -1,11 +1,12 @@
 import SwiftUI
 internal import Typesetting
 
-/// A writing's page: its title and body on the type area, under a back mark, over the bottom row.
-/// The row's 「組版を調整」 enters the typesetting mode, and a tap leaves it; its camera takes a
-/// photo with `camera` and hands it to `photoTaken`.
+/// A writing's page: its title, body, and `photos` on the type area, under a back mark, over the
+/// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap leaves it; its camera
+/// takes a photo with `camera` and hands it to `photoTaken`.
 struct WritingView: View {
   let writing: Writing
+  let photos: [UIImage]
   @Binding var setting: BodySetting
   let camera: Camera
   let photoTaken: (UIImage) -> Void
@@ -14,8 +15,8 @@ struct WritingView: View {
 
   var body: some View {
     WritingScreen(
-      writing: writing, setting: $setting, typesetting: $typesetting, takingPhoto: $takingPhoto,
-      camera: camera, photoTaken: photoTaken)
+      writing: writing, photos: photos, setting: $setting, typesetting: $typesetting,
+      takingPhoto: $takingPhoto, camera: camera, photoTaken: photoTaken)
   }
 }
 
@@ -26,6 +27,7 @@ struct WritingView: View {
 /// photo or is cancelled.
 struct WritingScreen: View {
   let writing: Writing
+  let photos: [UIImage]
   @Binding var setting: BodySetting
   @Binding var typesetting: Bool
   @Binding var takingPhoto: Bool
@@ -38,7 +40,7 @@ struct WritingScreen: View {
     GeometryReader { proxy in
       ScrollView {
         WritingPage(
-          writing: writing, width: proxy.size.width, back: { dismiss() },
+          writing: writing, photos: photos, width: proxy.size.width, back: { dismiss() },
           titleCutOff: { titleCutOff = $0 })
       }
       .scrollDisabled(typesetting)
@@ -138,11 +140,12 @@ private struct BottomRow: View {
   }
 }
 
-/// The page laid out across a screen `width` wide: the back mark, then the title and body on the
-/// type area. `titleCutOff` hears how much of the title has scrolled above the scroll view's top,
-/// from 0 to 1.
+/// The page laid out across a screen `width` wide: the back mark, then the title, the body, and
+/// the photos after its last paragraph, piled as one stack, on the type area. `titleCutOff` hears
+/// how much of the title has scrolled above the scroll view's top, from 0 to 1.
 struct WritingPage: View {
   let writing: Writing
+  let photos: [UIImage]
   let width: CGFloat
   let back: () -> Void
   let titleCutOff: (CGFloat) -> Void
@@ -177,6 +180,9 @@ struct WritingPage: View {
           .padding(.bottom, scale.space(.m))
         Text(body: writing.body)
           .textStyle(.body)
+        if !photos.isEmpty {
+          PhotoStack(photos: photos, lineLength: area.lineLength)
+        }
       }
       .frame(width: area.lineLength, alignment: .leading)
       .padding(.horizontal, area.margin)
@@ -267,7 +273,7 @@ private struct BackMark: Shape {
   @Previewable @State var setting = BodySetting.standard
   NavigationStack {
     WritingView(
-      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), setting: $setting,
-      camera: .device, photoTaken: { _ in })
+      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: [],
+      setting: $setting, camera: .device, photoTaken: { _ in })
   }
 }

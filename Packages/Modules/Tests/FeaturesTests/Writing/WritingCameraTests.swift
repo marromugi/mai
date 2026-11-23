@@ -79,6 +79,7 @@ private func screen(
 ) -> WritingScreen {
   WritingScreen(
     writing: Writing(title: "間合いの調整", body: Writing.sampleBody),
+    photos: [],
     setting: .constant(.standard),
     typesetting: .constant(false),
     takingPhoto: Binding {
