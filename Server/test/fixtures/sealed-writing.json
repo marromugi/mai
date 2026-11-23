@@ -1,0 +1,8 @@
+{
+  "about": "A writing sealed by Packages/Sync with the own key below. Read by the tests on both sides.",
+  "ownKey": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "id": "3f2b8c1a-5d4e-4f60-8a7b-9c0d1e2f3a4b",
+  "updated": 1790000000123,
+  "contents": "{\"title\":\"封をした題\",\"body\":\"封をした本文。\"}",
+  "envelope": "6d6169013f2b8c1a5d4e4f608a7b9c0d1e2f3a4b000001a0c4506c7b88c0743770dd842676b0dccb6b2a4b3ed84cbd03a12d663c0c54568a0ce542bd03910fce52f443b15d78a537a7341dbd47815444ea006d8a05d811f723cc4e8827a4d95c3e51ef5e9b62a5666d865360030d312f5940d3239496c4b69265baad447298b51df7da504cbef086656598c87d1353d57ec1803b14f764ab21b1d23f7e849f24290e8a33fa43fad788e15ca99b76"
+}

@@ -4,3 +4,5 @@ DerivedData/
 .build/
 .swiftpm/
 *.xcodeproj
+node_modules/
+.wrangler/
