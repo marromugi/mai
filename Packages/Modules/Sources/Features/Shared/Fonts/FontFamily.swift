@@ -158,8 +158,8 @@ nonisolated struct FontFamily: Hashable, Identifiable, Sendable {
   static let weightAxis = 0x7767_6874
 }
 
-/// One file of a family, as it is in the app's bundle or on the server: its name, and the SHA-256
-/// and size a fetched copy has to match.
+/// One file of a family, as it is in the app's bundle or on the server: its name, the SHA-256 a
+/// fetched copy has to match, and its size, shown before it is fetched.
 nonisolated struct FontFile: Hashable, Sendable {
   let name: String
   let sha256: String

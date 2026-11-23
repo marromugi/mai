@@ -238,11 +238,10 @@ final class FontLibraryTests {
   /// The download the app makes: the file for a 200, and the status for anything else.
   @Test(arguments: [200, 404, 500])
   func theRealDownloadTakesOnly200(_ status: Int) async throws {
-    ServerStandIn.status = status
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [ServerStandIn.self]
     let session = URLSession(configuration: configuration)
-    let url = try #require(URL(string: "https://fonts.test/fonts/Lora-Italic.ttf"))
+    let url = try #require(URL(string: "https://fonts.test/\(status)/fonts/Lora-Italic.ttf"))
     do {
       let file = try await FontLibrary.download(url, in: session)
       defer { try? FileManager.default.removeItem(at: file) }
@@ -291,9 +290,8 @@ final class FontLibraryTests {
   }
 }
 
-/// Answers every request with `status`, and `body` for a 200.
-private nonisolated final class ServerStandIn: URLProtocol, @unchecked Sendable {
-  nonisolated(unsafe) static var status = 200
+/// Answers each request with the status its path starts with, and `body` for a 200.
+private nonisolated final class ServerStandIn: URLProtocol {
   nonisolated static let body = Data("font bytes".utf8)
 
   override nonisolated class func canInit(with request: URLRequest) -> Bool { true }
@@ -302,14 +300,14 @@ private nonisolated final class ServerStandIn: URLProtocol, @unchecked Sendable 
   }
 
   override nonisolated func startLoading() {
-    guard let url = request.url,
+    guard let url = request.url, let status = Int(url.pathComponents[1]),
       let response = HTTPURLResponse(
-        url: url, statusCode: Self.status, httpVersion: "HTTP/1.1", headerFields: nil)
+        url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)
     else {
-      preconditionFailure("A request made by URLSession has a URL.")
+      preconditionFailure("A request to the stand-in starts its path with a status.")
     }
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Self.status == 200 ? Self.body : Data())
+    client?.urlProtocol(self, didLoad: status == 200 ? Self.body : Data())
     client?.urlProtocolDidFinishLoading(self)
   }
 

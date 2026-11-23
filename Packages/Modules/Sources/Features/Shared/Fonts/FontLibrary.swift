@@ -161,6 +161,7 @@ public final class FontLibrary {
       }
       switch CFErrorGetCode(error) {
       case CTFontManagerError.alreadyRegistered.rawValue:
+        registered.append(url)
         continue
       case CTFontManagerError.fileNotFound.rawValue:
         // A family's files are kept all together or not at all; a folder missing one is fetched anew.
