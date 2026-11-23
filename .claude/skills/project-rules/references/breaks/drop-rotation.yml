@@ -1,0 +1,5 @@
+id: drop-rotation
+language: Swift
+rule:
+  pattern: $V.rotationEffect($A)
+fix: $V

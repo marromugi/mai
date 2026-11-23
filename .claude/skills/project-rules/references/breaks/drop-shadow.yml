@@ -1,0 +1,5 @@
+id: drop-shadow
+language: Swift
+rule:
+  pattern: $V.shadow($$$A)
+fix: $V

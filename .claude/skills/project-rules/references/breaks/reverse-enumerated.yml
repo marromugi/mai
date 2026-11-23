@@ -1,0 +1,5 @@
+id: reverse-enumerated
+language: Swift
+rule:
+  pattern: $C.enumerated()
+fix: $C.reversed().enumerated()
