@@ -1,7 +1,8 @@
 import Foundation
 
 /// The font stack text is set in, as `@AppStorage` keeps it under `key`: the stack's JSON,
-/// `{"names":[…]}`. A stored value that isn't that reads as nothing stored.
+/// `{"names":[…]}`, each name once: a name stored again is dropped. A stored value that isn't that
+/// reads as nothing stored.
 struct StoredFontStack: RawRepresentable, Equatable {
   static let key = "fontStack"
   /// What is read with nothing stored.
@@ -17,7 +18,8 @@ struct StoredFontStack: RawRepresentable, Equatable {
     guard let stack = try? JSONDecoder().decode(FontStack.self, from: Data(rawValue.utf8)) else {
       return nil
     }
-    self.stack = stack
+    var seen: Set<String> = []
+    self.stack = FontStack(names: stack.names.filter { seen.insert($0).inserted })
   }
 
   var rawValue: String {

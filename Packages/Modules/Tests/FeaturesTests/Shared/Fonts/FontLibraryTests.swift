@@ -111,6 +111,29 @@ final class FontLibraryTests {
     #expect(!FileManager.default.fileExists(atPath: kept.path))
   }
 
+  /// A family with one of its files gone is fetched anew, and the file that was there is
+  /// unregistered before its folder is removed.
+  @Test func aFamilyMissingAFileIsUnregisteredAndFetchedAnew() throws {
+    let partly = FontFamily(
+      name: Self.standIn.name, title: Self.standIn.title, regular: Self.standIn.regular,
+      bold: .face("Lora-Italic-Bold"), emBoxDescent: nil,
+      files: Self.standIn.files + [FontFile(name: "Lora-Italic-Bold.ttf", sha256: "", size: 0)],
+      isBundled: false)
+    let kept = folder.appending(path: partly.name)
+    try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+    let regular = kept.appending(path: "Lora-Italic.ttf")
+    try FileManager.default.copyItem(at: Self.source, to: regular)
+
+    let fonts = FontLibrary(families: [partly], server: Self.server, folder: folder) { _ in
+      throw URLError(.notConnectedToInternet)
+    }
+    fonts.load()
+
+    #expect(fonts.state(of: partly) == .missing)
+    #expect(!FileManager.default.fileExists(atPath: kept.path))
+    #expect(!CTFontManagerUnregisterFontsForURL(regular as CFURL, .process, nil))
+  }
+
   @Test func refusesAFileThatIsNotTheOneNamed() async throws {
     let other = Self.fixtures.appending(path: "OFL.txt")
     let fonts = library { _ in try Self.downloaded(other) }

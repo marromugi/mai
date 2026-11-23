@@ -84,9 +84,13 @@ public final class FontLibrary {
     do {
       try await fetchFiles(of: family, from: server)
       states[family.name] = registerKept(family)
+    } catch let error as FontFetchError {
+      states[family.name] = .failed(error.message)
+    } catch let error as CocoaError {
+      Self.log.error("Keeping \(family.name, privacy: .public) failed: \(error)")
+      states[family.name] = .failed(FontFetchError.notKept.message)
     } catch {
-      Self.log.error("Fetching \(family.name, privacy: .public) failed: \(error)")
-      states[family.name] = .failed((error as? FontFetchError ?? .notKept).message)
+      preconditionFailure("Fetching \(family.name) failed in a way not handled: \(error)")
     }
   }
 
@@ -98,9 +102,7 @@ public final class FontLibrary {
       let fetched: URL
       do {
         fetched = try await download(server.appending(path: "fonts").appending(path: file.name))
-      } catch let error as FontFetchError {
-        throw error
-      } catch {
+      } catch let error as URLError {
         Self.log.error("Downloading \(file.name, privacy: .public) failed: \(error)")
         throw FontFetchError.unreachable
       }
@@ -134,10 +136,21 @@ public final class FontLibrary {
   /// again.
   private func registerKept(_ family: FontFamily) -> State {
     let kept = folder.appending(path: family.name)
+    var registered: [URL] = []
+    /// Removes the family's files once none of them is registered: a registered file must stay.
+    func discard() {
+      for url in registered {
+        CTFontManagerUnregisterFontsForURL(url as CFURL, .process, nil)
+      }
+      try? FileManager.default.removeItem(at: kept)
+    }
     for file in family.files {
       let url = kept.appending(path: file.name)
       var error: Unmanaged<CFError>?
-      guard !CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) else { continue }
+      guard !CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) else {
+        registered.append(url)
+        continue
+      }
       guard let error = error?.takeRetainedValue() else {
         preconditionFailure("Core Text gives an error with every registration it refuses.")
       }
@@ -146,11 +159,11 @@ public final class FontLibrary {
         continue
       case CTFontManagerError.fileNotFound.rawValue:
         // A family's files are kept all together or not at all; a folder missing one is fetched anew.
-        try? FileManager.default.removeItem(at: kept)
+        discard()
         return .missing
       default:
         Self.log.error("Registering \(url.lastPathComponent, privacy: .public) failed: \(error)")
-        try? FileManager.default.removeItem(at: kept)
+        discard()
         return .failed(FontFetchError.notAFont.message)
       }
     }
