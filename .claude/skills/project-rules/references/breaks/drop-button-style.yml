@@ -1,0 +1,5 @@
+id: drop-button-style
+language: Swift
+rule:
+  pattern: $V.buttonStyle($S)
+fix: $V

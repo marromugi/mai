@@ -1,0 +1,5 @@
+id: last-to-first
+language: Swift
+rule:
+  pattern: $XS.last
+fix: $XS.first

@@ -1,0 +1,5 @@
+id: drop-color-scheme
+language: Swift
+rule:
+  pattern: $V.environment(\.colorScheme, $S)
+fix: $V
