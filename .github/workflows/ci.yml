@@ -17,6 +17,27 @@ jobs:
       - name: Check the read mode model with TLC
         run: scripts/model-check.sh
 
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: Server/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: Server/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm fmt:check
+      - run: pnpm test
+
   build:
     runs-on: macos-26
     steps:
@@ -26,8 +47,11 @@ jobs:
           swift format lint --strict --recursive
           App scripts Packages/Modules/Package.swift Packages/Modules/Sources
           Packages/Typesetting/Package.swift Packages/Typesetting/Sources Packages/Typesetting/Tests
+          Packages/Sync/Package.swift Packages/Sync/Sources Packages/Sync/Tests AppTests
       - name: Test the typesetting on the Mac
         run: swift test --package-path Packages/Typesetting
+      - name: Test sealing and syncing on the Mac
+        run: swift test --package-path Packages/Sync --skip Contract
       - name: Install XcodeGen
         run: |
           curl -fsSL -o xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
@@ -38,6 +62,13 @@ jobs:
       - name: Build
         run: >
           xcodebuild build
+          -project Mai.xcodeproj
+          -scheme Mai
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+      - name: Build the app's tests
+        run: >
+          xcodebuild build-for-testing
           -project Mai.xcodeproj
           -scheme Mai
           -destination 'generic/platform=iOS Simulator'
