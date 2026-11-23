@@ -2,10 +2,11 @@ import CoreText
 import CryptoKit
 import Foundation
 import Observation
+import os
 
 /// The families text can be set in on this device: the bundled ones, and those fetched from the
 /// server as `GET <server>/fonts/<file>` and kept in `folder`, one folder per family. Fetched
-/// files are registered for this process when fetched and again at each launch.
+/// files are registered for this process when fetched, and again by `load()` at each launch.
 @Observable
 public final class FontLibrary {
   /// Where a family stands on this device.
@@ -14,14 +15,15 @@ public final class FontLibrary {
     /// Not fetched yet, or with no server to fetch it from.
     case missing
     case fetching
-    /// The last fetch failed, for the reason given, written for the person reading it.
+    /// The last fetch, or registering what was kept, failed for the reason given, written for the
+    /// person reading it.
     case failed(String)
   }
 
   /// Every family that can be added to a stack: the bundled ones, and the server's when there is
   /// a server.
   let families: [FontFamily]
-  private(set) var states: [String: State] = [:]
+  private var states: [String: State] = [:]
   @ObservationIgnored private let server: URL?
   @ObservationIgnored private let folder: URL
   @ObservationIgnored private let download: (URL) async throws -> URL
@@ -45,18 +47,22 @@ public final class FontLibrary {
     families: [FontFamily] = FontFamily.known, server: URL?, folder: URL,
     download: @escaping (URL) async throws -> URL
   ) {
-    BundledFonts.register()
     self.families = families.filter { $0.isBundled || server != nil }
     self.server = server
     self.folder = folder
     self.download = download
-    for family in self.families {
-      states[family.name] = family.isBundled || registerKept(family) ? .available : .missing
+  }
+
+  /// Registers the bundled families, and the fetched ones kept from earlier launches.
+  public func load() {
+    BundledFonts.register()
+    for family in families where !family.isBundled {
+      states[family.name] = registerKept(family)
     }
   }
 
   func state(of family: FontFamily) -> State {
-    states[family.name] ?? .missing
+    family.isBundled ? .available : states[family.name] ?? .missing
   }
 
   /// The families text can be set in now.
@@ -77,11 +83,10 @@ public final class FontLibrary {
     states[family.name] = .fetching
     do {
       try await fetchFiles(of: family, from: server)
-      states[family.name] = registerKept(family) ? .available : .failed(FontFetchError.notAFont.message)
-    } catch let error as FontFetchError {
-      states[family.name] = .failed(error.message)
+      states[family.name] = registerKept(family)
     } catch {
-      states[family.name] = .failed(FontFetchError.unreachable(error).message)
+      Self.log.error("Fetching \(family.name, privacy: .public) failed: \(error)")
+      states[family.name] = .failed((error as? FontFetchError ?? .notKept).message)
     }
   }
 
@@ -90,40 +95,66 @@ public final class FontLibrary {
     try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: staging) }
     for file in family.files {
-      let fetched = try await download(server.appending(path: "fonts").appending(path: file.name))
+      let fetched: URL
+      do {
+        fetched = try await download(server.appending(path: "fonts").appending(path: file.name))
+      } catch let error as FontFetchError {
+        throw error
+      } catch {
+        Self.log.error("Downloading \(file.name, privacy: .public) failed: \(error)")
+        throw FontFetchError.unreachable
+      }
       defer { try? FileManager.default.removeItem(at: fetched) }
-      let data = try Data(contentsOf: fetched, options: .mappedIfSafe)
-      let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-      guard data.count == file.size, digest == file.sha256 else {
+      guard try await Self.matches(fetched, file) else {
         throw FontFetchError.notTheFile(file.name)
       }
       try FileManager.default.moveItem(at: fetched, to: staging.appending(path: file.name))
     }
     try excludeFromBackup()
     let kept = folder.appending(path: family.name)
-    if FileManager.default.fileExists(atPath: kept.path) {
+    do {
+      try FileManager.default.moveItem(at: staging, to: kept)
+    } catch CocoaError.fileWriteFileExists {
       try FileManager.default.removeItem(at: kept)
+      try FileManager.default.moveItem(at: staging, to: kept)
     }
-    try FileManager.default.moveItem(at: staging, to: kept)
   }
 
-  /// Registers `family`'s kept files, if each is there. A file Core Text won't take is removed
-  /// with the rest of the family's, to be fetched again.
-  private func registerKept(_ family: FontFamily) -> Bool {
+  /// Whether `url` holds `file`: its size and SHA-256. Read off the main actor; a file is up to
+  /// a few MB.
+  @concurrent
+  private nonisolated static func matches(_ url: URL, _ file: FontFile) async throws -> Bool {
+    let data = try Data(contentsOf: url, options: .mappedIfSafe)
+    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    return data.count == file.size && digest == file.sha256
+  }
+
+  /// Registers `family`'s kept files: available once each is registered, missing when none was
+  /// kept. A file Core Text won't take is removed with the rest of the family's, to be fetched
+  /// again.
+  private func registerKept(_ family: FontFamily) -> State {
     let kept = folder.appending(path: family.name)
-    let urls = family.files.map { kept.appending(path: $0.name) }
-    guard urls.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else { return false }
-    for url in urls {
+    for file in family.files {
+      let url = kept.appending(path: file.name)
       var error: Unmanaged<CFError>?
-      if !CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) {
-        let code = error.map { CFErrorGetCode($0.takeRetainedValue()) }
-        guard code == CTFontManagerError.alreadyRegistered.rawValue else {
-          try? FileManager.default.removeItem(at: kept)
-          return false
-        }
+      guard !CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error) else { continue }
+      guard let error = error?.takeRetainedValue() else {
+        preconditionFailure("Core Text gives an error with every registration it refuses.")
+      }
+      switch CFErrorGetCode(error) {
+      case CTFontManagerError.alreadyRegistered.rawValue:
+        continue
+      case CTFontManagerError.fileNotFound.rawValue:
+        // A family's files are kept all together or not at all; a folder missing one is fetched anew.
+        try? FileManager.default.removeItem(at: kept)
+        return .missing
+      default:
+        Self.log.error("Registering \(url.lastPathComponent, privacy: .public) failed: \(error)")
+        try? FileManager.default.removeItem(at: kept)
+        return .failed(FontFetchError.notAFont.message)
       }
     }
-    return true
+    return .available
   }
 
   /// Fetched fonts can be fetched again, so they stay out of the device's backups.
@@ -142,17 +173,21 @@ public final class FontLibrary {
     }
     return file
   }
+
+  private static let log = Logger(subsystem: "com.marromugi.mai", category: "fonts")
 }
 
-/// Why a family couldn't be fetched.
+/// Why a family couldn't be fetched or kept. The cause behind each is logged where it is met.
 enum FontFetchError: Error {
   /// The server answered with this status, or with something that isn't HTTP.
   case answered(Int?)
+  case unreachable
   /// What came back isn't the file the app knows by that name.
   case notTheFile(String)
+  /// The files couldn't be written to the device.
+  case notKept
   /// Core Text wouldn't register a file that matched.
   case notAFont
-  case unreachable(any Error)
 
   var message: String {
     switch self {
@@ -160,12 +195,14 @@ enum FontFetchError: Error {
       "サーバーが \(status) を返しました。"
     case .answered(nil):
       "サーバーの答えを読めませんでした。"
+    case .unreachable:
+      "サーバーに届きませんでした。通信できるところで、もう一度試してください。"
     case .notTheFile(let name):
       "\(name) の中身が、アプリの知っているものと違いました。"
+    case .notKept:
+      "端末に保存できませんでした。空き容量を確かめて、もう一度試してください。"
     case .notAFont:
-      "取得したファイルを書体として使えませんでした。"
-    case .unreachable(let error):
-      "サーバーに届きませんでした（\(error.localizedDescription)）。"
+      "取得したファイルを書体として使えませんでした。もう一度取得してください。"
     }
   }
 }

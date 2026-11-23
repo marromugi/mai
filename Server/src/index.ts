@@ -11,7 +11,8 @@ import { Store, type Answer, type Refusal } from "./store";
 /**
  * The server keeps only sealed writings, and knows of each only its ID, updated time and size;
  * of each account, its Apple user, Apple's refresh token (sealed), and its own key check.
- * Routes are listed in `Server/README.md`.
+ * Font files are served apart from accounts, from R2 (`src/fonts.ts`), so of a font fetched it
+ * knows only which file and the request's address. Routes are listed in `Server/README.md`.
  */
 export default {
   fetch(request, env): Promise<Response> {

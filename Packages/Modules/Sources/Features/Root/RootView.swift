@@ -22,7 +22,9 @@ public struct RootView: View {
   }
 
   /// Opened on the writings in `path`, the last one on top.
-  init(store: any WritingStore, fonts: FontLibrary = FontLibrary(server: nil), path: [Writing.ID] = []) {
+  init(
+    store: any WritingStore, fonts: FontLibrary = FontLibrary(server: nil), path: [Writing.ID] = []
+  ) {
     self.store = store
     self.fonts = fonts
     _path = State(initialValue: path)

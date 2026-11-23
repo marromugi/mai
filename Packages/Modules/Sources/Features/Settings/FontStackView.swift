@@ -16,7 +16,7 @@ struct FontStackView: View {
           .padding(.vertical, 4)
       }
       Section {
-        ForEach(Array(stack.names.enumerated()), id: \.offset) { _, name in
+        ForEach(stack.names, id: \.self) { name in
           FontStackRow(name: name, fonts: fonts)
         }
         .onMove { stack.names.move(fromOffsets: $0, toOffset: $1) }
@@ -106,7 +106,9 @@ private struct FamilyTitle: View {
   let available: Bool
 
   var body: some View {
-    if available, let font = family.font(.body, size: UIFont.preferredFont(forTextStyle: .body).pointSize) {
+    if available,
+      let font = family.font(.body, size: UIFont.preferredFont(forTextStyle: .body).pointSize)
+    {
       Text(verbatim: family.title).font(Font(font))
     } else {
       Text(verbatim: family.title)

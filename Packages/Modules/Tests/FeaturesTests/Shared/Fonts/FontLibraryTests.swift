@@ -20,7 +20,8 @@ final class FontLibraryTests {
         size: 221_232)
     ],
     isBundled: false)
-  static let server = URL(string: "https://fonts.test")!
+  /// Never reached: each test's download stands in for it.
+  static let server = URL(filePath: "/server", directoryHint: .isDirectory)
   /// Beside this file, with its license; read from the Mac, as the snapshots are.
   static let fixtures = URL(filePath: #filePath).deletingLastPathComponent().appending(
     path: "Fixtures")
@@ -36,13 +37,16 @@ final class FontLibraryTests {
   }
 
   /// A library offering the stand-in and the bundled families, whose downloads give `answer`.
+  /// Loaded, as the app's is at launch.
   func library(_ answer: @escaping (URL) throws -> URL) -> FontLibrary {
-    FontLibrary(
+    let fonts = FontLibrary(
       families: [.notoSansJP, .inter, Self.standIn], server: Self.server, folder: folder
     ) { url in
       self.requested.append(url)
       return try answer(url)
     }
+    fonts.load()
+    return fonts
   }
 
   /// A copy of `source` in a temporary file of its own, as a download leaves it.
@@ -73,13 +77,14 @@ final class FontLibraryTests {
 
     await fonts.fetch(Self.standIn)
 
-    #expect(requested == [URL(string: "https://fonts.test/fonts/Lora-Italic.ttf")!])
+    #expect(requested == [Self.server.appending(path: "fonts/Lora-Italic.ttf")])
     #expect(fonts.state(of: Self.standIn) == .available)
     #expect(fonts.available.contains(Self.standIn))
     #expect(UIFont(name: "Lora-Italic", size: 16) != nil)
     let kept = folder.appending(path: "Lora Italic/Lora-Italic.ttf")
     #expect(FileManager.default.fileExists(atPath: kept.path))
-    #expect(try folder.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+    #expect(
+      try folder.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
   }
 
   @Test func aLaterLaunchRegistersWhatWasKeptWithoutFetching() async throws {
@@ -91,6 +96,19 @@ final class FontLibraryTests {
 
     #expect(relaunched.state(of: Self.standIn) == .available)
     #expect(requested.isEmpty)
+  }
+
+  /// A kept file Core Text won't take shows as failed, not as never fetched, and is removed.
+  @Test func aKeptFileThatIsNoLongerAFontFailsAtLaunch() throws {
+    let kept = folder.appending(path: "Lora Italic")
+    try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(
+      at: Self.fixtures.appending(path: "OFL.txt"), to: kept.appending(path: "Lora-Italic.ttf"))
+
+    let fonts = library { _ in throw URLError(.notConnectedToInternet) }
+
+    #expect(fonts.state(of: Self.standIn) == .failed(FontFetchError.notAFont.message))
+    #expect(!FileManager.default.fileExists(atPath: kept.path))
   }
 
   @Test func refusesAFileThatIsNotTheOneNamed() async throws {
@@ -122,7 +140,7 @@ final class FontLibraryTests {
       Issue.record("A fetch that can't reach the server fails.")
       return
     }
-    #expect(reason.hasPrefix("サーバーに届きませんでした"))
+    #expect(reason == FontFetchError.unreachable.message)
 
     reachable = true
     await fonts.fetch(Self.standIn)

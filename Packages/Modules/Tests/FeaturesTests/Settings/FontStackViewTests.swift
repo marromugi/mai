@@ -17,8 +17,9 @@ extension Writing {
 struct FontStackViewTests {
   /// Inter first, then Zen Kaku Gothic New not fetched yet, then Lora, and the bundled family last.
   @Test func theStackScreen() {
-    let folder = FileManager.default.temporaryDirectory.appending(path: "FontStackViewTests-\(UUID())")
-    let fonts = FontLibrary(server: URL(string: "https://fonts.test"), folder: folder) { _ in
+    let folder = FileManager.default.temporaryDirectory.appending(
+      path: "FontStackViewTests-\(UUID())")
+    let fonts = FontLibrary(server: URL(filePath: "/server"), folder: folder) { _ in
       throw URLError(.notConnectedToInternet)
     }
     let page = HostedPage(
