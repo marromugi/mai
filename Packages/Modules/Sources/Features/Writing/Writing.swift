@@ -6,25 +6,53 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
   var title: String
   /// Paragraphs separated by line breaks.
   var body: String
+  /// Stretches of `body` that link outside the app, in order and never overlapping.
+  var links: [BodyLink]
   var updated: Date
 
-  init(id: UUID = UUID(), title: String, body: String, updated: Date = .now) {
+  init(
+    id: UUID = UUID(), title: String, body: String, links: [BodyLink] = [], updated: Date = .now
+  ) {
     self.id = id
     self.title = title
     self.body = body
+    self.links = links
     self.updated = updated
+  }
+
+  private enum CodingKeys: CodingKey {
+    case id, title, body, links, updated
+  }
+
+  /// A writing saved before links were kept has none. One whose links don't fit its body is
+  /// refused.
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(UUID.self, forKey: .id)
+    title = try container.decode(String.self, forKey: .title)
+    body = try container.decode(String.self, forKey: .body)
+    links = try container.decodeIfPresent([BodyLink].self, forKey: .links) ?? []
+    updated = try container.decode(Date.self, forKey: .updated)
+    guard links.fit(body) else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .links, in: container,
+        debugDescription: "A link is empty, overlaps another, or lies outside the body.")
+    }
   }
 }
 
 extension [Writing] {
   /// Makes `change` to the writing with `id`, updated `now`, and returns it. Nil, and nothing
-  /// changed, when none has `id` or the change leaves its title and body as they were.
+  /// changed, when none has `id` or the change leaves its title, body, and links as they were.
   mutating func edit(_ id: Writing.ID, at now: Date, _ change: (inout Writing) -> Void) -> Writing?
   {
     guard let index = firstIndex(where: { $0.id == id }) else { return nil }
     var edited = self[index]
     change(&edited)
-    guard edited.title != self[index].title || edited.body != self[index].body else { return nil }
+    let before = self[index]
+    guard
+      edited.title != before.title || edited.body != before.body || edited.links != before.links
+    else { return nil }
     edited.updated = now
     self[index] = edited
     return edited

@@ -198,6 +198,127 @@ struct WritingEditingTests {
     #expect(hosted.image().pngData() == opened.image().pngData())
   }
 
+  /// A web address pasted over selected body text links that text, and the text stays.
+  @Test func pastingAWebAddressOverASelectionLinksIt() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.selectedRange = NSRange(location: 0, length: 2)
+    try paste("https://example.com/bread", into: body)
+    #expect(edits.writing.body == "朝の机\n二行目")
+    #expect(edits.writing.links == [BodyLink(range: 0..<2, url: bread)])
+    #expect(page.presented == nil)
+  }
+
+  /// Text that is not a web address, over a selection or not, is pasted as text: nothing is
+  /// linked, and no sheet opens.
+  @Test(arguments: [NSRange(location: 0, length: 2), NSRange(location: 3, length: 0)])
+  func otherTextIsNotLinked(_ selection: NSRange) throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.selectedRange = selection
+    try paste("example.com", into: body)
+    page.settle()
+    #expect(edits.writing.links.isEmpty)
+    #expect(page.presented == nil)
+  }
+
+  /// The title holds no links: a web address pasted into it is pasted as text, and no sheet opens.
+  @Test(arguments: [NSRange(location: 0, length: 1), NSRange(location: 1, length: 0)])
+  func aWebAddressPastedIntoTheTitleIsNotLinked(_ selection: NSRange) throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let title = try focusedTitle(in: page, holding: "朝")
+    title.selectedRange = selection
+    try paste("https://example.com/bread", into: title)
+    page.settle()
+    #expect(title.attributedText.attribute(.link, at: 0, effectiveRange: nil) == nil)
+    #expect(page.presented == nil)
+  }
+
+  /// A web address pasted with nothing selected opens the sheet that asks for its title, and
+  /// puts nothing in yet.
+  @Test func pastingAWebAddressWithNothingSelectedOpensTheSheet() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.selectedRange = NSRange(location: 3, length: 0)
+    try paste("https://example.com/bread", into: body)
+    page.settle()
+    #expect(page.presented != nil)
+    #expect(edits.writing.body == "朝の机\n二行目")
+    #expect(edits.writing.links.isEmpty)
+  }
+
+  /// The title the sheet gives goes in at the caret where the address was pasted, linked to it,
+  /// and the caret after it; an empty title puts the address itself in; none puts nothing in.
+  @Test(arguments: [
+    ("パンの店", "朝の机パンの店\n二行目", [BodyLink(range: 3..<7, url: bread)], 7),
+    (" ", "朝の机https://example.com/bread\n二行目", [BodyLink(range: 3..<28, url: bread)], 28),
+  ])
+  func theTitleGivenGoesInLinked(
+    _ title: String, _ body: String, _ links: [BodyLink], _ caret: Int
+  ) throws {
+    let asked = try AskedForATitle()
+    asked.answer(title)
+    #expect(asked.view.text == body)
+    #expect(asked.view.links == links)
+    #expect(asked.view.selectedRange == NSRange(location: caret, length: 0))
+    #expect(asked.changes.last?.text == body)
+    #expect(asked.changes.last?.links == links)
+  }
+
+  @Test func noTitleGivenPutsNothingIn() throws {
+    let asked = try AskedForATitle()
+    asked.answer(nil)
+    #expect(asked.view.text == "朝の机\n二行目")
+    #expect(asked.view.links.isEmpty)
+    #expect(asked.changes.isEmpty)
+  }
+
+  /// The sheet's title field is focused as it opens, so the title can be typed at once.
+  @Test func theSheetsTitleFieldIsFocusedAsItOpens() async throws {
+    let page = HostedPage(LinkTitleSheet(url: bread) { _ in })
+    try await page.settle { page.textFields.contains { $0.isFirstResponder } }
+    #expect(page.textFields.count == 1)
+    #expect(page.textFields.first?.isFirstResponder == true)
+  }
+
+  /// Text typed at a link's end is not linked; text typed inside it is.
+  @Test func typingAtALinksEndLeavesItAndInsideExtendsIt() throws {
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "粉の店へ\n二行目", links: [BodyLink(range: 0..<3, url: flour)]))
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = NSRange(location: 3, length: 0)
+    type("と", into: body)
+    #expect(edits.writing.links == [BodyLink(range: 0..<3, url: flour)])
+    body.selectedRange = NSRange(location: 1, length: 0)
+    type("と", into: body)
+    #expect(edits.writing.body == "粉との店とへ\n二行目")
+    #expect(edits.writing.links == [BodyLink(range: 0..<4, url: flour)])
+  }
+
+  @Test func editingABodyWithALink() {
+    assertSnapshot(
+      of: screen(editing: true, edits: Edits(writing: linked))
+        .frame(width: 402, height: 874)
+        .background(Color(.systemBackground)),
+      as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
+  }
+
+  @Test func theLinkSheet() {
+    assertSnapshot(
+      of: LinkTitleSheet(url: bread) { _ in }
+        .frame(width: 402, height: 437)
+        .background(Color(.systemBackground)),
+      as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
+  }
+
   @Test func editingMode() {
     assertSnapshot(
       of: screen(editing: true, edits: Edits(writing: sampled))
@@ -230,6 +351,51 @@ struct WritingEditingTests {
 }
 
 private let sampled = Writing(title: "間合いの調整", body: Writing.sampleBody)
+
+nonisolated private let bread = URL(string: "https://example.com/bread") ?? URL(filePath: "/")
+nonisolated private let flour = URL(string: "https://example.com/flour") ?? URL(filePath: "/")
+
+/// The sample page with its first line's 「小さなパン」 linked.
+private let linked = Writing(
+  title: "間合いの調整", body: Writing.sampleBody, links: [BodyLink(range: 3..<8, url: bread)])
+
+/// Pastes `text` into `view` as the edit menu's Paste does, from a pasteboard of the test's own: a
+/// test can't read the general one. What isn't a web address is left to the general one, so it
+/// pastes nothing here.
+@MainActor
+private func paste(_ text: String, into view: UITextView) throws {
+  let editor = try #require(view as? PlaceholderTextView)
+  let pasteboard = try #require(UIPasteboard(name: .init(UUID().uuidString), create: true))
+  defer { UIPasteboard.remove(withName: pasteboard.name) }
+  pasteboard.string = text
+  editor.pasteboard = pasteboard
+  editor.paste(nil)
+}
+
+/// A body editor holding 「朝の机\n二行目」 that was pasted a web address with the caret after
+/// 「朝の机」: the request the paste made, and the changes the editor has reported since.
+@MainActor
+private final class AskedForATitle {
+  let view = PlaceholderTextView(usingTextLayoutManager: true)
+  private(set) var changes: [(text: String, links: [BodyLink])] = []
+  private var coordinator: StyledTextView.Coordinator?
+  private var asked: TitleRequest?
+
+  init() throws {
+    let coordinator = StyledTextView.Coordinator(changed: { _, _ in }, oneLine: false)
+    coordinator.changed = { [weak self] in self?.changes.append(($0, $1)) }
+    self.coordinator = coordinator
+    view.delegate = coordinator
+    view.text = "朝の机\n二行目"
+    view.selectedRange = NSRange(location: 3, length: 0)
+    coordinator.paste(bread, into: view) { self.asked = $0 }
+    try #require(asked != nil)
+  }
+
+  func answer(_ title: String?) {
+    asked?.answer(title)
+  }
+}
 
 /// The sample page at the top of a 402 × 874 window, read or being edited.
 @MainActor

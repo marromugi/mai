@@ -14,18 +14,31 @@ extension View {
 extension Text {
   /// `string` as body text, broken by the strict rules: no line starts with ー, a small kana, or
   /// anything else 行頭禁則 forbids, and no break rests on a guessed language (#23). Each of
-  /// `mentions` links to its writing, under a dotted line in the text's colour.
-  init(body string: String, mentions: [TitleMention] = []) {
-    self.init(AttributedString(body: string, mentions: mentions))
+  /// `links` links to its page under a solid line in the text's colour, and each of `mentions`
+  /// outside them to its writing under a dotted one.
+  init(body string: String, links: [BodyLink] = [], mentions: [TitleMention] = []) {
+    self.init(AttributedString(body: string, links: links, mentions: mentions))
   }
 }
 
 extension AttributedString {
-  /// `string` as `Text(body:mentions:)` sets it.
-  init(body string: String, mentions: [TitleMention]) {
+  /// `string` as `Text(body:links:mentions:)` sets it.
+  init(body string: String, links: [BodyLink] = [], mentions: [TitleMention]) {
     self.init(string)
     self.languageIdentifier = Self.bodyLanguage
-    for mention in mentions {
+    var linked: [Range<String.Index>] = []
+    for link in links {
+      guard let found = Range(NSRange(link.range), in: string),
+        let range = Range(found, in: self)
+      else {
+        preconditionFailure("A link's range is not in the body it was kept with.")
+      }
+      linked.append(found)
+      self[range].link = link.url
+      self[range].foregroundColor = .primary
+      self[range].underlineStyle = .single
+    }
+    for mention in mentions where !linked.contains(where: { $0.overlaps(mention.range) }) {
       guard let range = Range(mention.range, in: self) else {
         preconditionFailure("A mention's range is not in the body it was found in.")
       }
