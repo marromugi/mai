@@ -4,7 +4,8 @@ import { Challenges } from "./challenges";
 import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
 import { RefreshTokens } from "./refresh-tokens";
 import { callerOf } from "./sessions";
-import { issueChallenge, makeAccount, problem, startSession, type SignIn } from "./sign-in";
+import { problem } from "./http";
+import { issueChallenge, makeAccount, startSession, type SignIn } from "./sign-in";
 import { Store, type Answer, type Refusal } from "./store";
 
 /**

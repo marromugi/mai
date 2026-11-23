@@ -2,7 +2,8 @@ import { verifyIdentityToken, type AppleSignInKeys, type SignInFailure } from ".
 import type { AppleTokens } from "./apple-tokens";
 import type { Challenge, Challenges } from "./challenges";
 import { parseAccountId } from "./account-id";
-import { isJson, text, type Json } from "./jws";
+import { jsonBody, problem } from "./http";
+import { text, type Json } from "./jws";
 import type { RefreshTokens } from "./refresh-tokens";
 import { newSessionToken } from "./sessions";
 import type { Store } from "./store";
@@ -139,23 +140,4 @@ async function signedInUser(body: Json | undefined, signIn: SignIn, now: number)
     return { ok: false, response: problem(status, reason) };
   }
   return { ok: true, sub: checked.value.sub, challenge };
-}
-
-async function jsonBody(request: Request): Promise<Json | undefined> {
-  if (request.headers.get("Content-Type")?.split(";")[0]?.trim() !== "application/json") {
-    return undefined;
-  }
-  try {
-    const body: unknown = await request.json();
-    return isJson(body) ? body : undefined;
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-export function problem(status: number, reason: string): Response {
-  return Response.json({ error: reason }, { status });
 }
