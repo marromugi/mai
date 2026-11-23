@@ -67,7 +67,7 @@ public struct RootView: View {
     .sheet(isPresented: $showingSettings) {
       SettingsView()
     }
-    .preferredColorScheme(theme.colorScheme)
+    .colorTheme(theme)
   }
 }
 

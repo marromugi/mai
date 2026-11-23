@@ -32,6 +32,30 @@ struct ColorThemeTests {
     let page = HostedPage(
       RootView(store: FileWritingStore(directory: directory)).defaultAppStorage(store))
     let root = try #require(page.child(UIHostingController<AnyView>.self))
-    #expect(root.overrideUserInterfaceStyle == style)
+    #expect(root.view.window?.overrideUserInterfaceStyle == style)
+  }
+
+  /// Changed while the app is shown, the window turns with each theme, back to the device's own
+  /// appearance included.
+  @MainActor
+  @Test func theWindowFollowsAChangedTheme() async throws {
+    let suite = "ColorThemeTests.changed"
+    let store = try #require(UserDefaults(suiteName: suite))
+    store.removePersistentDomain(forName: suite)
+    let directory = FileManager.default.temporaryDirectory.appending(
+      path: "ColorThemeTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let page = HostedPage(
+      RootView(store: FileWritingStore(directory: directory)).defaultAppStorage(store))
+    let window = try #require(page.child(UIHostingController<AnyView>.self)?.view.window)
+
+    for (theme, style) in [
+      (ColorTheme.dark, UIUserInterfaceStyle.dark), (.system, .unspecified), (.light, .light),
+      (.dark, .dark), (.system, .unspecified),
+    ] {
+      store.set(theme.rawValue, forKey: ColorTheme.key)
+      try await page.settle { window.overrideUserInterfaceStyle == style }
+      #expect(window.overrideUserInterfaceStyle == style, "\(theme)")
+    }
   }
 }
