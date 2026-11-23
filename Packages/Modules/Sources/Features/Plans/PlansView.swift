@@ -5,6 +5,7 @@ import SwiftUI
 /// gives them. A plan is bought for the kept account ID, or a new one; the screen ends at the
 /// purchase.
 struct PlansView: View {
+  var kept = KeptAccountID.standard
   /// Nil while the App Store is being asked.
   @State private var products: Result<[Product], any Error>?
   /// Counts the 「もう一度」 taps, so each asks the App Store again.
@@ -20,20 +21,19 @@ struct PlansView: View {
       case nil:
         ProgressView()
       case .failure(let error):
-        unavailable(error.localizedDescription)
+        PlansUnavailable(reason: appStoreFailureMessage(error)) { attempt += 1 }
       case .success(let products):
         let offers = PlanOffer.all(in: products)
         if let bought {
-          ContentUnavailableView(
-            "\(bought.plan.name)に入りました", systemImage: "checkmark.circle",
-            description: Text("月 \(bought.price) の購読です。"))
+          PlanBought(offer: bought)
         } else if offers.isEmpty {
-          unavailable("App Store にプランが見つかりませんでした。")
+          PlansUnavailable(reason: "App Store にプランが見つかりませんでした。") { attempt += 1 }
         } else {
           PlanList(offers: offers, buying: buying) { offer in
             guard let product = products.first(where: { $0.id == offer.plan.productID }) else {
               preconditionFailure("An offer is made only from a product the App Store gave")
             }
+            buying = offer.plan
             Task { await buy(offer, product) }
           }
         }
@@ -46,6 +46,7 @@ struct PlansView: View {
       do {
         products = .success(try await Product.products(for: SyncPlan.allCases.map(\.productID)))
       } catch {
+        plansLogger.error("The plans couldn't be loaded: \(error)")
         products = .failure(error)
       }
     }
@@ -58,22 +59,13 @@ struct PlansView: View {
     }
   }
 
-  private func unavailable(_ reason: String) -> some View {
-    ContentUnavailableView {
-      Label("プランを読み込めませんでした", systemImage: "exclamationmark.triangle")
-    } description: {
-      Text(verbatim: reason)
-    } actions: {
-      Button("もう一度") { attempt += 1 }
-    }
-  }
-
+  /// Buys the plan `buying` names, set by the tap that starts it so a second tap finds the
+  /// buttons dimmed.
   private func buy(_ offer: PlanOffer, _ product: Product) async {
-    buying = offer.plan
     defer { buying = nil }
     do {
       switch try await buyPlan(
-        product, keptIn: .standard, purchase: { try await purchase($0, options: $1) })
+        product, keptIn: kept, purchase: { try await purchase($0, options: $1) })
       {
       case .bought:
         bought = offer
@@ -121,6 +113,34 @@ private enum PlanNotice {
     case .waiting: "承認されると購入が済みます。"
     case .failed(let error): error.localizedDescription
     }
+  }
+}
+
+/// Shown in place of the plans when the App Store couldn't give them, with `reason` and a button
+/// that calls `retry`.
+struct PlansUnavailable: View {
+  let reason: String
+  let retry: () -> Void
+
+  var body: some View {
+    ContentUnavailableView {
+      Label("プランを読み込めませんでした", systemImage: "exclamationmark.triangle")
+    } description: {
+      Text(verbatim: reason)
+    } actions: {
+      Button("もう一度", action: retry)
+    }
+  }
+}
+
+/// Shown in place of the plans once `offer` is bought.
+struct PlanBought: View {
+  let offer: PlanOffer
+
+  var body: some View {
+    ContentUnavailableView(
+      "\(offer.plan.name)に入りました", systemImage: "checkmark.circle",
+      description: Text("月 \(offer.price) の購読です。"))
   }
 }
 

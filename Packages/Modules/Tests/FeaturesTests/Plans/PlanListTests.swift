@@ -21,9 +21,19 @@ struct PlanListTests {
   @Test func plansAtTheLargestSize() {
     assertPlans(size: .accessibility5)
   }
+
+  @Test func plusBought() {
+    assertPlanScreen(PlanBought(offer: PlanOffer(plan: .plus, price: "¥700")))
+  }
+
+  @Test func plansUnavailable() {
+    assertPlanScreen(
+      PlansUnavailable(
+        reason: "App Store につながりませんでした。ネットワークを確かめて、もう一度お試しください。", retry: {}))
+  }
 }
 
-/// The plans at their prices in Japan, pushed onto a navigation stack in a 402 × 874 window.
+/// The plans at their prices in Japan, as the plans screen shows them.
 private func assertPlans(
   buying: SyncPlan? = nil,
   colorScheme: ColorScheme = .light,
@@ -31,9 +41,21 @@ private func assertPlans(
   testName: String = #function
 ) {
   let offers = zip(SyncPlan.allCases, ["¥150", "¥700", "¥1,600"]).map(PlanOffer.init)
+  assertPlanScreen(
+    PlanList(offers: offers, buying: buying, buy: { _ in }), colorScheme: colorScheme, size: size,
+    testName: testName)
+}
+
+/// `content` as the plans screen shows it, pushed onto a navigation stack in a 402 × 874 window.
+private func assertPlanScreen(
+  _ content: some View,
+  colorScheme: ColorScheme = .light,
+  size: DynamicTypeSize = .large,
+  testName: String = #function
+) {
   let page = HostedPage(
     NavigationStack {
-      PlanList(offers: offers, buying: buying, buy: { _ in })
+      content
         .navigationTitle("同期のプラン")
         .navigationBarTitleDisplayMode(.inline)
     }

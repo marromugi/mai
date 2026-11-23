@@ -50,6 +50,26 @@ struct PlanPurchaseTests {
     #expect(kept.id == id)
   }
 
+  /// As after the app is installed again: nothing kept, but the App Store account subscribes.
+  @Test func aPurchaseWithNothingKeptCarriesTheSubscribedAccountID() async throws {
+    let bought = try await buyPlan(product(.basic), keptIn: kept, purchase: Self.purchase)
+    let suite = "PlanPurchaseTests.\(UUID().uuidString)"
+    let reinstalled = KeptAccountID(defaults: try #require(UserDefaults(suiteName: suite)))
+    let upgraded = try await buyPlan(product(.plus), keptIn: reinstalled, purchase: Self.purchase)
+    #expect(upgraded == bought)
+    #expect(reinstalled.id == kept.id)
+    #expect(try await latestTransaction(.plus).appAccountToken == kept.id)
+  }
+
+  /// A cancel thrown rather than returned.
+  @Test func aPurchaseCancelledByThrowingKeepsNothing() async throws {
+    let outcome = try await buyPlan(product(.basic), keptIn: kept) { _, _ in
+      throw StoreKitError.userCancelled
+    }
+    #expect(outcome == .cancelled)
+    #expect(kept.id == nil)
+  }
+
   @Test func aCancelledPurchaseKeepsNothing() async throws {
     try await session.setSimulatedError(.generic(.userCancelled), forAPI: .purchase)
     let outcome = try await buyPlan(product(.basic), keptIn: kept, purchase: Self.purchase)
@@ -68,6 +88,16 @@ struct PlanPurchaseTests {
     }
     #expect(kept.id == nil)
     #expect(try await transactions().isEmpty)
+  }
+
+  @Test func aFailedPurchaseLeavesTheKeptIDAsItWas() async throws {
+    let id = UUID()
+    kept.keep(id)
+    try await session.setSimulatedError(.purchase(.productUnavailable), forAPI: .purchase)
+    await #expect(throws: PlanPurchaseError.self) {
+      try await buyPlan(product(.basic), keptIn: kept, purchase: Self.purchase)
+    }
+    #expect(kept.id == id)
   }
 
   @Test func aPurchaseWhoseSignatureFailsKeepsNothing() async throws {
