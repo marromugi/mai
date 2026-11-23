@@ -47,6 +47,10 @@ struct WritingPageTests {
     assertPage(.large, .light, typesetting: true)
   }
 
+  @Test func typesettingModeAtTheLargestSize() {
+    assertPage(.accessibility5, .light, typesetting: true)
+  }
+
   @Test func typesettingModeInDarkMode() {
     assertPage(.large, .dark, typesetting: true)
   }

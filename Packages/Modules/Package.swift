@@ -18,7 +18,7 @@ let package = Package(
     .target(
       name: "Features",
       dependencies: [.product(name: "Typesetting", package: "Typesetting")],
-      resources: [.copy("Resources/Fonts")],
+      resources: [.copy("Resources/Fonts"), .process("Resources/Icons.xcassets")],
       swiftSettings: mainActor),
     .testTarget(
       name: "FeaturesTests",

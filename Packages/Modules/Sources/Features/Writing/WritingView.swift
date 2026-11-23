@@ -2,9 +2,9 @@ import SwiftUI
 internal import Typesetting
 
 /// A writing's page: its title, body, and `photos` on the type area, under a back mark, over the
-/// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap leaves it; its camera
-/// takes a photo with `camera` and hands it to `photoTaken`. Where one of `others`' titles appears
-/// in the body, it links to that writing, and a tap on it calls `open` with it.
+/// bottom row. The row's 「組版を調整」 enters the typesetting mode, and a tap or 「閉じる」 leaves
+/// it; its camera takes a photo with `camera` and hands it to `photoTaken`. Where one of `others`'
+/// titles appears in the body, it links to that writing, and a tap on it calls `open` with it.
 struct WritingView: View {
   let writing: Writing
   let others: [Writing]
@@ -25,11 +25,11 @@ struct WritingView: View {
 }
 
 /// The writing's page, with its `photos`, in or out of the typesetting mode. As the title scrolls
-/// off the top, the
-/// header fades in to stand in for it. In the mode the page shrinks to a sheet on the desk and stops
-/// scrolling, the typesetting gestures over it step `setting`, and a tap leaves the mode. The bottom
-/// row's camera sets `takingPhoto`, which covers the page with `camera`'s screen until it takes a
-/// photo or is cancelled. A tap on a mention of one of `others` in the body calls `open` with it.
+/// off the top, the header fades in to stand in for it. In the mode the page stops scrolling and lifts off the desk
+/// above the typesetting bar, the typesetting gestures over it step `setting`, and a tap or the
+/// bar's 「閉じる」 leaves the mode. The bottom row's camera sets `takingPhoto`, which covers the
+/// page with `camera`'s screen until it takes a photo or is cancelled. A tap on a mention of one of
+/// `others` in the body calls `open` with it.
 struct WritingScreen: View {
   let writing: Writing
   let others: [Writing]
@@ -58,6 +58,13 @@ struct WritingScreen: View {
         mentions = writing.body.titleMentions(of: others)
       }
       .scrollDisabled(typesetting)
+      .clipShape(pageShape)
+      .background {
+        pageShape
+          .fill(
+            Color(.systemBackground)
+              .shadow(.inner(color: .black.opacity(typesetting ? 0.2 : 0), radius: 10)))
+      }
       .overlay(alignment: .top) {
         // Faded by the scroll, not animated: an animation running as the mode starts moves the
         // page.
@@ -69,26 +76,7 @@ struct WritingScreen: View {
             .accessibilityHidden(titleCutOff < 1)
         }
       }
-      .safeAreaInset(edge: .bottom, spacing: 0) {
-        // Hidden, not removed: the inset keeps its height so the scroll offset isn't clamped.
-        let row = BottomRow(
-          width: proxy.size.width, cameraAvailable: camera.isAvailable,
-          takePhoto: { takingPhoto = true },
-          adjustTypesetting: { withAnimation { typesetting = true } })
-        if typesetting {
-          row.hidden()
-        } else {
-          row
-        }
-      }
       .accessibilityHidden(typesetting)
-      .background {
-        Rectangle()
-          .fill(Color(.systemBackground))
-          .shadow(color: .black.opacity(typesetting ? 0.15 : 0), radius: 12)
-          .ignoresSafeArea()
-      }
-      .scaleEffect(typesetting ? Self.sheetScale : 1)
       .overlay {
         if typesetting {
           Color.clear
@@ -101,6 +89,28 @@ struct WritingScreen: View {
             .accessibilityLabel("組版の調整を終える")
             // Gone at once on leaving, so a touch right after the tap scrolls the page.
             .transition(.identity)
+        }
+      }
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        // Hidden, not removed: the row sets the inset's height in and out of the mode, so the
+        // scroll offset isn't clamped. The bar lies over it.
+        let row = BottomRow(
+          width: proxy.size.width, cameraAvailable: camera.isAvailable,
+          takePhoto: { takingPhoto = true },
+          adjustTypesetting: { withAnimation { typesetting = true } })
+        Group {
+          if typesetting {
+            row.hidden()
+          } else {
+            row
+          }
+        }
+        .overlay {
+          if typesetting {
+            TypesettingBar(
+              width: proxy.size.width,
+              close: { withAnimation { typesetting = false } })
+          }
         }
       }
     }
@@ -117,8 +127,11 @@ struct WritingScreen: View {
     .toolbar(.hidden, for: .navigationBar)
   }
 
-  /// How large the page is in the typesetting mode, so the paper's edges show.
-  static let sheetScale: CGFloat = 0.85
+  /// The page's outline: in the typesetting mode its bottom lifts off the desk with rounded corners,
+  /// so the paper's edge shows; out of it, the page fills the screen.
+  private var pageShape: PageShape {
+    typesetting ? PageShape(cornerRadius: 32, lift: 12) : PageShape(cornerRadius: 0, lift: 0)
+  }
 }
 
 /// The camera at the bottom leading corner and the underlined 「組版を調整」 at the trailing one,
