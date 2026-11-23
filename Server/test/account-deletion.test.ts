@@ -87,7 +87,10 @@ type Server = {
   bucket?: R2Bucket;
   /** Replaces what the routes reach Turso through. */
   store?: (store: Store) => Store;
-  /** Where what the Worker keeps alive past the request goes, unawaited, when given. */
+  /**
+   * Where what the Worker keeps alive past the request goes, unawaited, when given: each resolves
+   * to undefined, or to the error it failed with.
+   */
   kept?: Promise<unknown>[];
 };
 
@@ -103,14 +106,20 @@ async function serveWith(sent: Request, server: Server = {}): Promise<Response> 
     await caches.open(crypto.randomUUID()),
   );
   const signIn = { ...signed, store: server.store?.(signed.store) ?? signed.store };
-  const kept = server.kept ?? [];
+  const kept: Promise<unknown>[] = [];
   const answer = await serve(sent, signIn, {
     bucket: server.bucket ?? env.PHOTOS,
-    keepAlive: (work) => kept.push(work),
+    keepAlive: (work) =>
+      server.kept === undefined
+        ? kept.push(work)
+        : server.kept.push(
+            work.then(
+              () => undefined,
+              (error: unknown) => error,
+            ),
+          ),
   });
-  if (server.kept === undefined) {
-    await Promise.all(kept);
-  }
+  await Promise.all(kept);
   return answer;
 }
 
@@ -211,9 +220,16 @@ const everyRow = {
 };
 const noRow = { accounts: 0, writings: 0, photos: 0, usage: 0, subscriptions: 0, sessions: 0 };
 
+/** Every key R2 holds under `<account>/`, over as many pages as it lists them in. */
 async function keysOf(account: string): Promise<string[]> {
-  const listed = await env.PHOTOS.list({ prefix: `${account}/` });
-  return listed.objects.map((object) => object.key);
+  const keys: string[] = [];
+  let listed: R2Objects | undefined;
+  do {
+    const after: R2ListOptions = listed?.truncated === true ? { cursor: listed.cursor } : {};
+    listed = await env.PHOTOS.list({ prefix: `${account}/`, ...after });
+    keys.push(...listed.objects.map((object) => object.key));
+  } while (listed.truncated);
+  return keys;
 }
 
 async function sessionWorks(token: string): Promise<boolean> {
@@ -303,11 +319,28 @@ describe("deleting an account", () => {
     const photo = crypto.randomUUID();
     const put = request("PUT", `/photos/${photo}`, again.token, new Uint8Array(20).fill(7));
     expect((await serveWith(put)).status).toBe(201);
+    // More held photos than R2 lists at once, and an old upload's bytes past them, on page two.
+    const held = Array.from({ length: 1000 }, () => crypto.randomUUID());
+    await database.batch(
+      held.map((upload) => ({
+        sql: `INSERT INTO photos (account_id, id, part, upload, size, state, reserved)
+              VALUES (?, ?, 'photo', ?, 1, 'stored', 0)`,
+        args: [one.account, crypto.randomUUID(), upload],
+      })),
+      "write",
+    );
+    const heldKeys = held.map((upload) => `${one.account}/held/photo/${upload}`);
+    await Promise.all(heldKeys.map((key) => env.PHOTOS.put(key, "x")));
+    const oldUpload = `${one.account}/zz-old/photo/upload`;
+    await env.PHOTOS.put(oldUpload, "x");
 
     madeAgain.resolve();
-    await Promise.all(kept);
-    expect(lists).toBe(2);
+    expect(await Promise.all(kept)).toEqual([undefined]);
+    expect(lists).toBe(3);
     expect((await serveWith(request("GET", `/photos/${photo}`, again.token))).status).toBe(200);
+    const left = new Set(await keysOf(one.account));
+    expect(left.has(oldUpload)).toBe(false);
+    expect(heldKeys.every((key) => left.has(key))).toBe(true);
   });
 
   it("deletes a lapsed account, and one past its day's requests", async () => {
@@ -406,7 +439,7 @@ describe("a deletion that fails partway", () => {
     });
     expect(answer.status).toBe(204);
     expect(await rowsOf(one.account)).toEqual(noRow);
-    await expect(Promise.all(kept)).rejects.toThrow(/R2 is unavailable/);
+    expect(await Promise.all(kept)).toEqual([new Error("R2 is unavailable")]);
     expect(await keysOf(one.account)).toEqual([late]);
   });
 
