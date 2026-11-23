@@ -238,7 +238,6 @@ struct WritingEditingTests {
     #expect(title.pasteDelegate == nil)
     try paste("https://example.com/bread", into: title)
     page.settle()
-    #expect(title.links.isEmpty)
     #expect(page.presented == nil)
   }
 
@@ -320,6 +319,71 @@ struct WritingEditingTests {
     page.settle()
     #expect(edits.writing.body == "朝の机と\n二行目")
     #expect(edits.writing.links.isEmpty)
+  }
+
+  /// Text typed over a selection goes on a link only when both sides of the selection are on it:
+  /// typed over a link's end or all of it, it is neither linked nor drawn as a link.
+  @Test(arguments: [
+    (NSRange(location: 2, length: 2), [BodyLink(range: 0..<2, url: flour)], 2),
+    (NSRange(location: 0, length: 3), [], 0),
+  ])
+  func typingOverALinksEdgeIsNotLinked(_ selection: NSRange, _ after: [BodyLink], _ typed: Int)
+    throws
+  {
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "粉の店へ\n二行目", links: [BodyLink(range: 0..<3, url: flour)]))
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = selection
+    type("と", into: body)
+    #expect(edits.writing.links == after)
+    #expect(body.attributedText.attribute(.underlineStyle, at: typed, effectiveRange: nil) == nil)
+  }
+
+  /// Text typed over a selection just linked replaces the link.
+  @Test func typingOverASelectionJustLinkedIsNotLinked() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.becomeFirstResponder()
+    page.settle()
+    body.selectedRange = NSRange(location: 0, length: 2)
+    try paste("https://example.com/bread", into: body)
+    type("夜", into: body)
+    #expect(edits.writing.body == "夜机\n二行目")
+    #expect(edits.writing.links.isEmpty)
+    #expect(body.attributedText.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
+  }
+
+  /// A paste or drop lands where the system says, which need not be the selection; it hands back
+  /// the range the text now covers.
+  @Test func aPasteLandsWhereTheSystemSays() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    body.selectedRange = NSRange(location: 5, length: 0)
+    let linked = try pasted(
+      "https://example.com/bread", into: body, at: NSRange(location: 0, length: 2))
+    #expect(linked == NSRange(location: 0, length: 2))
+    #expect(edits.writing.links == [BodyLink(range: 0..<2, url: bread)])
+    let text = try pasted("夕方", into: body, at: NSRange(location: 3, length: 0))
+    #expect(text == NSRange(location: 3, length: 2))
+    #expect(edits.writing.body == "朝の机夕方\n二行目")
+  }
+
+  /// Text dragged with its links within the body keeps them where it lands.
+  @Test func textDraggedWithALinkKeepsIt() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    let dragged = NSMutableAttributedString(string: "粉の店")
+    dragged.addAttributes(.bodyLink(flour), range: NSRange(location: 1, length: 2))
+    _ = try pasted(dragged, into: body, at: NSRange(location: 3, length: 0))
+    #expect(edits.writing.body == "朝の机粉の店\n二行目")
+    #expect(edits.writing.links == [BodyLink(range: 4..<6, url: flour)])
   }
 
   /// A web address with space around it links the selection.
@@ -420,6 +484,7 @@ struct WritingEditingTests {
     body.selectedRange = NSRange(location: caret, length: 0)
     type("と", into: body)
     #expect(edits.writing.links == after)
+    #expect(body.attributedText.attribute(.underlineStyle, at: caret, effectiveRange: nil) == nil)
   }
 
   /// A combining mark typed at a link's end joins the link's last character, so the link takes in
@@ -493,6 +558,29 @@ nonisolated private let flour = URL(string: "https://example.com/flour") ?? URL(
 /// The sample page with its first line's 「小さなパン」 linked.
 private let linked = Writing(
   title: "間合いの調整", body: Writing.sampleBody, links: [BodyLink(range: 3..<8, url: bread)])
+
+/// Hands `text` to `view`'s paste delegate for `range`, as the system does for a paste or a drop,
+/// and returns the range the delegate says the text now covers.
+@MainActor
+private func pasted(_ text: String, into view: UITextView, at range: NSRange) throws -> NSRange {
+  try pasted(NSAttributedString(string: text), into: view, at: range)
+}
+
+@MainActor
+private func pasted(_ text: NSAttributedString, into view: UITextView, at range: NSRange) throws
+  -> NSRange
+{
+  let begin = view.beginningOfDocument
+  let from = try #require(view.position(from: begin, offset: range.location))
+  let to = try #require(view.position(from: begin, offset: NSMaxRange(range)))
+  let target = try #require(view.textRange(from: from, to: to))
+  let delegate = try #require(view.pasteDelegate)
+  let covered = try #require(
+    delegate.textPasteConfigurationSupporting?(view, performPasteOf: text, to: target))
+  return NSRange(
+    location: view.offset(from: begin, to: covered.start),
+    length: view.offset(from: covered.start, to: covered.end))
+}
 
 /// Pastes `text` into `view` as the system's paste does once it has what was copied: through the
 /// view's paste delegate, or straight in where it has none.

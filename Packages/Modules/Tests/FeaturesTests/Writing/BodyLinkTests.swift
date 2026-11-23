@@ -16,6 +16,8 @@ struct BodyLinkTests {
 
   @Test(arguments: [
     "example.com", "パンの店", "see https://example.com", "https://example.com and more",
+    "https://example.com/bread and butter", "https://example.com/パン 夕方",
+    "https://example.com/bread\n二行目",
     "mailto:baker@example.com", "ftp://example.com", "https://", "",
   ])
   func otherPastedTextIsNoLink(_ pasted: String) {

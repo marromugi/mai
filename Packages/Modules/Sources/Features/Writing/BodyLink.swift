@@ -31,7 +31,8 @@ extension URL {
   /// host, with any space around it ignored.
   init?(pastedLink pasted: String) {
     let trimmed = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let url = URL(string: trimmed),
+    // `URL(string:)` takes a space in a path or query as `%20`.
+    guard !trimmed.contains(where: \.isWhitespace), let url = URL(string: trimmed),
       let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
       url.host() != nil
     else { return nil }

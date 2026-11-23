@@ -135,22 +135,43 @@ struct StyledTextView: UIViewRepresentable {
       self.oneLine = oneLine
     }
 
-    /// A pasted web address, and nothing else, goes to `paste(_:into:askingTitle:)`; other text
-    /// goes in as text.
+    /// A web address pasted or dropped, and nothing else, goes to `paste(_:into:askingTitle:)`
+    /// at `textRange`; other text goes in as text, with the links it was dragged with. Returns the
+    /// range the text now covers.
     func textPasteConfigurationSupporting(
       _ supporting: any UITextPasteConfigurationSupporting,
       performPasteOf attributedString: NSAttributedString, to textRange: UITextRange
     ) -> UITextRange {
       guard let view = supporting as? UITextView else { return textRange }
+      let start = view.offset(from: view.beginningOfDocument, to: textRange.start)
       if let askTitle, let url = URL(pastedLink: attributedString.string) {
-        let start = view.offset(from: view.beginningOfDocument, to: textRange.start)
         let length = view.offset(from: textRange.start, to: textRange.end)
         view.selectedRange = NSRange(location: start, length: length)
         paste(url, into: view, askingTitle: askTitle)
         return textRange
       }
       view.replace(textRange, withText: attributedString.string)
-      return view.selectedTextRange ?? textRange
+      var dragged: [BodyLink] = []
+      attributedString.enumerateAttribute(
+        .bodyLink, in: NSRange(location: 0, length: attributedString.length)
+      ) { value, range, _ in
+        guard let url = value as? URL else { return }
+        dragged.append(
+          BodyLink(range: start + range.location..<start + NSMaxRange(range), url: url))
+      }
+      for link in dragged {
+        view.textStorage.addAttributes(.bodyLink(link.url), range: NSRange(link.range))
+      }
+      if !dragged.isEmpty {
+        changed(view.text, view.links)
+      }
+      let begin = view.beginningOfDocument
+      guard let from = view.position(from: begin, offset: start),
+        let to = view.position(from: begin, offset: start + attributedString.length)
+      else {
+        preconditionFailure("The text just put in is not in the text view.")
+      }
+      return view.textRange(from: from, to: to) ?? textRange
     }
 
     /// Links the selection to `url`; with nothing selected, asks for a title and puts it in at the
@@ -219,17 +240,18 @@ struct StyledTextView: UIViewRepresentable {
       Self.linkTypingOnlyInsideALink(in: view)
     }
 
-    /// Text typed at the caret goes on a link only when the characters on both sides of the caret
-    /// are on that link: text typed at a link's start or end is not linked.
+    /// Text typed at the caret, or over the selection, goes on a link only when the characters on
+    /// both sides are on that link: text typed at a link's start or end is not linked.
     private static func linkTypingOnlyInsideALink(in view: UITextView) {
-      let caret = view.selectedRange
+      let selection = view.selectedRange
       let storage = view.textStorage
-      guard caret.length == 0 else { return }
       func link(at location: Int) -> URL? {
         guard location >= 0, location < storage.length else { return nil }
         return storage.attribute(.bodyLink, at: location, effectiveRange: nil) as? URL
       }
-      if let before = link(at: caret.location - 1), before == link(at: caret.location) {
+      if let before = link(at: selection.location - 1),
+        before == link(at: selection.location + selection.length)
+      {
         // The text view doesn't carry an attribute of the app's own over to typed text.
         view.typingAttributes.merge(.bodyLink(before)) { $1 }
         return
