@@ -1,0 +1,81 @@
+import Foundation
+import Security
+
+/// The own key in iCloud Keychain, which carries it to the user's other devices.
+public struct OwnKeyKeychain: Sendable {
+  let service: String
+
+  public static let standard = OwnKeyKeychain(service: "com.marromugi.mai.own-key")
+
+  init(service: String) {
+    self.service = service
+  }
+
+  /// The key kept, or nil when none is: not made yet, or not yet carried here by iCloud Keychain.
+  public func load() throws(KeychainError) -> OwnKey? {
+    var query = base
+    query[kSecReturnData] = true
+    query[kSecMatchLimit] = kSecMatchLimitOne
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    switch status {
+    case errSecSuccess:
+      guard let data = item as? Data else {
+        preconditionFailure("A keychain item asked for its data returns Data")
+      }
+      do {
+        return try OwnKey(rawRepresentation: data)
+      } catch {
+        throw .unreadable(error)
+      }
+    case errSecItemNotFound:
+      return nil
+    default:
+      throw .failed(status)
+    }
+  }
+
+  /// Keeps `key`, and never replaces a key already kept: every writing sealed with that one
+  /// would become unreadable.
+  public func save(_ key: OwnKey) throws(KeychainError) {
+    var item = base
+    item[kSecValueData] = key.rawRepresentation
+    item[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlock
+    let status = SecItemAdd(item as CFDictionary, nil)
+    switch status {
+    case errSecSuccess:
+      return
+    case errSecDuplicateItem:
+      throw .alreadyKept
+    default:
+      throw .failed(status)
+    }
+  }
+
+  var base: [CFString: Any] {
+    [
+      kSecClass: kSecClassGenericPassword,
+      kSecAttrService: service,
+      kSecAttrAccount: "own-key",
+      kSecAttrSynchronizable: true,
+      kSecUseDataProtectionKeychain: true,
+    ]
+  }
+}
+
+public enum KeychainError: LocalizedError {
+  case alreadyKept
+  case unreadable(OwnKeyLengthError)
+  case failed(OSStatus)
+
+  public var errorDescription: String? {
+    switch self {
+    case .alreadyKept:
+      "キーチェーンにはもう自分の鍵があります。"
+    case .unreadable:
+      "キーチェーンの自分の鍵が読めませんでした。"
+    case .failed(let status):
+      "キーチェーンを使えませんでした（\(status)）。"
+    }
+  }
+}
