@@ -66,21 +66,13 @@ struct StyledTextView: UIViewRepresentable {
     view.textContainerInset = .zero
     view.textContainer.lineFragmentPadding = 0
     view.delegate = context.coordinator
-    view.linkTextAttributes = [
-      .foregroundColor: UIColor.label, .underlineStyle: NSUnderlineStyle.single.rawValue,
-    ]
     return view
   }
 
   func updateUIView(_ view: PlaceholderTextView, context: Context) {
     context.coordinator.changed = changed
-    view.pasteLink =
-      askTitle.map { askTitle in
-        { [weak view, coordinator = context.coordinator] url in
-          guard let view else { return }
-          coordinator.paste(url, into: view, askingTitle: askTitle)
-        }
-      }
+    context.coordinator.askTitle = askTitle
+    view.pasteDelegate = askTitle == nil ? nil : context.coordinator
     // Never while composing: replacing the text ends the input method's composition.
     guard view.markedTextRange == nil,
       context.coordinator.scale != scale || view.text != text || view.links != links
@@ -90,7 +82,7 @@ struct StyledTextView: UIViewRepresentable {
     let selection = view.selectedRange
     let styled = NSMutableAttributedString(string: text, attributes: attributes)
     for link in links {
-      styled.addAttribute(.link, value: link.url, range: NSRange(link.range))
+      styled.addAttributes(.bodyLink(link.url), range: NSRange(link.range))
     }
     view.attributedText = styled
     view.typingAttributes = attributes
@@ -128,28 +120,50 @@ struct StyledTextView: UIViewRepresentable {
     Coordinator(changed: changed, oneLine: oneLine)
   }
 
-  final class Coordinator: NSObject, UITextViewDelegate {
+  /// The text view's delegate, and, where links are pasted, its paste delegate: the system hands a
+  /// paste to it, not the pasteboard to the app.
+  final class Coordinator: NSObject, UITextViewDelegate, UITextPasteDelegate {
     var changed: (String, [BodyLink]) -> Void
     let oneLine: Bool
     /// The scale the text was last set at, so a change of setting restyles it.
     var scale: TypeScale?
+    /// Asks for the title of a web address pasted with nothing selected.
+    var askTitle: ((TitleRequest) -> Void)?
 
     init(changed: @escaping (String, [BodyLink]) -> Void, oneLine: Bool) {
       self.changed = changed
       self.oneLine = oneLine
     }
 
+    /// A pasted web address, and nothing else, goes to `paste(_:into:askingTitle:)`; other text
+    /// goes in as text.
+    func textPasteConfigurationSupporting(
+      _ supporting: any UITextPasteConfigurationSupporting,
+      performPasteOf attributedString: NSAttributedString, to textRange: UITextRange
+    ) -> UITextRange {
+      guard let view = supporting as? UITextView else { return textRange }
+      if let askTitle, let url = URL(pastedLink: attributedString.string) {
+        let start = view.offset(from: view.beginningOfDocument, to: textRange.start)
+        let length = view.offset(from: textRange.start, to: textRange.end)
+        view.selectedRange = NSRange(location: start, length: length)
+        paste(url, into: view, askingTitle: askTitle)
+        return textRange
+      }
+      view.replace(textRange, withText: attributedString.string)
+      return view.selectedTextRange ?? textRange
+    }
+
     /// Links the selection to `url`; with nothing selected, asks for a title and puts it in at the
     /// caret, linked, or the address itself when the title is left empty. Nothing goes in when the
     /// sheet is cancelled.
     func paste(
-      _ url: URL, into view: PlaceholderTextView, askingTitle askTitle: (TitleRequest) -> Void
+      _ url: URL, into view: UITextView, askingTitle askTitle: (TitleRequest) -> Void
     ) {
       let selection = view.selectedRange
       guard selection.length == 0 else {
         let linked = NSMutableAttributedString(
           attributedString: view.textStorage.attributedSubstring(from: selection))
-        linked.addAttribute(.link, value: url, range: NSRange(location: 0, length: linked.length))
+        linked.addAttributes(.bodyLink(url), range: NSRange(location: 0, length: linked.length))
         restyle(selection, in: view, as: linked)
         return
       }
@@ -164,10 +178,9 @@ struct StyledTextView: UIViewRepresentable {
           let start = view.selectedRange.location
           // Through the text input system, so undo takes the title back out.
           view.insertText(inserted)
-          view.textStorage.addAttribute(
-            .link, value: url,
-            range: NSRange(location: start, length: (inserted as NSString).length))
-          Self.unlinkTypingAtALinksEdge(in: view)
+          view.textStorage.addAttributes(
+            .bodyLink(url), range: NSRange(location: start, length: (inserted as NSString).length))
+          Self.linkTypingOnlyInsideALink(in: view)
           changed(view.text, view.links)
         })
     }
@@ -179,7 +192,7 @@ struct StyledTextView: UIViewRepresentable {
       view.undoManager?.registerUndo(withTarget: view) { [weak self] view in
         self?.restyle(range, in: view, as: before)
       }
-      Self.unlinkTypingAtALinksEdge(in: view)
+      Self.linkTypingOnlyInsideALink(in: view)
       changed(view.text, view.links)
     }
 
@@ -203,23 +216,41 @@ struct StyledTextView: UIViewRepresentable {
     }
 
     func textViewDidChangeSelection(_ view: UITextView) {
-      Self.unlinkTypingAtALinksEdge(in: view)
+      Self.linkTypingOnlyInsideALink(in: view)
     }
 
     /// Text typed at the caret goes on a link only when the characters on both sides of the caret
     /// are on that link: text typed at a link's start or end is not linked.
-    private static func unlinkTypingAtALinksEdge(in view: UITextView) {
+    private static func linkTypingOnlyInsideALink(in view: UITextView) {
       let caret = view.selectedRange
       let storage = view.textStorage
       guard caret.length == 0 else { return }
       func link(at location: Int) -> URL? {
         guard location >= 0, location < storage.length else { return nil }
-        return storage.attribute(.link, at: location, effectiveRange: nil) as? URL
+        return storage.attribute(.bodyLink, at: location, effectiveRange: nil) as? URL
       }
-      let before = link(at: caret.location - 1)
-      guard before == nil || before != link(at: caret.location) else { return }
-      view.typingAttributes[.link] = nil
+      if let before = link(at: caret.location - 1), before == link(at: caret.location) {
+        // The text view doesn't carry an attribute of the app's own over to typed text.
+        view.typingAttributes.merge(.bodyLink(before)) { $1 }
+        return
+      }
+      view.typingAttributes[.bodyLink] = nil
+      view.typingAttributes[.underlineStyle] = nil
     }
+  }
+}
+
+extension NSAttributedString.Key {
+  /// Where the editor keeps a body link's address: not `.link`, which a text view opens on a tap
+  /// even while it is being edited.
+  static let bodyLink = NSAttributedString.Key("MaiBodyLink")
+}
+
+extension [NSAttributedString.Key: Any] {
+  /// The attributes of text linked to `url` in the editor: the address, and a solid line in the
+  /// text's colour, as `Text(body:links:)` draws it.
+  static func bodyLink(_ url: URL) -> Self {
+    [.bodyLink: url, .underlineStyle: NSUnderlineStyle.single.rawValue]
   }
 }
 
@@ -228,7 +259,7 @@ extension UITextView {
   var links: [BodyLink] {
     var links: [BodyLink] = []
     textStorage.enumerateAttribute(
-      .link, in: NSRange(location: 0, length: textStorage.length)
+      .bodyLink, in: NSRange(location: 0, length: textStorage.length)
     ) { value, range, _ in
       guard let url = value as? URL else { return }
       links.append(BodyLink(range: range.location..<range.location + range.length, url: url))
@@ -238,57 +269,8 @@ extension UITextView {
 }
 
 /// A text view that shows `placeholder` over its first line while it holds no text, composed text
-/// included. Where `pasteLink` is set, a paste of a web address goes to it instead of in as text.
+/// included.
 final class PlaceholderTextView: UITextView {
-  var pasteLink: ((URL) -> Void)?
-  /// Where a web address is looked for; anything else is pasted from the general pasteboard.
-  var pasteboard = UIPasteboard.general
-
-  override func paste(_ sender: Any?) {
-    // Read only here, where the person asked to paste, so the system doesn't ask them first.
-    guard let pasteLink,
-      let url = (pasteboard.url?.absoluteString ?? pasteboard.string).flatMap(
-        URL.init(pastedLink:))
-    else {
-      super.paste(sender)
-      return
-    }
-    pasteLink(url)
-  }
-
-  /// The edit menu's Paste, which hands over what was copied without the pasteboard.
-  override func paste(itemProviders: [NSItemProvider]) {
-    guard let pasteLink, itemProviders.count == 1, let provider = itemProviders.first else {
-      super.paste(itemProviders: itemProviders)
-      return
-    }
-    Task {
-      if let url = await Self.text(of: provider).flatMap(URL.init(pastedLink:)) {
-        pasteLink(url)
-      } else {
-        pasteAsText(itemProviders)
-      }
-    }
-  }
-
-  private func pasteAsText(_ itemProviders: [NSItemProvider]) {
-    super.paste(itemProviders: itemProviders)
-  }
-
-  /// What `provider` holds as a URL, or else as text.
-  private static func text(of provider: NSItemProvider) async -> String? {
-    if provider.canLoadObject(ofClass: URL.self) {
-      let url = await withCheckedContinuation { done in
-        _ = provider.loadObject(ofClass: URL.self) { url, _ in done.resume(returning: url) }
-      }
-      if let url { return url.absoluteString }
-    }
-    guard provider.canLoadObject(ofClass: String.self) else { return nil }
-    return await withCheckedContinuation { done in
-      _ = provider.loadObject(ofClass: String.self) { text, _ in done.resume(returning: text) }
-    }
-  }
-
   private(set) lazy var placeholder: UILabel = {
     let label = UILabel()
     addSubview(label)

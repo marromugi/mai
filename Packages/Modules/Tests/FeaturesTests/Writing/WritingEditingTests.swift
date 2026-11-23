@@ -212,14 +212,18 @@ struct WritingEditingTests {
 
   /// Text that is not a web address, over a selection or not, is pasted as text: nothing is
   /// linked, and no sheet opens.
-  @Test(arguments: [NSRange(location: 0, length: 2), NSRange(location: 3, length: 0)])
-  func otherTextIsNotLinked(_ selection: NSRange) throws {
+  @Test(arguments: [
+    (NSRange(location: 0, length: 2), "example.com机\n二行目"),
+    (NSRange(location: 3, length: 0), "朝の机example.com\n二行目"),
+  ])
+  func otherTextIsNotLinked(_ selection: NSRange, _ pasted: String) throws {
     let edits = Edits()
     let page = HostedPage(screen(editing: true, edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.selectedRange = selection
     try paste("example.com", into: body)
     page.settle()
+    #expect(edits.writing.body == pasted)
     #expect(edits.writing.links.isEmpty)
     #expect(page.presented == nil)
   }
@@ -231,9 +235,10 @@ struct WritingEditingTests {
     let page = HostedPage(screen(editing: true, edits: edits))
     let title = try focusedTitle(in: page, holding: "朝")
     title.selectedRange = selection
+    #expect(title.pasteDelegate == nil)
     try paste("https://example.com/bread", into: title)
     page.settle()
-    #expect(title.attributedText.attribute(.link, at: 0, effectiveRange: nil) == nil)
+    #expect(title.links.isEmpty)
     #expect(page.presented == nil)
   }
 
@@ -317,20 +322,29 @@ struct WritingEditingTests {
     #expect(edits.writing.links.isEmpty)
   }
 
-  /// A web address with space around it, or held as a URL rather than text, links the selection.
-  @Test func aWebAddressWithSpaceOrHeldAsAURLLinksTheSelection() throws {
+  /// A web address with space around it links the selection.
+  @Test func aWebAddressWithSpaceAroundItLinksTheSelection() throws {
     let edits = Edits()
     let page = HostedPage(screen(editing: true, edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.selectedRange = NSRange(location: 0, length: 2)
     try paste("  https://example.com/bread\n", into: body)
+    #expect(edits.writing.body == "朝の机\n二行目")
     #expect(edits.writing.links == [BodyLink(range: 0..<2, url: bread)])
-    body.selectedRange = NSRange(location: 4, length: 3)
-    try paste(into: body) { $0.url = flour }
-    #expect(
-      edits.writing.links == [
-        BodyLink(range: 0..<2, url: bread), BodyLink(range: 4..<7, url: flour),
-      ])
+  }
+
+  /// While editing, a link is drawn under a line but is no link the text view would open on a tap,
+  /// so a tap on it puts the caret there.
+  @Test func aLinkWhileEditingIsNotOpenedOnATap() throws {
+    let edits = Edits(writing: linked)
+    let page = HostedPage(screen(editing: true, edits: edits))
+    let body = try #require(page.textViews.first { $0.text.hasPrefix("週末") })
+    #expect(body.links == [BodyLink(range: 3..<8, url: bread)])
+    var opened = 0
+    body.attributedText.enumerateAttribute(
+      .link, in: NSRange(location: 0, length: body.attributedText.length)
+    ) { value, _, _ in if value != nil { opened += 1 } }
+    #expect(opened == 0)
   }
 
   /// Links changed from elsewhere while editing are drawn in the editor.
@@ -471,50 +485,6 @@ struct WritingEditingTests {
   }
 }
 
-/// Pastes from the edit menu, one at a time: item providers loaded side by side in a test process
-/// stall until the tests waiting on them give up.
-@MainActor
-@Suite(.serialized)
-struct EditMenuPasteTests {
-  /// The edit menu's Paste, which hands over what was copied rather than the pasteboard, links
-  /// the selection to a copied URL or a copied web address.
-  @Test(arguments: [true, false])
-  func pastingFromTheEditMenuLinksTheSelection(_ copiedAsURL: Bool) async throws {
-    let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
-    let body = try #require(bodyEditor(in: page))
-    body.selectedRange = NSRange(location: 0, length: 2)
-    body.paste(itemProviders: [
-      copiedAsURL
-        ? NSItemProvider(object: bread as NSURL)
-        : NSItemProvider(object: bread.absoluteString as NSString)
-    ])
-    try await page.settle(within: 15) { !edits.writing.links.isEmpty }
-    #expect(edits.writing.body == "朝の机\n二行目")
-    #expect(edits.writing.links == [BodyLink(range: 0..<2, url: bread)])
-  }
-
-  /// From the edit menu with nothing selected, a web address opens the sheet; other text goes in
-  /// as text.
-  @Test func pastingFromTheEditMenuWithNothingSelected() async throws {
-    let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
-    let body = try #require(bodyEditor(in: page))
-    body.becomeFirstResponder()
-    page.settle()
-    body.selectedRange = NSRange(location: 3, length: 0)
-    body.paste(itemProviders: [NSItemProvider(object: "夕方" as NSString)])
-    try await page.settle(within: 15) { edits.writing.body.contains("夕方") }
-    #expect(edits.writing.body == "朝の机夕方\n二行目")
-    #expect(page.presented == nil)
-    body.paste(itemProviders: [NSItemProvider(object: bread as NSURL)])
-    try await page.settle(within: 15) { page.presented != nil }
-    #expect(page.presented != nil)
-    #expect(edits.writing.links.isEmpty)
-  }
-
-}
-
 private let sampled = Writing(title: "間合いの調整", body: Writing.sampleBody)
 
 nonisolated private let bread = URL(string: "https://example.com/bread") ?? URL(filePath: "/")
@@ -524,23 +494,17 @@ nonisolated private let flour = URL(string: "https://example.com/flour") ?? URL(
 private let linked = Writing(
   title: "間合いの調整", body: Writing.sampleBody, links: [BodyLink(range: 3..<8, url: bread)])
 
-/// Pastes `text` into `view` as the edit menu's Paste does, from a pasteboard of the test's own: a
-/// test can't read the general one. What isn't a web address is left to the general one, so it
-/// pastes nothing here.
+/// Pastes `text` into `view` as the system's paste does once it has what was copied: through the
+/// view's paste delegate, or straight in where it has none.
 @MainActor
 private func paste(_ text: String, into view: UITextView) throws {
-  try paste(into: view) { $0.string = text }
-}
-
-/// Pastes what `fill` puts on a pasteboard of the test's own into `view`.
-@MainActor
-private func paste(into view: UITextView, _ fill: (UIPasteboard) -> Void) throws {
-  let editor = try #require(view as? PlaceholderTextView)
-  let pasteboard = try #require(UIPasteboard(name: .init(UUID().uuidString), create: true))
-  defer { UIPasteboard.remove(withName: pasteboard.name) }
-  fill(pasteboard)
-  editor.pasteboard = pasteboard
-  editor.paste(nil)
+  let range = try #require(view.selectedTextRange)
+  guard let delegate = view.pasteDelegate else {
+    view.replace(range, withText: text)
+    return
+  }
+  _ = delegate.textPasteConfigurationSupporting?(
+    view, performPasteOf: NSAttributedString(string: text), to: range)
 }
 
 /// A body editor holding 「朝の机\n二行目」 that was pasted a web address with the caret after
@@ -559,7 +523,7 @@ private final class AskedForATitle {
     view.delegate = coordinator
     let text = NSMutableAttributedString(string: "朝の机\n二行目")
     for link in links {
-      text.addAttribute(.link, value: link.url, range: NSRange(link.range))
+      text.addAttributes(.bodyLink(link.url), range: NSRange(link.range))
     }
     view.attributedText = text
     view.selectedRange = NSRange(location: 3, length: 0)
