@@ -4,5 +4,16 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "triggers": { "crons": ["* * * * *"] },
-  "secrets": { "required": ["TURSO_URL", "TURSO_TOKEN"] },
+  "secrets": {
+    "required": [
+      "TURSO_URL",
+      "TURSO_TOKEN",
+      "CHALLENGE_KEY",
+      "REFRESH_TOKEN_KEY",
+      "APPLE_CLIENT_ID",
+      "APPLE_TEAM_ID",
+      "APPLE_SIGN_IN_KEY_ID",
+      "APPLE_SIGN_IN_KEY",
+    ],
+  },
 }
