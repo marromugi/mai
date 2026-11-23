@@ -15,6 +15,11 @@ struct SettingsTests {
     assertSettings(remembering: "20 36 50")
   }
 
+  /// 「ダーク」 checked in 「カラーテーマ」.
+  @Test func settingsShowTheRememberedTheme() {
+    assertSettings(remembering: nil, theme: "dark")
+  }
+
   @Test func settingsInDarkMode() {
     assertSettings(remembering: nil, colorScheme: .dark)
   }
@@ -25,9 +30,10 @@ struct SettingsTests {
 }
 
 /// The settings sheet's content in a 402 × 874 window, reading from a store holding only
-/// `remembered` under the default setting's key.
+/// `remembered` under the default setting's key and `theme` under the theme's.
 private func assertSettings(
   remembering remembered: String?,
+  theme: String? = nil,
   colorScheme: ColorScheme = .light,
   size: DynamicTypeSize = .large,
   testName: String = #function
@@ -39,6 +45,9 @@ private func assertSettings(
   store.removePersistentDomain(forName: suite)
   if let remembered {
     store.set(remembered, forKey: StoredBodySetting.key)
+  }
+  if let theme {
+    store.set(theme, forKey: ColorTheme.key)
   }
   let page = HostedPage(
     SettingsView()
