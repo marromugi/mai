@@ -7,8 +7,8 @@ internal import Typesetting
 /// in the body, it links to that writing, and a tap on it calls `open` with it.
 struct WritingView: View {
   let writing: Writing
-  var others: [WritingRow] = []
-  var open: (WritingRow) -> Void = { _ in }
+  let others: [WritingRow]
+  let open: (WritingRow) -> Void
   let photos: [UIImage]
   @Binding var setting: BodySetting
   let camera: Camera
@@ -32,8 +32,8 @@ struct WritingView: View {
 /// photo or is cancelled. A tap on a mention of one of `others` in the body calls `open` with it.
 struct WritingScreen: View {
   let writing: Writing
-  var others: [WritingRow] = []
-  var open: (WritingRow) -> Void = { _ in }
+  let others: [WritingRow]
+  let open: (WritingRow) -> Void
   let photos: [UIImage]
   @Binding var setting: BodySetting
   @Binding var typesetting: Bool
@@ -51,14 +51,7 @@ struct WritingScreen: View {
           writing: writing, mentions: mentions, photos: photos, width: proxy.size.width,
           back: { dismiss() }, titleCutOff: { titleCutOff = $0 })
       }
-      .environment(
-        \.openURL,
-        OpenURLAction { url in
-          guard let writing = mentions.writing(linkedBy: url) else { return .systemAction }
-          open(writing)
-          return .handled
-        }
-      )
+      .environment(\.openURL, .opening(mentions, with: open))
       .scrollDisabled(typesetting)
       .overlay(alignment: .top) {
         // Faded by the scroll, not animated: an animation running as the mode starts moves the
@@ -273,6 +266,20 @@ struct WritingHeader: View {
   }
 }
 
+extension OpenURLAction {
+  /// Calls `open` with the writing a link among `mentions` names, and hands any other link to the
+  /// system.
+  static func opening(_ mentions: [TitleMention], with open: @escaping (WritingRow) -> Void)
+    -> OpenURLAction
+  {
+    OpenURLAction { url in
+      guard let writing = mentions.writing(linkedBy: url) else { return .systemAction }
+      open(writing)
+      return .handled
+    }
+  }
+}
+
 /// A short stroke across, met at its trailing end by one that leans down to the trailing side.
 private struct BackMark: Shape {
   nonisolated func path(in rect: CGRect) -> Path {
@@ -291,7 +298,8 @@ private struct BackMark: Shape {
   @Previewable @State var setting = BodySetting.standard
   NavigationStack {
     WritingView(
-      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: [],
+      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [],
+      open: { _ in }, photos: [],
       setting: $setting, camera: .device, photoTaken: { _ in })
   }
 }

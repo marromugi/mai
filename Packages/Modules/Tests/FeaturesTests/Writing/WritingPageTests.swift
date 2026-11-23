@@ -151,7 +151,7 @@ private func assertPage(
 ) {
   assertSnapshot(
     of: WritingScreen(
-      writing: writing, others: others,
+      writing: writing, others: others, open: { _ in },
       photos: [], setting: .constant(body),
       typesetting: .constant(typesetting), takingPhoto: .constant(false), camera: camera,
       photoTaken: { _ in }

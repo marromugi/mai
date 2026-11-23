@@ -78,7 +78,7 @@ private func screen(
   _ takingPhoto: Flag, camera: Camera, photoTaken: @escaping (UIImage) -> Void
 ) -> WritingScreen {
   WritingScreen(
-    writing: Writing(title: "間合いの調整", body: Writing.sampleBody),
+    writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [], open: { _ in },
     photos: [],
     setting: .constant(.standard),
     typesetting: .constant(false),

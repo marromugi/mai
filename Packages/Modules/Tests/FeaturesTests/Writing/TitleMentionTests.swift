@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import Features
@@ -49,6 +50,14 @@ struct TitleMentionTests {
     let found = "朝と夜の机に向かう".titleMentions(of: [morning, nightDesk])
     #expect(found.writing(linkedBy: nightDesk.link) == nightDesk)
     #expect(found.writing(linkedBy: morning.link) == morning)
+  }
+
+  @Test func aTapOnAMentionOpensItsWriting() {
+    var opened: [WritingRow] = []
+    let action = OpenURLAction.opening(
+      "朝と夜の机に向かう".titleMentions(of: [morning, nightDesk]), with: { opened.append($0) })
+    action(nightDesk.link)
+    #expect(opened == [nightDesk])
   }
 
   @Test func findsNoWritingForALinkNoMentionCarries() throws {
