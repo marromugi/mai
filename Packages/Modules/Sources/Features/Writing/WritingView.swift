@@ -41,10 +41,12 @@ struct WritingScreen: View {
   let camera: Camera
   let photoTaken: (UIImage) -> Void
   @State private var titleCutOff: CGFloat = 0
+  /// Found once per body and set of others, not at every update: the scroll updates the screen
+  /// each frame.
+  @State private var mentions: [TitleMention] = []
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
-    let mentions = writing.body.titleMentions(of: others)
     GeometryReader { proxy in
       ScrollView {
         WritingPage(
@@ -52,6 +54,9 @@ struct WritingScreen: View {
           back: { dismiss() }, titleCutOff: { titleCutOff = $0 })
       }
       .environment(\.openURL, .opening(mentions, with: open))
+      .task(id: MentionSource(body: writing.body, others: others)) {
+        mentions = writing.body.titleMentions(of: others)
+      }
       .scrollDisabled(typesetting)
       .overlay(alignment: .top) {
         // Faded by the scroll, not animated: an animation running as the mode starts moves the
@@ -264,6 +269,12 @@ struct WritingHeader: View {
       .lineLimit(1)
       .accessibilityAddTraits(.isHeader)
   }
+}
+
+/// What a body's mentions are found from.
+private struct MentionSource: Equatable {
+  let body: String
+  let others: [Writing]
 }
 
 extension OpenURLAction {
