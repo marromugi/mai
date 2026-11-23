@@ -8,7 +8,7 @@ const headerLength = 28;
 const sealedKeyLength = 12 + 32 + 16;
 const sealedContentsOverhead = 12 + 16;
 export const smallestEnvelope = headerLength + sealedKeyLength + sealedContentsOverhead;
-/** Well inside a Durable Object's 8 MB row; see the PR #37 Decisions for why not more. */
+/** See the Decisions of PR #37 for why not more; Turso takes it in one batch (PR #46). */
 export const largestEnvelope = 1_900_000;
 
 /** A writing ID in the lowercase text form, which is how the server names writings. */
@@ -74,7 +74,7 @@ function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function parseRevision(text: string): Revision | undefined {
+export function parseRevision(text: string): Revision | undefined {
   return isRevision(text) ? text : undefined;
 }
 
