@@ -2,12 +2,12 @@ import Foundation
 
 /// One writing in the list.
 public struct WritingRow: Identifiable, Hashable, Sendable {
-  public let id: Int
+  public let id: UUID
   public let title: String
   public let characterCount: Int
   public let updated: Date
 
-  public init(id: Int, title: String, characterCount: Int, updated: Date) {
+  public init(id: UUID, title: String, characterCount: Int, updated: Date) {
     self.id = id
     self.title = title
     self.characterCount = characterCount
@@ -36,6 +36,15 @@ public struct WritingRow: Identifiable, Hashable, Sendable {
   }
 }
 
+extension WritingRow {
+  /// The row for `writing`, counting every character of its body.
+  init(_ writing: Writing) {
+    self.init(
+      id: writing.id, title: writing.title, characterCount: writing.body.count,
+      updated: writing.updated)
+  }
+}
+
 extension [WritingRow] {
   /// The most recently updated first; rows updated at the same moment in `id` order.
   func newestFirst() -> [WritingRow] {
@@ -44,7 +53,7 @@ extension [WritingRow] {
 }
 
 extension WritingRow {
-  /// Stand-in writings until there is a store of them, updated at times counted back from `now`.
+  /// Stand-in rows, updated at times counted back from `now`.
   public static func samples(now: Date, calendar: Calendar) -> [WritingRow] {
     func ago(_ value: Int, _ unit: Calendar.Component) -> Date {
       guard let date = calendar.date(byAdding: unit, value: -value, to: now) else {
@@ -53,22 +62,39 @@ extension WritingRow {
       return date
     }
     return [
-      WritingRow(id: 1, title: "パンを焼く日", characterCount: 1920, updated: ago(24, .hour)),
-      WritingRow(id: 2, title: "Hello, World!", characterCount: 1920, updated: ago(25, .hour)),
       WritingRow(
-        id: 3, title: "ものすごく長すぎて入りきらない名前ですよものすごく長すぎて入りきらない名前ですよ",
+        id: UUID(sample: 1), title: "パンを焼く日", characterCount: 1920, updated: ago(24, .hour)),
+      WritingRow(
+        id: UUID(sample: 2), title: "Hello, World!", characterCount: 1920, updated: ago(25, .hour)),
+      WritingRow(
+        id: UUID(sample: 3), title: "ものすごく長すぎて入りきらない名前ですよものすごく長すぎて入りきらない名前ですよ",
         characterCount: 1920, updated: ago(26, .hour)),
-      WritingRow(id: 4, title: "夜の机に向かう", characterCount: 12480, updated: ago(21, .day)),
-      WritingRow(id: 5, title: "書きかけ", characterCount: 8, updated: now),
-      WritingRow(id: 6, title: "去年の手紙", characterCount: 640, updated: ago(11, .month)),
-      WritingRow(id: 7, title: "朝", characterCount: 312, updated: ago(5, .minute)),
       WritingRow(
-        id: 8, title: "週末に読み返すための、とりとめのない覚え書きをまとめたもの", characterCount: 99999,
+        id: UUID(sample: 4), title: "夜の机に向かう", characterCount: 12480, updated: ago(21, .day)),
+      WritingRow(
+        id: UUID(sample: 5), title: "書きかけ", characterCount: 8, updated: now),
+      WritingRow(
+        id: UUID(sample: 6), title: "去年の手紙", characterCount: 640, updated: ago(11, .month)),
+      WritingRow(
+        id: UUID(sample: 7), title: "朝", characterCount: 312, updated: ago(5, .minute)),
+      WritingRow(
+        id: UUID(sample: 8), title: "週末に読み返すための、とりとめのない覚え書きをまとめたもの", characterCount: 99999,
         updated: ago(12, .hour)),
-      WritingRow(id: 10, title: "読書メモ", characterCount: 2048, updated: ago(2, .hour)),
       WritingRow(
-        id: 9, title: "A long English title that keeps going past the edge", characterCount: 12480,
+        id: UUID(sample: 10), title: "読書メモ", characterCount: 2048, updated: ago(2, .hour)),
+      WritingRow(
+        id: UUID(sample: 9), title: "A long English title that keeps going past the edge",
+        characterCount: 12480,
         updated: ago(345, .day)),
     ]
+  }
+}
+
+extension UUID {
+  /// A fixed ID for sample `number`, so samples keep their IDs across launches and devices.
+  init(sample number: Int) {
+    guard let uuid = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", number))
+    else { preconditionFailure("\(number) doesn't fit in a sample ID.") }
+    self = uuid
   }
 }

@@ -55,7 +55,8 @@ struct WritingListTests {
     (DateComponents(year: -12), "12年前"),
   ])
   func updatedIsWordedInTheLargestWholeUnit(_ offset: DateComponents, _ expected: String) {
-    let row = WritingRow(id: 0, title: "", characterCount: 0, updated: movedFromNow(offset))
+    let row = WritingRow(
+      id: UUID(sample: 0), title: "", characterCount: 0, updated: movedFromNow(offset))
     #expect(row.updatedLabel(now: now, calendar: calendar) == expected)
   }
 
@@ -67,36 +68,44 @@ struct WritingListTests {
     let noon = try #require(
       newYork.date(from: DateComponents(year: 2025, month: 11, day: 2, hour: 12)))
     let row = WritingRow(
-      id: 0, title: "", characterCount: 0, updated: noon.addingTimeInterval(-hours * 3600))
+      id: UUID(sample: 0), title: "", characterCount: 0,
+      updated: noon.addingTimeInterval(-hours * 3600))
     #expect(row.updatedLabel(now: noon, calendar: newYork) == "1日前")
   }
 
   @Test func rowsAreNewestFirstAndTiesInIDOrder() {
     let rows = [
       WritingRow(
-        id: 1, title: "", characterCount: 0, updated: movedFromNow(DateComponents(day: -2))),
-      WritingRow(id: 3, title: "", characterCount: 0, updated: now),
+        id: UUID(sample: 1), title: "", characterCount: 0,
+        updated: movedFromNow(DateComponents(day: -2))),
+      WritingRow(id: UUID(sample: 3), title: "", characterCount: 0, updated: now),
       WritingRow(
-        id: 4, title: "", characterCount: 0, updated: movedFromNow(DateComponents(day: -1))),
-      WritingRow(id: 2, title: "", characterCount: 0, updated: now),
+        id: UUID(sample: 4), title: "", characterCount: 0,
+        updated: movedFromNow(DateComponents(day: -1))),
+      WritingRow(id: UUID(sample: 2), title: "", characterCount: 0, updated: now),
     ]
-    #expect(rows.sorted(.newestFirst).map(\.id) == [2, 3, 4, 1])
+    #expect(rows.sorted(.newestFirst).map(\.id) == [2, 3, 4, 1].map(UUID.init(sample:)))
   }
 
   @Test func rowsAreMostCharactersFirstAndTiesNewestFirstThenInIDOrder() {
     let rows = [
-      WritingRow(id: 1, title: "", characterCount: 10, updated: now),
+      WritingRow(id: UUID(sample: 1), title: "", characterCount: 10, updated: now),
       WritingRow(
-        id: 5, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+        id: UUID(sample: 5), title: "", characterCount: 300,
+        updated: movedFromNow(DateComponents(day: -2))),
       WritingRow(
-        id: 6, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -1))),
-      WritingRow(id: 3, title: "", characterCount: 0, updated: now),
+        id: UUID(sample: 6), title: "", characterCount: 300,
+        updated: movedFromNow(DateComponents(day: -1))),
+      WritingRow(id: UUID(sample: 3), title: "", characterCount: 0, updated: now),
       WritingRow(
-        id: 2, title: "", characterCount: 300, updated: movedFromNow(DateComponents(day: -2))),
+        id: UUID(sample: 2), title: "", characterCount: 300,
+        updated: movedFromNow(DateComponents(day: -2))),
       WritingRow(
-        id: 4, title: "", characterCount: 99999, updated: movedFromNow(DateComponents(year: -1))),
+        id: UUID(sample: 4), title: "", characterCount: 99999,
+        updated: movedFromNow(DateComponents(year: -1))),
     ]
-    #expect(rows.sorted(.mostCharactersFirst).map(\.id) == [4, 6, 2, 5, 1, 3])
+    #expect(
+      rows.sorted(.mostCharactersFirst).map(\.id) == [4, 6, 2, 5, 1, 3].map(UUID.init(sample:)))
   }
 
   /// The chosen order is remembered by these names; changing one forgets what was chosen.
@@ -106,8 +115,8 @@ struct WritingListTests {
 
   @Test(arguments: [DynamicTypeSize.large, .accessibility5])
   func untitledRowKeepsOneTitleLine(_ size: DynamicTypeSize) {
-    let untitled = WritingRow(id: 0, title: "", characterCount: 0, updated: now)
-    let titled = WritingRow(id: 0, title: "朝", characterCount: 0, updated: now)
+    let untitled = WritingRow(id: UUID(sample: 0), title: "", characterCount: 0, updated: now)
+    let titled = WritingRow(id: UUID(sample: 0), title: "朝", characterCount: 0, updated: now)
     #expect(height(of: untitled, size: size) == height(of: titled, size: size))
   }
 
@@ -126,7 +135,8 @@ struct WritingListTests {
   /// Measured widths land on device pixels, so they are checked to within half a point.
   @Test func idealRowWidthIsTitleGapAndDate() {
     let row = WritingRow(
-      id: 0, title: "パンを焼く日", characterCount: 1920, updated: movedFromNow(DateComponents(day: -1)))
+      id: UUID(sample: 0), title: "パンを焼く日", characterCount: 1920,
+      updated: movedFromNow(DateComponents(day: -1)))
     let title = Text(verbatim: row.title).textStyle(.title)
     let expected =
       width(of: title) + TypeScale.standard.chars(1, of: .meta)
@@ -151,11 +161,11 @@ struct WritingListTests {
       of: WritingListPage(
         rows: [
           WritingRow(
-            id: 1, title: "古い覚え書き", characterCount: 312,
+            id: UUID(sample: 1), title: "古い覚え書き", characterCount: 312,
             updated: movedFromNow(DateComponents(year: -1234))),
-          WritingRow(id: 2, title: "", characterCount: 0, updated: now),
+          WritingRow(id: UUID(sample: 2), title: "", characterCount: 0, updated: now),
           WritingRow(
-            id: 3, title: "時計より先の原稿", characterCount: 1_234_567,
+            id: UUID(sample: 3), title: "時計より先の原稿", characterCount: 1_234_567,
             updated: movedFromNow(DateComponents(hour: 3))),
         ],
         now: now,

@@ -1,17 +1,36 @@
-/// A writing as its page shows it.
-struct Writing: Equatable {
-  let title: String
+import Foundation
+
+/// A writing as it is kept on the device.
+nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
+  let id: UUID
+  var title: String
   /// Paragraphs separated by line breaks.
-  let body: String
+  var body: String
+  var updated: Date
+
+  init(id: UUID = UUID(), title: String, body: String, updated: Date = .now) {
+    self.id = id
+    self.title = title
+    self.body = body
+    self.updated = updated
+  }
 }
 
 extension Writing {
-  /// Stand-in until there is a store of writings: `title` over one sample body.
-  static func sample(titled title: String) -> Writing {
-    Writing(title: title, body: sampleBody)
+  /// The sample rows as writings, each body `sampleBody` repeated to the row's character count.
+  /// Stand-in for the writings the developer will write (#29).
+  static func samples(now: Date, calendar: Calendar) -> [Writing] {
+    let paragraph = sampleBody + "\n"
+    return WritingRow.samples(now: now, calendar: calendar).map { row in
+      let repeated = String(
+        repeating: paragraph, count: row.characterCount / paragraph.count + 1)
+      return Writing(
+        id: row.id, title: row.title, body: String(repeated.prefix(row.characterCount)),
+        updated: row.updated)
+    }
   }
 
-  static let sampleBody = """
+  nonisolated static let sampleBody = """
     週末に小さなパンを焼いてみたい。
     最初の週は3月2日に粉を買い（ライ麦はまだない）、台所の棚を片づけて生地をこねる場所をつくった。
     目標は丸い田舎パン。フランスの村で焼かれてきたパン・ド・カンパーニュ
