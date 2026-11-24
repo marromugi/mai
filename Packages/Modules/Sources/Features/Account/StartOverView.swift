@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The page for when no device holds the own key and its recovery key is lost too: the server's
 /// writings can't be opened by anyone, so they are deleted and the account starts over with a new
-/// own key. What goes and what stays, then 「サーバーの文書を消してやり直す」, asked once more
+/// own key. What goes and what stays, then 「サーバーの文書を消して最初からやり直す」, asked once more
 /// before `startOver` runs. The page closes once `startOver` answers that the own key no longer
 /// needs bringing back; what went wrong is said by the settings' alert.
 struct StartOverView: View {
@@ -35,7 +35,7 @@ struct StartOverView: View {
         Text("残るもの")
       } footer: {
         Text(
-          "この端末の文書は、新しい自分の鍵で暗号化して送り直します。新しいリカバリーキーを書き留めてください。ほかの端末はサインアウトし、サインインし直すと新しいリカバリーキーを求めます。"
+          "この端末の文書は、新しい自分の鍵で暗号化して送り直します。新しいリカバリーキーを書き留めてください。ほかの端末はサインアウトします。サインインし直すと、新しい鍵が iCloud キーチェーンで届いた端末はそのまま同期し、届いていない端末は新しいリカバリーキーを求めます。"
         )
       }
       Section {
@@ -43,7 +43,7 @@ struct StartOverView: View {
           confirming = true
         } label: {
           HStack {
-            Text("サーバーの文書を消してやり直す")
+            Text("サーバーの文書を消して最初からやり直す")
             if starting {
               Spacer()
               ProgressView()

@@ -17,8 +17,8 @@ enum AccountPhase: Equatable {
   case recoveryKeyNeeded
 }
 
-/// The account a plan pays for, as the screens show it: signing in after a purchase, the own key,
-/// the check at launch, and signing out. Made only where there is a server to sign in to.
+/// The account a plan pays for, as the screens show it: signing in, after a purchase or on a device
+/// that didn't buy, the own key, starting over without it, the check at launch, and signing out. Made only where there is a server to sign in to.
 @Observable public final class AccountModel {
   private let account: SyncAccount
   let kept: KeptAccountID
@@ -88,8 +88,9 @@ enum AccountPhase: Equatable {
     }
   #endif
 
-  /// Whether the plan bought for the account kept is paid for, so signing in can make or find its
-  /// account; false while a purchase waits for approval. Read again by `check()` and `refresh()`.
+  /// Whether the plan bought for the account kept is paid for, so signing in makes or finds its
+  /// account, as the 「同期」 section says; false while a purchase waits for approval, and with
+  /// none kept. Read again by `check()` and `refresh()`.
   private(set) var canSignIn = false
 
   /// At launch: reads the session, then checks it with Apple and sends the subscriptions again.
