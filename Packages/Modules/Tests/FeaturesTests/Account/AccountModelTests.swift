@@ -507,6 +507,7 @@ struct AccountModelTests {
     #expect(model.kept.id == bought)
     #expect(try sessions.load() == session)
     #expect(FileManager.default.fileExists(atPath: stateFile.path()))
+    #expect(!model.deleting)
   }
 
   @Test func aDeletionThatFailsWhileTheRecoveryKeyIsNeededStillAsksForIt() async throws {
@@ -537,6 +538,52 @@ struct AccountModelTests {
     #expect(model.problem != nil)
     #expect(!worker.asked.contains("DELETE /account"))
     #expect(model.kept.id == bought)
+    #expect(model.phase == .signedOut)
+  }
+
+  @Test func aDeletionWhileSignedOutSendsNothing() async throws {
+    let worker = ScriptedWorker(["DELETE /account": [.status(204)]])
+    let sessions = MemorySessions()
+    try sessions.save(session)
+    let model = try model(over: worker, sessions: sessions)
+    await model.deleteAccount()
+    #expect(worker.asked.isEmpty)
+    #expect(model.kept.id == bought)
+  }
+
+  /// A recovery key not yet written down is of the account deleted, so it isn't shown after.
+  @Test func deletingTheAccountDropsTheRecoveryKeyToShow() async throws {
+    var answers = Self.newAccount
+    answers["DELETE /account"] = [.status(204)]
+    let model = try model(answers)
+    await model.signIn()
+    #expect(model.recoveryKeyToShow != nil)
+    await model.deleteAccount()
+    #expect(model.recoveryKeyToShow == nil)
+  }
+
+  /// A settling the deletion overtook doesn't sign the device back in, nor show a recovery key.
+  @Test func aSettlingThatEndsAfterTheDeletionLeavesItSignedOut() async throws {
+    let worker = ScriptedWorker(
+      [
+        "PUT /account/subscription": [.status(200)],
+        "GET /account": [ScriptedWorker.account(check: nil)],
+        "PUT /account/own-key-check": [.status(204)],
+        "DELETE /account": [.status(204)],
+      ], holding: "PUT /account/own-key-check")
+    let sessions = MemorySessions()
+    try sessions.save(session)
+    let model = try model(over: worker, sessions: sessions)
+    await model.checkAtLaunch()
+    let settling = Task { await model.settleOwnKey() }
+    while !worker.isHolding {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    await model.deleteAccount()
+    worker.release()
+    await settling.value
+    #expect(model.phase == .signedOut)
+    #expect(model.recoveryKeyToShow == nil)
   }
 
   /// Deleted on the server, the account ID goes even when the session can't be removed.

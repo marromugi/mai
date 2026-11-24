@@ -286,7 +286,8 @@ struct SyncAccountTests {
     #expect(try sessions.load() == nil)
   }
 
-  @Test(arguments: [ScriptedServer.Answer.status(502), .unreachable])
+  /// 200 included: the Worker answers a deletion with 204 only.
+  @Test(arguments: [ScriptedServer.Answer.status(502), .status(200), .unreachable])
   func anAccountTheServerDidntDeleteIsKeptOnTheDevice(_ answer: ScriptedServer.Answer)
     async throws
   {

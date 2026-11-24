@@ -317,11 +317,13 @@ enum AccountPhase: Equatable {
   }
 
   /// Settles the own key of `session`. False, settling nothing, when the device left the session
-  /// while the account was read.
+  /// while the account was read or the key settled, as when the account was deleted meanwhile.
   private func settle(_ session: Session) async throws(AccountError) -> Bool {
     let read = try await self.read(session)
     guard try stillIn(session, keeping: read) else { return false }
-    switch try await account.settleOwnKey(session, against: read.state) {
+    let outcome = try await account.settleOwnKey(session, against: read.state)
+    guard try account.session() == session else { return false }
+    switch outcome {
     case .ready:
       phase = .signedIn
       ownKeySettled = true

@@ -16,7 +16,7 @@ struct WritingSyncTests {
   private let ownKey = OwnKey.generate()
 
   /// A device signed in with `ownKey` when `signedIn`, its library read from `kept`, and every
-  /// request it sends kept in `sent`.
+  /// request it sends kept in `sent`; `DELETE /account` is answered with `deletion`.
   private struct Device {
     let account: AccountModel
     let library: WritingLibrary
@@ -29,7 +29,7 @@ struct WritingSyncTests {
     _ kept: [Writing] = [], signedIn: Bool = true, server: FakeWritingServer? = nil,
     deviceKey: OwnKey? = nil, refusingWritings: Int? = nil, holdingFirstListing: Bool = false,
     pause: Duration = .zero,
-    interval: Duration = .zero
+    interval: Duration = .zero, deletion: ScriptedWorker.Answer? = nil
   ) throws -> Device {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defaults.removePersistentDomain(forName: suite)
@@ -41,7 +41,7 @@ struct WritingSyncTests {
     if signedIn || deviceKey != nil {
       try ownKeys.save(deviceKey ?? ownKey)
     }
-    let answers: [String: [ScriptedWorker.Answer]] = [
+    var answers: [String: [ScriptedWorker.Answer]] = [
       // The launch check's, then the one a sync refused with 401 asks for, which the Worker
       // refuses too.
       "PUT /account/subscription": [.status(200), .status(401)],
@@ -49,6 +49,7 @@ struct WritingSyncTests {
       "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
       "POST /account": [.status(201, json: #"{"token":"\#(token)"}"#)],
     ]
+    answers["DELETE /account"] = deletion.map { [$0] }
     let sent = Requests(
       writings: server ?? FakeWritingServer(accepting: token), account: ScriptedWorker(answers),
       refusing: refusingWritings, holdingFirstListing: holdingFirstListing)
@@ -436,6 +437,46 @@ struct WritingSyncTests {
     #expect(device.sync.pending != nil)
     device.sync.pending?.cancel()
   }
+
+  /// The deletion waits for the sync running, so none writes the sync's state after it, and
+  /// then the device shows no sync, drops the one an edit set, and sends nothing more.
+  @Test func aDeletionWaitsForTheSyncRunningAndLeavesNothingToSync() async throws {
+    let written = writing("朝", at: 1_000)
+    let device = try device(
+      [written], holdingFirstListing: true, pause: .seconds(3_600), deletion: .status(204))
+    await device.account.checkAtLaunch()
+    let syncing = Task { await device.sync.syncNow() }
+    while device.sent.listings == 0 {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    device.sync.edited()
+    let deleting = Task { await device.sync.deleteAccount() }
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(!device.sent.routes.contains("DELETE /account"))
+
+    device.sent.release()
+    await syncing.value
+    await deleting.value
+    #expect(device.sent.routes.last == "DELETE /account")
+    #expect(device.account.phase == .signedOut)
+    #expect(device.sync.status == .notYet)
+    #expect(device.sync.pending == nil)
+    await device.sync.syncNow()
+    #expect(device.sent.routes.last == "DELETE /account")
+  }
+
+  /// A deletion the server refuses leaves the sync an edit set to run.
+  @Test func aDeletionTheServerRefusesKeepsTheSyncAnEditSet() async throws {
+    let written = writing("朝", at: 1_000)
+    let device = try device([written], pause: .seconds(3_600), deletion: .status(502))
+    await device.account.checkAtLaunch()
+    device.sync.edited()
+
+    await device.sync.deleteAccount()
+    #expect(device.account.phase == .signedIn)
+    #expect(device.sync.pending != nil)
+    device.sync.pending?.cancel()
+  }
 }
 
 /// Writings kept in memory, refusing to save the one with `id` while `refusing`.
@@ -505,6 +546,8 @@ nonisolated final class Requests: HTTPTransport {
   }
 
   var all: [URLRequest] { sent.withLock { $0 } }
+  /// The routes asked, in order, `"DELETE /account"` for one.
+  var routes: [String] { all.map { "\($0.httpMethod ?? "GET") \($0.url?.path() ?? "")" } }
   var listings: Int {
     all.filter { $0.httpMethod == "GET" && $0.url?.path() == "/writings" }.count
   }

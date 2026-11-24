@@ -120,10 +120,9 @@ internal import Sync
   }
 
   /// Deletes the account once any sync running has ended, so none writes the sync's state after
-  /// it is removed; a sync asked for meanwhile runs after it.
+  /// it is removed; a sync asked for meanwhile runs after it. A sync an edit set is dropped once
+  /// the device is signed out, and kept when the account stays.
   func deleteAccount() async {
-    pending?.cancel()
-    pending = nil
     let previous = running
     let deletion = Task {
       await previous?.value
@@ -132,8 +131,9 @@ internal import Sync
     running = deletion
     await deletion.value
     if account.phase == .signedOut {
+      pending?.cancel()
+      pending = nil
       status = .notYet
-      lastStarted = nil
     }
   }
 
