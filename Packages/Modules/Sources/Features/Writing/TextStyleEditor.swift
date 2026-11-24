@@ -22,16 +22,18 @@ struct TextStyleEditor: View {
   let changed: (String, [BodyLink]) -> Void
   @State private var asking: TitleRequest?
   @EnvironmentTypeScale private var scale
+  @Environment(\.fontFamilies) private var families
 
   var body: some View {
     // A fixed line box puts the baseline `-descender` above its bottom; this moves it to where
     // `textStyle(role)` puts it. Not `baselineOffset`, which TextKit 2 takes off the line box.
-    let baseline = scale.size(role) + scale.emBoxShift(role)
+    let baseline = scale.size(role) + scale.emBoxShift(role, in: families)
     StyledTextView(
       role: role, text: text, links: links, placeholder: placeholder, oneLine: oneLine,
-      askTitle: pastesLinks ? { asking = $0 } : nil, changed: changed, scale: scale
+      askTitle: pastesLinks ? { asking = $0 } : nil, changed: changed, scale: scale,
+      families: families
     )
-    .offset(y: baseline - scale.lineHeight(role) - scale.font(role).descender)
+    .offset(y: baseline - scale.lineHeight(role) - scale.font(role, in: families).descender)
     .sheet(item: $asking) { request in
       LinkTitleSheet(url: request.url) { title in
         asking = nil
@@ -58,6 +60,7 @@ struct StyledTextView: UIViewRepresentable {
   let askTitle: ((TitleRequest) -> Void)?
   let changed: (String, [BodyLink]) -> Void
   let scale: TypeScale
+  let families: [FontFamily]
 
   func makeUIView(context: Context) -> PlaceholderTextView {
     let view = PlaceholderTextView(usingTextLayoutManager: true)
@@ -75,10 +78,12 @@ struct StyledTextView: UIViewRepresentable {
     view.pasteDelegate = askTitle == nil ? nil : context.coordinator
     // Never while composing: replacing the text ends the input method's composition.
     guard view.markedTextRange == nil,
-      context.coordinator.scale != scale || view.text != text || view.links != links
+      context.coordinator.scale != scale || context.coordinator.families != families
+        || view.text != text || view.links != links
     else { return }
     context.coordinator.scale = scale
-    let attributes = scale.attributes(role)
+    context.coordinator.families = families
+    let attributes = scale.attributes(role, in: families)
     let selection = view.selectedRange
     let styled = NSMutableAttributedString(string: text, attributes: attributes)
     for link in links {
@@ -125,8 +130,9 @@ struct StyledTextView: UIViewRepresentable {
   final class Coordinator: NSObject, UITextViewDelegate, UITextPasteDelegate {
     var changed: (String, [BodyLink]) -> Void
     let oneLine: Bool
-    /// The scale the text was last set at, so a change of setting restyles it.
+    /// The scale and families the text was last set in, so a change of either restyles it.
     var scale: TypeScale?
+    var families: [FontFamily]?
     /// Asks for the title of a web address pasted with nothing selected.
     var askTitle: ((TitleRequest) -> Void)?
 
@@ -314,13 +320,13 @@ final class PlaceholderTextView: UITextView {
 extension TypeScale {
   /// `role`'s font, line box, and tracking, as `textStyle(role)` sets them, and for the body the
   /// line-breaking rules `Text(body:)` sets.
-  func attributes(_ role: TextRole) -> [NSAttributedString.Key: Any] {
+  func attributes(_ role: TextRole, in families: [FontFamily]) -> [NSAttributedString.Key: Any] {
     let paragraph = NSMutableParagraphStyle()
     paragraph.minimumLineHeight = lineHeight(role)
     paragraph.maximumLineHeight = lineHeight(role)
     paragraph.lineBreakStrategy = .standard
     var attributes: [NSAttributedString.Key: Any] = [
-      .font: font(role),
+      .font: font(role, in: families),
       .foregroundColor: UIColor.label,
       .paragraphStyle: paragraph,
       .tracking: tracking(role),

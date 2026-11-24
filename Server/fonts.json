@@ -1,0 +1,41 @@
+{
+  "source": "https://raw.githubusercontent.com/google/fonts/06bfe0d62a98375cb09c942fa18e68bd32cff057",
+  "files": [
+    {
+      "name": "ZenKakuGothicNew-Regular.ttf",
+      "path": "ofl/zenkakugothicnew/ZenKakuGothicNew-Regular.ttf",
+      "sha256": "b840cd07a67d89cacca44249ae49aa99ee7640eb5ce623be8d8983d6aabac801",
+      "size": 2360248
+    },
+    {
+      "name": "ZenKakuGothicNew-Bold.ttf",
+      "path": "ofl/zenkakugothicnew/ZenKakuGothicNew-Bold.ttf",
+      "sha256": "0081cedabc4921982fcd061f845a005664ac7fb642af2dd34b4007bc63ccd235",
+      "size": 2314424
+    },
+    {
+      "name": "ZenOldMincho-Regular.ttf",
+      "path": "ofl/zenoldmincho/ZenOldMincho-Regular.ttf",
+      "sha256": "4c051a78a21c4e8e9dccf1c754776d33f356b8cc6ef95d9b64761b9bae814b84",
+      "size": 5442512
+    },
+    {
+      "name": "ZenOldMincho-Bold.ttf",
+      "path": "ofl/zenoldmincho/ZenOldMincho-Bold.ttf",
+      "sha256": "d6b95c1ff45c8dac153d28961e4c37d7d03b648330c71f884d124dc652a13c0d",
+      "size": 5436460
+    },
+    {
+      "name": "BIZUDPMincho-Regular.ttf",
+      "path": "ofl/bizudpmincho/BIZUDPMincho-Regular.ttf",
+      "sha256": "dbcea04578ac1e9d3484525e870ce491bd04361768f4d2ba4b827d96e20f891d",
+      "size": 6156444
+    },
+    {
+      "name": "BIZUDPMincho-Bold.ttf",
+      "path": "ofl/bizudpmincho/BIZUDPMincho-Bold.ttf",
+      "sha256": "99618e39b881597efc03d58706bd194757c968c1bf7a7017a893efead6b1b260",
+      "size": 7109432
+    }
+  ]
+}

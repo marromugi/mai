@@ -57,11 +57,12 @@ extension AttributedString {
 private struct TextStyleModifier: ViewModifier {
   let role: TextRole
   @EnvironmentTypeScale private var scale
+  @Environment(\.fontFamilies) private var families
 
   func body(content: Content) -> some View {
-    let shift = scale.emBoxShift(role)
+    let shift = scale.emBoxShift(role, in: families)
     content
-      .font(Font(scale.font(role)))
+      .font(Font(scale.font(role, in: families)))
       .lineHeight(.exact(points: scale.lineHeight(role)))
       .tracking(scale.tracking(role))
       .offset(y: shift)
@@ -74,8 +75,8 @@ extension TypeScale {
   /// How far down `role`'s text is moved to centre its em box in the line box. `.exact` puts the
   /// baseline `size` below the top of the line box, so the em box starts `emBoxDescent × size`
   /// below it.
-  func emBoxShift(_ role: TextRole) -> CGFloat {
+  func emBoxShift(_ role: TextRole, in families: [FontFamily]) -> CGFloat {
     let size = size(role)
-    return (lineHeight(role) - size) / 2 - BundledFonts.emBoxDescent * size
+    return (lineHeight(role) - size) / 2 - families.emBoxDescent * size
   }
 }
