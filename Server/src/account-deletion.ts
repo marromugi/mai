@@ -6,11 +6,14 @@ import type { SignIn } from "./sign-in";
 import type { Answer, Store, ToDelete } from "./store";
 
 /**
- * `DELETE /account`: Apple's refresh token is revoked, then R2 is emptied of the account, then its
- * rows are deleted. Until the rows go, the session still works, so a call that fails partway is
- * called again from the start: revoking and emptying R2 twice do no harm. Once they go, nothing on
- * the server names the account, so R2 is swept once more after them, for a photo put that stored
- * its bytes while this ran.
+ * `DELETE /account`: Apple's refresh token is revoked, then the account is marked while the
+ * caller's session is live, then R2 is emptied of it, then its rows are deleted. Once marked, its
+ * sessions ending (Apple's `consent-revoked` for this very revoke) no longer stops it. Until the
+ * rows go, the session still works, so a call that fails partway is called again from the start:
+ * revoking, marking and emptying R2 twice do no harm; one that fails once marked is also finished by
+ * the cron trigger. Once they go, nothing on the server names the
+ * account, so R2 is swept once more after them, for a photo put that stored its bytes while this
+ * ran.
  */
 export async function deleteAccount(
   caller: Caller,
@@ -23,8 +26,13 @@ export async function deleteAccount(
     return { ok: false, refusal: "session" };
   }
   const deleted = await deleteFound(found, signIn, photos, now, {
-    mark: () => Promise.resolve(true),
-    deleteRows: () => signIn.store.deleteAccount(caller, found.account, now),
+    mark: () => signIn.store.markForDeletionByCaller(caller, found.account, now),
+    // Once this call marked the account, its rows go: here, or already by the cron trigger or
+    // another call that found it marked.
+    deleteRows: async () => {
+      await signIn.store.deleteAccount(found.account);
+      return true;
+    },
   });
   if (deleted === "unrevoked") {
     return {
@@ -37,38 +45,70 @@ export async function deleteAccount(
     : { ok: true, value: new Response(null, { status: 204 }) };
 }
 
-/** At most this many lapsed accounts are deleted each time the cron trigger runs. */
+/**
+ * Deletes the Apple user's account as `deleteAccount` does, for Apple's `account-deleted`: no device
+ * can sign in to it again. It is marked before Apple is asked, so that the cron trigger finishes it
+ * when Apple's revoke endpoint doesn't answer or a later step fails; nothing else can, since no
+ * device can call `DELETE /account` for it.
+ */
+export async function deleteAccountOfAppleUser(
+  appleSub: string,
+  signIn: SignIn,
+  photos: Photos,
+  now: number,
+): Promise<void> {
+  const found = await signIn.store.appleUserToDelete(appleSub);
+  if (found === undefined || !(await signIn.store.markForDeletionNow(found.account))) {
+    return;
+  }
+  const deleted = await deleteFound(found, signIn, photos, now, {
+    mark: () => signIn.store.markForDeletionNow(found.account),
+    // Once marked, its rows go: here, or already by the cron trigger.
+    deleteRows: async () => {
+      await signIn.store.deleteAccount(found.account);
+      return true;
+    },
+  });
+  if (deleted === "unrevoked") {
+    console.warn(
+      `the account ${found.account}, whose Apple Account was deleted, is marked and wasn't deleted: Apple's revoke endpoint didn't answer; the cron trigger tries again`,
+    );
+  }
+}
+
+/** At most this many accounts are deleted each time the cron trigger runs. */
 export const lapsedDeletedAtOnce = 10;
 
 /**
- * Deletes the accounts lapsed `lapsedKept` or longer, at most `lapsedDeletedAtOnce` picked at
- * random, as `deleteAccount` does; run by the cron trigger. Each is marked once Apple has revoked
- * its token and before R2 is touched: a resubscription before then keeps the account whole, and
- * one after it no longer keeps it, so an account that fails partway is finished by a later run.
- * One that fails is logged and left for the next run, and the others go on.
+ * Deletes the accounts lapsed `lapsedKept` or longer, and those marked for deletion that weren't
+ * finished (by `DELETE /account` or Apple's `account-deleted`), at most `lapsedDeletedAtOnce` picked at random, as `deleteAccount` does; run by
+ * the cron trigger. Each is marked once Apple has revoked its token and before R2 is touched: a
+ * resubscription before then keeps a lapsed account whole, and one after it no longer keeps it, so
+ * an account that fails partway is finished by a later run. One that fails is logged and left for
+ * the next run, and the others go on.
  */
 export async function deleteLapsedAccounts(
   signIn: SignIn,
   photos: Photos,
   now: number,
 ): Promise<void> {
-  const lapsed = await signIn.store.lapsedToDelete(now, lapsedDeletedAtOnce);
+  const lapsed = await signIn.store.dueForDeletion(now, lapsedDeletedAtOnce);
   await Promise.all(
     lapsed.map(async (found) => {
       try {
         const deleted = await deleteFound(found, signIn, photos, now, {
           mark: () => signIn.store.markForDeletion(found.account, now),
-          deleteRows: () => signIn.store.deleteLapsedAccount(found.account),
+          deleteRows: () => signIn.store.deleteAccount(found.account),
         });
         if (deleted === "unrevoked") {
           console.warn(
-            `the lapsed account ${found.account} wasn't deleted: Apple's revoke endpoint didn't answer; the next run tries again`,
+            `the account ${found.account} due for deletion wasn't deleted: Apple's revoke endpoint didn't answer; the next run tries again`,
           );
         }
       } catch (error) {
         // Each account's deletion is an entrance of its own, so one account's failure stops no other.
         console.error(
-          `deleting the lapsed account ${found.account} failed; the next run tries again`,
+          `deleting the account ${found.account} failed; the next run tries again`,
           error,
         );
       }

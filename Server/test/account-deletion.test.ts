@@ -515,18 +515,80 @@ describe("a deletion that fails partway", () => {
     expect(await rowsOf(one.account)).toEqual(noRow);
   });
 
-  it("deletes no row when the session ends before the rows go", async () => {
+  it("is finished by the cron trigger when it fails once marked and every session ended", async () => {
+    const one = await fullAccount();
+    await expect(deleteAccount(one.token, { store: tursoFailing })).rejects.toThrow(
+      /Turso is unavailable/,
+    );
+    await database.execute({
+      sql: "DELETE FROM sessions WHERE account_id = ?",
+      args: [one.account],
+    });
+    expect((await deleteAccount(one.token)).status).toBe(401);
+    // Its renewals no longer keep it; it is paid for but being deleted.
+    await testStore.keepNotified(renewal(one, Date.now()));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    for (let run = 0; run < 20 && (await rowsOf(one.account)).accounts === 1; run += 1) {
+      await deleteLapsed(Date.now());
+    }
+    expect(await rowsOf(one.account)).toEqual(noRow);
+    expect(await keysOf(one.account)).toEqual([]);
+  });
+
+  it("deletes no row when the session ends before the account is marked", async () => {
     const one = await fullAccount();
     const answer = await deleteAccount(one.token, {
       store: (store) =>
-        storeWith(store, "deleteAccount", async (caller, account, now) => {
+        storeWith(store, "markForDeletionByCaller", async (caller, account, now) => {
           await store.endSession(caller, now);
-          return store.deleteAccount(caller, account, now);
+          return store.markForDeletionByCaller(caller, account, now);
         }),
     });
     expect(answer.status).toBe(401);
     expect(await rowsOf(one.account)).toMatchObject({ ...everyRow, sessions: 1 });
+    expect(await keysOf(one.account)).toHaveLength(2);
     expect((await deleteAccount(one.secondToken)).status).toBe(204);
+    expect(await rowsOf(one.account)).toEqual(noRow);
+  });
+
+  it("finishes when every session of the account ends once it is marked", async () => {
+    const one = await fullAccount();
+    const answer = await deleteAccount(one.token, {
+      store: (store) =>
+        storeWith(store, "deleteAccount", async (account) => {
+          await database.execute({
+            sql: "DELETE FROM sessions WHERE account_id = ?",
+            args: [account],
+          });
+          return store.deleteAccount(account);
+        }),
+    });
+    expect(answer.status).toBe(204);
+    expect(await rowsOf(one.account)).toEqual(noRow);
+    expect(await keysOf(one.account)).toEqual([]);
+  });
+
+  it("deletes no row of an account nothing marked", async () => {
+    const one = await fullAccount();
+    const account = parseAccountId(one.account);
+    if (account === undefined) {
+      throw new Error(`${one.account} is an account ID`);
+    }
+    expect(await testStore.deleteAccount(account)).toBe(false);
+    expect(await rowsOf(one.account)).toEqual(everyRow);
+  });
+
+  it("answers 204 when the cron trigger finishes it first, once it is marked", async () => {
+    const one = await fullAccount();
+    const answer = await deleteAccount(one.token, {
+      store: (store) =>
+        storeWith(store, "deleteAccount", async (account) => {
+          await deleteLapsed(Date.now());
+          return store.deleteAccount(account);
+        }),
+    });
+    expect(answer.status).toBe(204);
     expect(await rowsOf(one.account)).toEqual(noRow);
   });
 });
@@ -754,9 +816,9 @@ describe("the cron trigger, for lapsed accounts", () => {
     const late = `${one.account}/late/photo/upload`;
     await deleteLapsed(at + lapsedKept, {
       store: (reached) =>
-        storeWith(reached, "deleteLapsedAccount", async (account) => {
+        storeWith(reached, "deleteAccount", async (account) => {
           await env.PHOTOS.put(late, "x");
-          return reached.deleteLapsedAccount(account);
+          return reached.deleteAccount(account);
         }),
     });
     expect(await rowsOf(one.account)).toEqual(noRow);
@@ -790,8 +852,8 @@ describe("the cron trigger, for lapsed accounts", () => {
     expect(await keysOf(r2Fails.account)).toHaveLength(2);
     expect(logged.mock.calls.map(([message]) => String(message)).toSorted()).toEqual(
       [
-        `deleting the lapsed account ${sealedWrong.account} failed; the next run tries again`,
-        `deleting the lapsed account ${r2Fails.account} failed; the next run tries again`,
+        `deleting the account ${sealedWrong.account} failed; the next run tries again`,
+        `deleting the account ${r2Fails.account} failed; the next run tries again`,
       ].toSorted(),
     );
 
