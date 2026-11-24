@@ -475,6 +475,7 @@ export class Store {
          WHERE product_id = :product AND ${claimed}
            AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = :id OR apple_sub = :sub)
            AND NOT ${keptByAnother(":id")}`,
+        leaving(":id", `EXISTS (SELECT 1 FROM accounts WHERE ${madeHere})`, "true"),
         `UPDATE subscriptions SET account_id = :id, product_id = :product, period_ends = :period,
            paid_until = :paid, environment = :environment, signed_date = :signed
          WHERE original_transaction_id = :original AND ${later}
@@ -513,11 +514,15 @@ export class Store {
 
   /**
    * Keeps the caller's own subscription, as the app resends it, when it is newer than what is
-   * kept. Answers the account's plan and paid-until time after it.
+   * kept: one kept for the caller, whatever account it names, or one naming the caller that isn't
+   * another account's to keep. Answers the account's plan and paid-until time after it.
    */
   async keepPurchase(caller: Caller, purchase: Purchase, now: number): Promise<Answer<Kept>> {
     const answer = await this.#run(caller, now, "other", (account, allowed) => {
-      const mine = `coalesce(:account = ${account}, 0) AND NOT ${keptByAnother(":account")}`;
+      const kept = `EXISTS (SELECT 1 FROM subscriptions
+        WHERE original_transaction_id = :original AND account_id = ${account})`;
+      const mine = `(${kept} OR (coalesce(:account = ${account}, 0)
+        AND NOT ${keptByAnother(":account")}))`;
       return [
         `SELECT ${plan} AS plan, ${mine} AS mine`,
         ...keepStatements(`${mine} AND ${allowed}`),
@@ -1420,6 +1425,25 @@ function keptByAnother(account: string): string {
             AND account_id != ${account} AND NOT (${later}))`;
 }
 
+/**
+ * Cuts the account the subscription `:original` is kept for to `:signed`, when the purchase moves
+ * the subscription from it to `account`, which `there` says can take it: that purchase ended what
+ * the subscription paid for there. The account's other subscriptions still count. Holds
+ * `condition` in its WHERE.
+ */
+function leaving(account: string, there: string, condition: string): string {
+  return `UPDATE accounts SET
+       paid_until = max(min(paid_until, :signed), coalesce((SELECT max(s.paid_until)
+         FROM subscriptions s
+         WHERE s.account_id = accounts.id AND s.original_transaction_id != :original), 0)),
+       tier = coalesce((SELECT p.tier FROM subscriptions s JOIN plans p ON p.product_id = s.product_id
+                        WHERE s.account_id = accounts.id AND s.original_transaction_id != :original
+                        ORDER BY s.paid_until DESC, p.writings_bytes DESC LIMIT 1), tier)
+     WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original
+                   AND account_id != ${account} AND ${later} AND ${plan} AND ${there})
+       AND deleting = 0 AND ${condition}`;
+}
+
 function purchaseValues(purchase: Purchase): Record<string, InValue> {
   return {
     original: purchase.originalTransactionId,
@@ -1438,12 +1462,17 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
  * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan),
  * unless it is marked for deletion. A purchase naming another account `:account` changes nothing
  * unless it is about a later billing period and that account is there and not marked for deletion;
- * then it moves the subscription to that account, and the account it leaves keeps its plan and
- * paid-until time. A renewal stays with the account it is kept for, whatever account it names. Each
+ * then it moves the subscription to that account, and cuts the account it leaves as `leaving`
+ * says. A renewal stays with the account it is kept for, whatever account it names. Each
  * statement holds `condition` in its WHERE.
  */
 function keepStatements(condition: string): string[] {
   return [
+    leaving(
+      ":account",
+      "EXISTS (SELECT 1 FROM accounts WHERE id = :account AND deleting = 0)",
+      condition,
+    ),
     `UPDATE subscriptions SET account_id = CASE WHEN :purchased = 1 THEN coalesce(:account, account_id)
        ELSE account_id END, product_id = :product,
        period_ends = :period, paid_until = :paid, environment = :environment, signed_date = :signed

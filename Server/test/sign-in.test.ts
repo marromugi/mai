@@ -718,6 +718,7 @@ describe("an account made with a subscription bought again", () => {
 
     const second = crypto.randomUUID();
     const expires = Date.now() + 60 * day;
+    const moved = Date.now() + 2000;
     const { answer } = await makeAccount(
       apple,
       newSub(),
@@ -725,15 +726,16 @@ describe("an account made with a subscription bought again", () => {
       await signedTransaction(second, {
         originalTransactionId: original,
         expiresDate: expires,
-        signedDate: Date.now() + 2000,
+        signedDate: moved,
       }),
     );
 
     expect(answer.status).toBe(201);
     expect(await paidFor(second)).toMatchObject({ subscriptions: original, paid_until: expires });
+    // The purchase that moved it ended what it paid for on the first account.
     expect(await paidFor(first)).toMatchObject({
       tier: firstBefore?.["tier"],
-      paid_until: firstBefore?.["paid_until"],
+      paid_until: moved,
       subscriptions: null,
     });
   });

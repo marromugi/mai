@@ -1012,6 +1012,85 @@ describe("a subscription bought again for another account", () => {
     expect((await accountOf(owner.account)).paidUntil).toBeGreaterThan(before.paidUntil);
   });
 
+  it("cuts an account still paid for to the time of the purchase that moved it away", async () => {
+    const owner = await newAccount();
+    const other = await newAccount(products.pro);
+    const otherPaid = (await accountOf(other.account)).paidUntil;
+    const caller = await newAccount();
+    // A Pro subscription of the owner's own still counts after the move.
+    await database.execute({
+      sql: "UPDATE subscriptions SET account_id = ? WHERE original_transaction_id = ?",
+      args: [owner.account, other.original],
+    });
+    const moved = Date.now() + 1000;
+
+    await notify(
+      "DID_CHANGE_RENEWAL_PREF",
+      "UPGRADE",
+      await signedTransaction(caller.account, {
+        originalTransactionId: owner.original,
+        productId: products.plus,
+        expiresDate: Date.now() + 31 * day,
+      }),
+      undefined,
+      moved,
+    );
+
+    expect(await keptFor(owner.original)).toBe(caller.account);
+    expect(await accountOf(owner.account)).toEqual({ tier: "pro", paidUntil: otherPaid });
+  });
+
+  it("cuts an account with no other subscription to the time of the purchase that moved it", async () => {
+    const owner = await newAccount();
+    const caller = await newAccount();
+    const moved = Date.now() + 1000;
+
+    await notify(
+      "DID_CHANGE_RENEWAL_PREF",
+      "UPGRADE",
+      await signedTransaction(caller.account, {
+        originalTransactionId: owner.original,
+        productId: products.plus,
+        expiresDate: Date.now() + 31 * day,
+      }),
+      undefined,
+      moved,
+    );
+
+    expect(await accountOf(owner.account)).toEqual({ tier: "basic", paidUntil: moved });
+  });
+
+  it("lets the account it moved to resend a renewal that names the account it left", async () => {
+    const { owner, caller } = await lapsedOwner();
+    await notify(
+      "SUBSCRIBED",
+      "RESUBSCRIBE",
+      await signedTransaction(caller.account, {
+        originalTransactionId: owner.original,
+        expiresDate: Date.now() + 30 * day,
+      }),
+    );
+    const renewed = Date.now() + 60 * day;
+
+    const answer = await call(
+      "/account/subscription",
+      {
+        transaction: await signedTransaction(owner.account, {
+          originalTransactionId: owner.original,
+          expiresDate: renewed,
+          transactionReason: "RENEWAL",
+          signedDate: Date.now() + 5000,
+        }),
+        renewalInfo: await signedRenewalInfo(owner.original),
+      },
+      caller.token,
+    );
+
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ plan: "basic", paidUntil: renewed });
+    expect(await keptFor(owner.original)).toBe(caller.account);
+  });
+
   it("is refused to an account that resends a renewal naming it", async () => {
     const { owner, caller, before } = await lapsedOwner();
     const kept = await subscriptionRow(owner.original);
