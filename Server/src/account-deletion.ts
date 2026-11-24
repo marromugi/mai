@@ -27,7 +27,12 @@ export async function deleteAccount(
   }
   const deleted = await deleteFound(found, signIn, photos, now, {
     mark: () => signIn.store.markForDeletionByCaller(caller, found.account, now),
-    deleteRows: () => signIn.store.deleteAccount(found.account),
+    // Once this call marked the account, its rows go: here, or already by the cron trigger or
+    // another call that found it marked.
+    deleteRows: async () => {
+      await signIn.store.deleteAccount(found.account);
+      return true;
+    },
   });
   if (deleted === "unrevoked") {
     return {
@@ -40,7 +45,7 @@ export async function deleteAccount(
     : { ok: true, value: new Response(null, { status: 204 }) };
 }
 
-/** At most this many lapsed accounts are deleted each time the cron trigger runs. */
+/** At most this many accounts are deleted each time the cron trigger runs. */
 export const lapsedDeletedAtOnce = 10;
 
 /**
@@ -66,13 +71,13 @@ export async function deleteLapsedAccounts(
         });
         if (deleted === "unrevoked") {
           console.warn(
-            `the lapsed account ${found.account} wasn't deleted: Apple's revoke endpoint didn't answer; the next run tries again`,
+            `the account ${found.account} due for deletion wasn't deleted: Apple's revoke endpoint didn't answer; the next run tries again`,
           );
         }
       } catch (error) {
         // Each account's deletion is an entrance of its own, so one account's failure stops no other.
         console.error(
-          `deleting the lapsed account ${found.account} failed; the next run tries again`,
+          `deleting the account ${found.account} failed; the next run tries again`,
           error,
         );
       }

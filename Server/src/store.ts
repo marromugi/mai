@@ -18,8 +18,8 @@ import { parsePhotoId, parsePhotoPart, type PhotoId, type PhotoPart } from "./ph
  * transaction: it checks the caller, does the work only when the caller may, and counts it. A
  * photo put is the one exception: its reservation is such a batch, and what follows R2 (marking it
  * stored, or releasing it) is written apart, by the upload's ID, without the caller. Deleting an
- * account is the other: it reads the account first, and deletes its rows in a batch of their own
- * once Apple and R2 are done with it (`src/account-deletion.ts`).
+ * account is the other: it reads the account first, marks it once Apple has revoked its token, and
+ * deletes its rows in a batch of their own once R2 is done with it (`src/account-deletion.ts`).
  * The tables are in `Server/schema.sql`.
  */
 
@@ -872,8 +872,7 @@ export class Store {
 
 /**
  * Every table whose rows belong to an account by their `account_id`, which deleting an account
- * empties of it; `sessions` last, since `DELETE /account` checks the caller's session in each
- * delete.
+ * empties of it before its `accounts` row, which each delete reads for the mark.
  */
 export const accountTables = ["writings", "photos", "usage", "subscriptions", "sessions"] as const;
 
@@ -905,7 +904,7 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
  * Replaces the kept subscription `:original` with newer data about the same or a later billing
  * period, or keeps it for the account `:account` when it isn't kept yet; then sets its account's
  * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan),
- * unless the cron trigger is deleting it. Each statement holds `condition` in its WHERE.
+ * unless it is marked for deletion. Each statement holds `condition` in its WHERE.
  */
 function keepStatements(condition: string): string[] {
   return [

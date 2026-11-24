@@ -17,7 +17,7 @@ import { notKept, purchaseRefused, readPurchase, type AppStore } from "./subscri
 export type SignIn = {
   readonly store: Store;
   readonly challenges: Challenges;
-  /** The app's bundle ID, which Apple puts in an ID token's `aud`. */
+  /** The app's bundle ID, which Apple puts in an ID token's and a notification's `aud`. */
   readonly clientId: string;
   readonly keys: AppleSignInKeys;
   readonly tokens: AppleTokens;

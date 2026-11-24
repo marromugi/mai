@@ -536,6 +536,19 @@ describe("a deletion that fails partway", () => {
     expect(await rowsOf(one.account)).toEqual(noRow);
     expect(await keysOf(one.account)).toEqual([]);
   });
+
+  it("answers 204 when the cron trigger finishes it first, once it is marked", async () => {
+    const one = await fullAccount();
+    const answer = await deleteAccount(one.token, {
+      store: (store) =>
+        storeWith(store, "deleteAccount", async (account) => {
+          await deleteLapsed(Date.now());
+          return store.deleteAccount(account);
+        }),
+    });
+    expect(answer.status).toBe(204);
+    expect(await rowsOf(one.account)).toEqual(noRow);
+  });
 });
 
 /**
@@ -792,8 +805,8 @@ describe("the cron trigger, for lapsed accounts", () => {
     expect(await keysOf(r2Fails.account)).toHaveLength(2);
     expect(logged.mock.calls.map(([message]) => String(message)).toSorted()).toEqual(
       [
-        `deleting the lapsed account ${sealedWrong.account} failed; the next run tries again`,
-        `deleting the lapsed account ${r2Fails.account} failed; the next run tries again`,
+        `deleting the account ${sealedWrong.account} failed; the next run tries again`,
+        `deleting the account ${r2Fails.account} failed; the next run tries again`,
       ].toSorted(),
     );
 
