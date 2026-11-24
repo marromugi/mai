@@ -78,12 +78,13 @@ public enum SaveOutcome: Sendable, Equatable {
 /// which the model leaves out; its `Sync` takes the settings #26 adds.
 public struct WritingServer: Sendable {
   let url: URL
-  let accessToken: String
+  /// The session's token (`Session.token`).
+  let token: String
   let transport: any HTTPTransport
 
-  public init(url: URL, accessToken: String, transport: any HTTPTransport = URLSession.shared) {
+  public init(url: URL, token: String, transport: any HTTPTransport = URLSession.shared) {
     self.url = url
-    self.accessToken = accessToken
+    self.token = token
     self.transport = transport
   }
 
@@ -144,7 +145,7 @@ public struct WritingServer: Sendable {
 
   private func request(for path: String) -> URLRequest {
     var request = URLRequest(url: url.appending(path: path))
-    request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     return request
   }
 
@@ -170,8 +171,12 @@ public enum ServerError: LocalizedError {
     switch self {
     case .unreachable:
       "サーバーにつながりませんでした。ネットワークを確かめて、もう一度同期してください。"
-    case .refused(let status, _) where status == 401:
-      "サーバーがこの端末の鍵を受け付けませんでした。"
+    case .refused(status: 401, _):
+      "サインインが切れました。もう一度 Apple でサインインしてください。文書はこの端末に残っています。"
+    case .refused(status: 402, _):
+      "プランの期限が切れているため、この端末の変更をサーバーに送れません。ほかの端末の変更は受け取ります。文書はこの端末に残っています。"
+    case .refused(status: 429, _):
+      "プランの上限に達したため、同期を止めました。1 日の回数の上限なら、日付が変わると（協定世界時の 0 時、日本時間の 9 時）また同期できます。容量の上限なら、文書を減らすか、上のプランに変えてください。文書はこの端末に残っています。"
     case .refused(let status, _):
       "サーバーが同期を断りました（\(status)）。"
     case .unexpectedAnswer:

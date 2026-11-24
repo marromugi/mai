@@ -31,8 +31,39 @@ struct AccountScreenTests {
     assertSyncSection(.signedIn, canSignIn: false)
   }
 
+  /// Signed in, before the first sync: how it went, and 「今すぐ同期」.
+  @Test func syncSectionSignedInBeforeTheFirstSync() {
+    assertSyncSection(.signedIn, canSignIn: true, syncStatus: .notYet)
+  }
+
+  @Test func syncSectionWhileSyncing() {
+    assertSyncSection(.signedIn, canSignIn: true, syncStatus: .syncing)
+  }
+
+  /// The plan's limit, said plainly under the row.
+  @Test func syncSectionStoppedByThePlansLimit() {
+    assertSyncSection(
+      .signedIn, canSignIn: true,
+      syncStatus: .stopped(ServerError.refused(status: 429, reason: "").localizedDescription))
+  }
+
+  @Test func syncSectionStoppedByALapsedPlanInDarkMode() {
+    assertSyncSection(
+      .signedIn, canSignIn: true,
+      syncStatus: .stopped(ServerError.refused(status: 402, reason: "").localizedDescription),
+      colorScheme: .dark)
+  }
+
+  /// The server ended the session: signed out, with why under the Apple button.
+  @Test func syncSectionAfterTheServerEndedTheSession() {
+    assertSyncSection(
+      .signedOut, canSignIn: true,
+      syncStatus: .sessionEnded(ServerError.refused(status: 401, reason: "").localizedDescription))
+  }
+
+  /// While the own key isn't here, nothing syncs and no sync row shows.
   @Test func syncSectionAsksForTheRecoveryKey() {
-    assertSyncSection(.recoveryKeyNeeded, canSignIn: true)
+    assertSyncSection(.recoveryKeyNeeded, canSignIn: true, syncStatus: .notYet)
   }
 
   @Test func syncSectionOffersSignInInDarkMode() {
@@ -95,6 +126,7 @@ struct AccountScreenTests {
 private func assertSyncSection(
   _ phase: AccountPhase,
   canSignIn: Bool,
+  syncStatus: WritingSync.Status? = nil,
   colorScheme: ColorScheme = .light,
   size: DynamicTypeSize = .large,
   testName: String = #function
@@ -106,10 +138,11 @@ private func assertSyncSection(
       } header: {
         Text("同期")
       } footer: {
-        Text("文書はこの端末の中に置かれます。ほかの端末とそろえるには、プランに入ります。")
+        Text(SettingsForm.syncFooter(phase))
       }
       AccountRows(
-        phase: phase, canSignIn: canSignIn, signIn: {}, signOut: {}, restore: { _ in nil })
+        phase: phase, canSignIn: canSignIn, signIn: {}, signOut: {}, restore: { _ in nil },
+        syncStatus: syncStatus)
     },
     title: "設定", colorScheme: colorScheme, size: size, testName: testName)
 }

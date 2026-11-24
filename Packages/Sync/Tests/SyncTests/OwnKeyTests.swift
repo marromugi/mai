@@ -27,11 +27,4 @@ struct OwnKeyTests {
     #expect(ownKey.check.count == 32)
     #expect(OwnKey.generate().check != ownKey.check)
   }
-
-  @Test func theAccessTokenIsDerivedFromTheKeyAndIsNotTheKey() throws {
-    let ownKey = try OwnKey(rawRepresentation: Data(0..<32))
-    #expect(ownKey.accessToken == "H2y3_e_IvcRnpXnK7EYlvzcWanK1Pu6Rr8N0ZpwgH-E")
-    #expect(ownKey.accessToken == (try OwnKey(rawRepresentation: Data(0..<32))).accessToken)
-    #expect(OwnKey.generate().accessToken != ownKey.accessToken)
-  }
 }

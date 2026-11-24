@@ -1,13 +1,17 @@
+import CryptoKit
 import Foundation
 import Sync
+import SyncFakes
+import Synchronization
 import Testing
 
 struct WritingServerTests {
   private let ownKey = OwnKey.generate()
+  private let token = "s1.session.token"
   private let fake: FakeWritingServer
 
   init() {
-    fake = FakeWritingServer(accepting: ownKey.accessToken)
+    fake = FakeWritingServer(accepting: token)
   }
 
   private func server(token: String? = nil, transport: (any HTTPTransport)? = nil) -> WritingServer
@@ -15,19 +19,53 @@ struct WritingServerTests {
     guard let url = URL(string: "https://fake.test") else {
       preconditionFailure("https://fake.test is a URL")
     }
-    return WritingServer(
-      url: url, accessToken: token ?? ownKey.accessToken, transport: transport ?? fake)
+    return WritingServer(url: url, token: token ?? self.token, transport: transport ?? fake)
   }
 
   @Test(arguments: ServerContract.allCases)
   func fakeAnswersAsTheWorkerDoes(_ contract: ServerContract) async throws {
     try await contract.check(
-      server: server(), stranger: server(token: OwnKey.generate().accessToken), ownKey: ownKey)
+      server: server(), stranger: server(token: "s1.stranger.token"), ownKey: ownKey)
   }
 
   @Test func twoDevicesSyncThroughTheFake() async throws {
     let server = server()
     try await TwoDevices(server: { server }, ownKey: ownKey).checkAWritingAndItsEditTravelBothWays()
+  }
+
+  /// The copy's ID is a version-8 UUID from the SHA-256 of the writing's ID, the edit's updated
+  /// time in milliseconds (big-endian), and its contents, so each edit's copy is its own.
+  @Test(arguments: [
+    (Data("c".utf8), 3_000.0), (Data("c".utf8), 3_000.001), (Data("d".utf8), 3_000.0),
+  ])
+  func aKeptBothCopysIDIsMadeFromTheEdit(contents: Data, secondsSince1970: Double) async throws {
+    let server = server()
+    let devices = try TwoDevices(server: { server }, ownKey: ownKey)
+    let id = UUID()
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 1_000), contents: Data("a".utf8)))
+    _ = try await devices.first.synchronizer.sync()
+    _ = try await devices.second.synchronizer.sync()
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 2_000), contents: Data("b".utf8)))
+    try devices.second.writings.save(
+      PlainWriting(
+        id: id, updated: .init(timeIntervalSince1970: secondsSince1970), contents: contents))
+    _ = try await devices.first.synchronizer.sync()
+    let report = try await devices.second.synchronizer.sync()
+
+    var hash = SHA256()
+    withUnsafeBytes(of: id.uuid) { hash.update(bufferPointer: $0) }
+    withUnsafeBytes(of: UInt64((secondsSince1970 * 1000).rounded()).bigEndian) {
+      hash.update(bufferPointer: $0)
+    }
+    hash.update(data: contents)
+    var bytes = Array(hash.finalize().prefix(16))
+    bytes[6] = bytes[6] & 0x0f | 0x80
+    bytes[8] = bytes[8] & 0x3f | 0x80
+    let expected = bytes.withUnsafeBytes { UUID(uuid: $0.load(as: uuid_t.self)) }
+    #expect(report.keptBoth[id] == expected)
+    #expect(Array(expected.uuidString)[14] == "8")
   }
 
   @Test func aWritingChangedOnBothDevicesIsKeptTwice() async throws {
@@ -193,10 +231,40 @@ struct WritingServerTests {
     #expect(Set(try await server().list().map(\.id)) == [small.id, foreign.id])
   }
 
-  @Test func aWritingRefusedForTheTokenStopsTheSync() async throws {
+  /// A lapsed plan refuses the device's saves (402) but still lets it read: the sync takes in
+  /// the other device's writings, and says which saves were refused.
+  @Test func aLapsedPlansRefusedSaveLeavesTheSyncTakingIn() async throws {
+    let refused = UUID()
+    let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
+    let theirs = PlainWriting(
+      id: UUID(), updated: .init(timeIntervalSince1970: 2_000), contents: Data("他".utf8))
+    try devices.second.writings.save(theirs)
+    _ = try await devices.second.synchronizer.sync()
+    let lapsed = Synchronizer(
+      writings: devices.first.writings,
+      stateFile: FileManager.default.temporaryDirectory.appending(
+        path: "mai-sync-tests-\(UUID().uuidString)/state.json"),
+      server: server(transport: Refusing(fake, saveOf: refused, with: 402)), ownKey: ownKey)
+    try devices.first.writings.save(
+      PlainWriting(id: refused, updated: .init(timeIntervalSince1970: 1_000), contents: Data()))
+
+    await #expect {
+      try await lapsed.sync()
+    } throws: { error in
+      guard let error = error as? SyncFailures,
+        case .refused(status: 402, _) = error.failures[refused] as? ServerError
+      else { return false }
+      return error.failures.count == 1 && error.report.received == [theirs.id]
+    }
+    #expect(try devices.first.writings.all().contains(theirs))
+  }
+
+  /// An ended session (401) and a plan's limit (429) are the account's.
+  @Test(arguments: [401, 429])
+  func aWritingRefusedForTheAccountStopsTheSync(status: Int) async throws {
     let refused = UUID()
     let device = try TwoDevices(
-      server: { server(transport: Refusing(fake, saveOf: refused, with: 401)) }, ownKey: ownKey
+      server: { server(transport: Refusing(fake, saveOf: refused, with: status)) }, ownKey: ownKey
     ).first
     try device.writings.save(
       PlainWriting(id: refused, updated: .init(timeIntervalSince1970: 1_000), contents: Data()))
@@ -204,7 +272,7 @@ struct WritingServerTests {
     await #expect {
       try await device.synchronizer.sync()
     } throws: { error in
-      guard case .refused(status: 401, _) = error as? ServerError else { return false }
+      guard case .refused(status, _) = error as? ServerError else { return false }
       return true
     }
   }
@@ -243,6 +311,73 @@ struct WritingServerTests {
       guard case ServerError.unexpectedAnswer = error else { return false }
       return true
     }
+  }
+
+  /// A writing changed on both sides is kept in one step of the store, which the app's store
+  /// refuses whole when the writing changed meanwhile.
+  @Test func keepingBothIsOneStepOfTheStore() async throws {
+    let id = UUID()
+    let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
+    let recording = KeepBothRecorder()
+    let synchronizer = Synchronizer(
+      writings: recording,
+      stateFile: FileManager.default.temporaryDirectory.appending(
+        path: "mai-sync-tests-\(UUID().uuidString)/state.json"),
+      server: server(), ownKey: ownKey)
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 1_000), contents: Data("a".utf8)))
+    _ = try await devices.first.synchronizer.sync()
+    _ = try await synchronizer.sync()
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 2_000), contents: Data("b".utf8)))
+    _ = try await devices.first.synchronizer.sync()
+    try recording.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 3_000), contents: Data("c".utf8)))
+
+    let report = try await synchronizer.sync()
+
+    let copy = try #require(report.keptBoth[id])
+    #expect(recording.keptBoth == [[id, copy]])
+  }
+
+  /// A writing edited on both sides whose server save this device's store refuses each time.
+  @Test func aWritingTheStoreRefusesKeepsTheDevicesEditOnceAndLeavesTheOthersToSync()
+    async throws
+  {
+    let id = UUID()
+    let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
+    let refusing = RefusingStore(refusing: Data("unreadable".utf8))
+    let synchronizer = Synchronizer(
+      writings: refusing,
+      stateFile: FileManager.default.temporaryDirectory.appending(
+        path: "mai-sync-tests-\(UUID().uuidString)/state.json"),
+      server: server(), ownKey: ownKey)
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 1_000), contents: Data("a".utf8)))
+    _ = try await devices.first.synchronizer.sync()
+    _ = try await synchronizer.sync()
+    try devices.first.writings.save(
+      PlainWriting(
+        id: id, updated: .init(timeIntervalSince1970: 2_000), contents: Data("unreadable".utf8)))
+    let other = PlainWriting(
+      id: UUID(), updated: .init(timeIntervalSince1970: 2_500), contents: Data("o".utf8))
+    try devices.first.writings.save(other)
+    _ = try await devices.first.synchronizer.sync()
+    let edit = PlainWriting(
+      id: id, updated: .init(timeIntervalSince1970: 3_000), contents: Data("c".utf8))
+    try refusing.save(edit)
+
+    for _ in 1...3 {
+      await #expect {
+        try await synchronizer.sync()
+      } throws: { error in
+        (error as? SyncFailures)?.failures.keys.sorted() == [id]
+      }
+    }
+
+    let kept = try refusing.all()
+    #expect(kept.filter { $0.contents == edit.contents }.count == 2)
+    #expect(kept.contains(other))
   }
 }
 
@@ -361,5 +496,50 @@ private struct Refusing: HTTPTransport {
         url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])
     else { return try await next.send(request) }
     return (Data(#"{"error":"refused"}"#.utf8), response)
+  }
+}
+
+/// Keeps writings in memory, and each pair `keepBoth` was asked to keep: the writing's ID, then
+/// its copy's.
+private final class KeepBothRecorder: PlainWritingStore {
+  private let writings = MemoryWritingStore()
+  private let kept = Mutex<[[UUID]]>([])
+
+  var keptBoth: [[UUID]] { kept.withLock { $0 } }
+
+  func all() throws -> [PlainWriting] {
+    try writings.all()
+  }
+
+  func save(_ writing: PlainWriting) throws {
+    try writings.save(writing)
+  }
+
+  func keepBoth(_ received: PlainWriting, copy: PlainWriting) throws {
+    kept.withLock { $0.append([received.id, copy.id]) }
+    try writings.save(copy)
+    try writings.save(received)
+  }
+}
+
+/// Keeps writings in memory, but refuses to save any with `refused` contents, as the app's store
+/// refuses contents that aren't a writing's.
+private final class RefusingStore: PlainWritingStore {
+  struct Refused: OneWritingFailure {}
+
+  private let refused: Data
+  private let writings = MemoryWritingStore()
+
+  init(refusing refused: Data) {
+    self.refused = refused
+  }
+
+  func all() throws -> [PlainWriting] {
+    try writings.all()
+  }
+
+  func save(_ writing: PlainWriting) throws {
+    guard writing.contents != refused else { throw Refused() }
+    try writings.save(writing)
   }
 }

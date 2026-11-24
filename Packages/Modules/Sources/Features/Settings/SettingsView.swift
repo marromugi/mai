@@ -59,6 +59,7 @@ struct SettingsForm: View {
   let fonts: FontLibrary
   @Binding var theme: ColorTheme
   @Environment(\.account) private var account
+  @Environment(\.writingSync) private var sync
 
   var body: some View {
     Form {
@@ -102,12 +103,19 @@ struct SettingsForm: View {
       } header: {
         Text("同期")
       } footer: {
-        Text("文書はこの端末の中に置かれます。ほかの端末とそろえるには、プランに入ります。")
+        Text(Self.syncFooter(account?.phase))
       }
       if let account {
-        AccountSection(account: account)
+        AccountSection(account: account, sync: sync)
       }
     }
+  }
+
+  /// Where the writings are kept, as the 「同期」 section says it for the account at `phase`.
+  static func syncFooter(_ phase: AccountPhase?) -> LocalizedStringKey {
+    phase == .signedIn
+      ? "文書はこの端末に置き、暗号化して、サインインした端末どうしでそろえます。"
+      : "文書はこの端末の中に置かれます。ほかの端末とそろえるには、プランに入ります。"
   }
 
   static let sample = "朝の光が机に届くころ、書きかけの文章をもう一度読み返す。"

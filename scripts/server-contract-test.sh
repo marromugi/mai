@@ -1,7 +1,8 @@
 #!/bin/bash
-# Runs the server contract (Packages/Sync, ServerContract), two devices syncing, and signing in
-# (AccountContractTests) on the Worker in Server/ under wrangler dev, against a local libSQL server
-# (turso dev) on a new database. The Worker is the one with the stand-in Apple
+# Runs the server contract (Packages/Sync, ServerContract), two devices syncing, signing in
+# (AccountContractTests), and two signed-in devices of one account syncing
+# (AccountSyncContractTests) on the Worker in Server/ under wrangler dev, against a local libSQL
+# server (turso dev) on a new database. The Worker is the one with the stand-in Apple
 # (Server/test/stand-in-apple.ts), since signing in needs Apple's signatures. The writing contracts
 # each run as an account of its own, since syncing takes in every writing of the account; the
 # servers are stopped and the database removed afterwards.
@@ -58,4 +59,4 @@ run_as() {
 run_as "$contract_token" "ContractTests/workerKeepsTheContract"
 run_as "$two_devices_token" "ContractTests/twoDevicesSyncThroughTheWorker"
 MAI_SERVER_URL="http://127.0.0.1:$port" swift test --package-path "$root/Packages/Sync" \
-  --filter AccountContractTests
+  --filter "AccountContractTests|AccountSyncContractTests"

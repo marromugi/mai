@@ -97,4 +97,9 @@ extension UUID {
     else { preconditionFailure("\(number) doesn't fit in a sample ID.") }
     self = uuid
   }
+
+  /// Whether this is an ID `init(sample:)` makes. A made ID is never one: its version digit is 4.
+  nonisolated var isSample: Bool {
+    uuidString.hasPrefix("00000000-0000-0000-0000-")
+  }
 }

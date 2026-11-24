@@ -1,5 +1,6 @@
 import Foundation
 import Sync
+import SyncFakes
 import Testing
 
 /// `SyncAccount`'s branches the Worker can't easily be made to take: answers it gives only when
@@ -211,5 +212,32 @@ struct SyncAccountTests {
   ])
   func tellsAPersonWhatWentWrong(_ error: AccountError, _ message: String) {
     #expect(error.localizedDescription == message)
+  }
+
+  /// The sync sends the session's token and keeps its state in a file named by the account, so
+  /// each account syncs from its own record.
+  @Test func aSyncRunsWithTheSessionAndKeepsTheAccountsOwnState() async throws {
+    let ownKey = OwnKey.generate()
+    let fake = FakeWritingServer(accepting: session.token)
+    let account = SyncAccount(
+      server: AccountServer(url: try #require(URL(string: "https://worker.test")), transport: fake),
+      apple: ScriptedApple(), purchases: ScriptedApple(), sessions: sessions,
+      ownKeys: MemoryOwnKeys(ownKey))
+    try sessions.save(session)
+    let keys = try #require(try account.syncKeys())
+    #expect(keys.session == session)
+    #expect(keys.ownKey == ownKey)
+    let directory = FileManager.default.temporaryDirectory.appending(
+      path: "mai-sync-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    let writings = MemoryWritingStore()
+    try writings.save(
+      PlainWriting(id: UUID(), updated: .init(timeIntervalSince1970: 1_000), contents: Data()))
+
+    let synchronizer = account.synchronizer(
+      writings: writings, stateDirectory: directory, keys: keys)
+    #expect(try await synchronizer.sync().sent.count == 1)
+    #expect(
+      try FileManager.default.contentsOfDirectory(atPath: directory.path())
+        == ["\(session.account.uuidString.lowercased()).json"])
   }
 }

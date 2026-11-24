@@ -1,9 +1,11 @@
 import Foundation
 import Sync
+import SyncFakes
 import Testing
 
 struct SealingTests {
   private let ownKey = OwnKey.generate()
+  private let token = "s1.session.token"
 
   private static let title = "誰にも見せない題"
   private static let body = "まだ誰にも話していない、夜の机で書いた本文。"
@@ -14,9 +16,9 @@ struct SealingTests {
   /// Saves `writing` twice through the synchronizer, unchanged but for its updated time, and
   /// gives back every request the server was sent.
   private func interceptTwoSaves() async throws -> (all: [URLRequest], saves: [Data]) {
-    let fake = FakeWritingServer(accepting: ownKey.accessToken)
+    let fake = FakeWritingServer(accepting: token)
     let server = try WritingServer(
-      url: #require(URL(string: "https://fake.test")), accessToken: ownKey.accessToken,
+      url: #require(URL(string: "https://fake.test")), token: token,
       transport: fake)
     let device = try TwoDevices(server: { server }, ownKey: ownKey).first
     try device.writings.save(Self.writing)
@@ -172,7 +174,7 @@ struct SealingTests {
   private func bytes(of sealed: Sealed) async throws -> Data {
     let fake = FakeWritingServer(accepting: "t")
     let server = try WritingServer(
-      url: #require(URL(string: "https://fake.test")), accessToken: "t", transport: fake)
+      url: #require(URL(string: "https://fake.test")), token: "t", transport: fake)
     _ = try await server.save(sealed, over: nil)
     return try #require(await fake.requests.last?.httpBody)
   }

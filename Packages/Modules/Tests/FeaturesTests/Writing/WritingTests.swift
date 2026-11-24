@@ -267,9 +267,10 @@ struct WritingTests {
       let writing = Writing(title: "朝", body: "本文", updated: Date(timeIntervalSince1970: 1))
       try store.save(writing)
       var writings = [writing]
-      try store.edit(writing.id, in: &writings, at: Date(timeIntervalSince1970: 2)) {
-        $0.title = "夜"
-      }
+      #expect(
+        try store.edit(writing.id, in: &writings, at: Date(timeIntervalSince1970: 2)) {
+          $0.title = "夜"
+        })
       let expected = Writing(
         id: writing.id, title: "夜", body: "本文", updated: Date(timeIntervalSince1970: 2))
       #expect(writings == [expected])
@@ -280,7 +281,7 @@ struct WritingTests {
   @Test func anEditThatChangesNothingIsNotSaved() throws {
     let store = RefusingStore()
     var writings = [Writing(title: "朝", body: "本文")]
-    try store.edit(writings[0].id, in: &writings, at: .now) { $0.body = "本文" }
+    #expect(try !store.edit(writings[0].id, in: &writings, at: .now) { $0.body = "本文" })
   }
 
   /// A save that fails throws, and the writings still hold the edit.

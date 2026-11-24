@@ -30,6 +30,7 @@ let package = Package(
         "Features",
         .product(name: "Typesetting", package: "Typesetting"),
         .product(name: "Sync", package: "Sync"),
+        .product(name: "SyncFakes", package: "Sync"),
         .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
       ],
       exclude: ["Shared/Fonts/Fixtures"],

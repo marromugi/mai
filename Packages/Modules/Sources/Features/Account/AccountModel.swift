@@ -22,16 +22,32 @@ enum AccountPhase: Equatable {
 @Observable public final class AccountModel {
   private let account: SyncAccount
   let kept: KeptAccountID
-  private(set) var phase = AccountPhase.signedOut
+  private(set) var phase = AccountPhase.signedOut {
+    didSet {
+      if phase != .signedIn {
+        ownKeySettled = false
+      }
+    }
+  }
+  /// Whether the own key on the device was found to be the account's since the device last
+  /// became signed in. A sync waits for it.
+  private var ownKeySettled = false
   /// The recovery key of the own key just made, until the person says it is written down.
   private(set) var recoveryKeyToShow: RecoveryKey?
   /// What went wrong, written for a person, until it is dismissed.
   var problem: String?
   private var settling = false
+  /// Where each account's sync keeps what it last synced.
+  @ObservationIgnored private let syncState: URL
 
-  init(account: SyncAccount, kept: KeptAccountID = .standard) {
+  init(
+    account: SyncAccount, kept: KeptAccountID = .standard,
+    syncState: URL = .applicationSupportDirectory.appending(
+      path: "Sync", directoryHint: .isDirectory)
+  ) {
     self.account = account
     self.kept = kept
+    self.syncState = syncState
   }
 
   /// Signs in to the Worker at `server` with Apple and the App Store, keeping the session and the
@@ -188,12 +204,39 @@ enum AccountPhase: Equatable {
     }
   }
 
+  /// What a sync of the writings runs with: the session and the account's own key. Settles the own
+  /// key first when it hasn't been since the device became signed in, as when the account's
+  /// settings are shown. Nil while signed out, while the own key isn't the account's, or while
+  /// another settling runs.
+  func syncKeys() async throws(AccountError) -> SyncKeys? {
+    guard phase == .signedIn else { return nil }
+    if !ownKeySettled {
+      guard !settling else { return nil }
+      settling = true
+      defer { settling = false }
+      guard let session = try account.session() else {
+        phase = .signedOut
+        return nil
+      }
+      try await settle(session)
+    }
+    guard phase == .signedIn else { return nil }
+    return try account.syncKeys()
+  }
+
+  /// Syncs `writings` with the account's, sealed with `keys.ownKey`.
+  func synchronizer(for writings: any PlainWritingStore, keys: SyncKeys) -> Synchronizer {
+    account.synchronizer(writings: writings, stateDirectory: syncState, keys: keys)
+  }
+
   private func settle(_ session: Session) async throws(AccountError) {
     switch try await account.settleOwnKey(session) {
     case .ready:
       phase = .signedIn
+      ownKeySettled = true
     case .made(let recoveryKey):
       phase = .signedIn
+      ownKeySettled = true
       recoveryKeyToShow = recoveryKey
     case .recoveryKeyNeeded:
       phase = .recoveryKeyNeeded

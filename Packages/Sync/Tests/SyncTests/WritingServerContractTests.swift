@@ -17,7 +17,7 @@ struct WritingServerContractTests {
 
   private func server(token: String) throws -> WritingServer {
     try WritingServer(
-      url: #require(url, "MAI_SERVER_URL names the local Worker"), accessToken: token)
+      url: #require(url, "MAI_SERVER_URL names the local Worker"), token: token)
   }
 
   @Test(arguments: ServerContract.allCases)

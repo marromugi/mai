@@ -1,13 +1,13 @@
 import Foundation
 
 /// Where writings are kept. Saving a writing replaces the one with its ID.
-protocol WritingStore {
+nonisolated protocol WritingStore: Sendable {
   /// Every writing kept, in no particular order.
   func all() throws -> [Writing]
   func save(_ writing: Writing) throws
 }
 
-extension WritingStore {
+nonisolated extension WritingStore {
   /// Every writing kept, with `samples` saved first when none are.
   /// Stand-in until writings can be made.
   func all(seedingWhenEmpty samples: [Writing]) throws -> [Writing] {
@@ -20,21 +20,23 @@ extension WritingStore {
   }
 }
 
-extension WritingStore {
+nonisolated extension WritingStore {
   /// Makes `change` to the writing with `id` in `writings`, updated `now`, and saves it; saves
-  /// nothing when the change leaves it as it was. `writings` holds the edit even when the save
-  /// throws.
+  /// nothing, and answers false, when the change leaves it as it was. `writings` holds the edit
+  /// even when the save throws.
+  @discardableResult
   func edit(
     _ id: Writing.ID, in writings: inout [Writing], at now: Date,
     _ change: (inout Writing) -> Void
-  ) throws {
-    guard let edited = writings.edit(id, at: now, change) else { return }
+  ) throws -> Bool {
+    guard let edited = writings.edit(id, at: now, change) else { return false }
     try save(edited)
+    return true
   }
 }
 
 /// Each writing as a JSON file of its own in `directory`, named by its ID.
-struct FileWritingStore: WritingStore {
+nonisolated struct FileWritingStore: WritingStore {
   let directory: URL
 
   /// The store in the app's Application Support directory.
@@ -75,7 +77,7 @@ struct FileWritingStore: WritingStore {
 }
 
 /// A file in the store that doesn't hold a writing.
-struct UnreadableWriting: LocalizedError {
+nonisolated struct UnreadableWriting: LocalizedError {
   let file: URL
   let reason: any Error
 
@@ -86,7 +88,7 @@ struct UnreadableWriting: LocalizedError {
 
 /// A file holding a writing whose ID is not the file's name, so saving that writing would not
 /// replace it.
-struct MisnamedWriting: LocalizedError {
+nonisolated struct MisnamedWriting: LocalizedError {
   let id: Writing.ID
 
   var errorDescription: String? {
