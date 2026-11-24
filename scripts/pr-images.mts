@@ -33,9 +33,12 @@ function say(stream: NodeJS.WriteStream, line: string): void {
 
 function imageURLs(text: string): URL[] {
   const found: URL[] = [];
-  const pattern = /!\[[^\]]*\]\(\s*<?([^)\s>]+)>?[^)]*\)|<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
+  const markdown = String.raw`!\[(?:[^\[\]]|\[[^\]]*\])*\]\(\s*(?:<([^>]+)>|([^)\s]+))`;
+  const img = String.raw`<img\b[^>]*?(?<![\w-])src\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))`;
+  const bare = String.raw`^[ \t]*(https://github\.com/user-attachments/assets/\S+)[ \t]*$`;
+  const pattern = new RegExp(`${markdown}|${img}|${bare}`, "gim");
   for (const match of text.matchAll(pattern)) {
-    const raw = match[1] ?? match[2];
+    const raw = match.slice(1).find((group) => group !== undefined) ?? "";
     if (!URL.canParse(raw)) continue;
     const url = new URL(raw);
     if (url.protocol === "https:") found.push(url);
@@ -52,10 +55,20 @@ async function sources(pr: string): Promise<Source[]> {
     comments: { body: string }[];
     reviews: { body: string }[];
   };
+  const inline = await run(
+    "gh",
+    ["api", `repos/{owner}/{repo}/pulls/${pr}/comments`, "--paginate", "--jq", ".[].body | @json"],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+  const lineComments = inline.stdout
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line) as string);
   return [
     { label: "body", text: view.body },
     ...view.comments.map((c, i) => ({ label: `comment ${i + 1}`, text: c.body })),
     ...view.reviews.map((r, i) => ({ label: `review ${i + 1}`, text: r.body })),
+    ...lineComments.map((body, i) => ({ label: `line comment ${i + 1}`, text: body })),
   ];
 }
 

@@ -21,9 +21,11 @@ const view = {
     { body: "no images here" },
     { body: "![leaky](https://github.com/user-attachments/assets/leaky)" },
     { body: "![elsewhere](https://images.example.com/three.png) http://github.com/plain.png" },
+    { body: "![a [b] c](<https://images.example.com/four.png>)\n<img data-src=\"https://wrong.example.com/x\" src=https://images.example.com/five.png>" },
   ],
   reviews: [{ body: `![token in a name](https://github.com/user-attachments/assets/${token})` }],
 };
+const lineComments = ["see\nhttps://github.com/user-attachments/assets/six\n"];
 
 // Every request is appended to requests.jsonl with the Authorization header it carried. `leaky`
 // fails with the header in its message, as a library that echoes a request might.
@@ -37,8 +39,10 @@ globalThis.fetch = async (input, init = {}) => {
   appendFileSync(log, JSON.stringify({ url: url.href, authorization }) + "\\n");
   if (url.pathname.endsWith("/leaky")) throw new Error("request failed: " + authorization);
   if (url.origin === "https://github.com") {
-    const id = url.pathname.split("/").pop();
-    return new Response(null, { status: 302, headers: { location: "https://objects.example.com/" + id + "?sig=x" } });
+    const location = "https://objects.example.com/" + url.pathname.split("/").pop() + "?sig=x";
+    // A fetch left to follow redirects itself is taken to keep its headers.
+    if (init.redirect !== "manual") return globalThis.fetch(location, init);
+    return new Response(null, { status: 302, headers: { location } });
   }
   return new Response(png, { status: 200, headers: { "content-type": "image/png" } });
 };
@@ -47,6 +51,7 @@ globalThis.fetch = async (input, init = {}) => {
 const fakeGh = `#!/bin/sh
 if [ "$1 $2" = "auth token" ]; then echo "${token}"; exit 0; fi
 if [ "$1 $2" = "pr view" ]; then cat "$GH_VIEW"; exit 0; fi
+if [ "$1" = "api" ]; then cat "$GH_LINE_COMMENTS"; exit 0; fi
 exit 1
 `;
 
@@ -59,6 +64,7 @@ test("downloads every image and never shows the token", async (t) => {
   await writeFile(join(bin, "gh"), fakeGh);
   await chmod(join(bin, "gh"), 0o755);
   await writeFile(join(work, "view.json"), JSON.stringify(view));
+  await writeFile(join(work, "lines.txt"), lineComments.map((body) => JSON.stringify(body) + "\n").join(""));
   await writeFile(join(work, "stub.mjs"), stub);
 
   const result = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
@@ -71,6 +77,7 @@ test("downloads every image and never shows the token", async (t) => {
           PATH: `${bin}:${process.env.PATH}`,
           TMPDIR: out,
           GH_VIEW: join(work, "view.json"),
+          GH_LINE_COMMENTS: join(work, "lines.txt"),
           STUB_LOG: join(work, "requests.jsonl"),
         },
       },
@@ -87,7 +94,15 @@ test("downloads every image and never shows the token", async (t) => {
   const saved = result.stdout.trim().split("\n");
   assert.deepEqual(
     saved.map((line) => line.split(": ")[0]),
-    ["body image 1", "body image 2", "comment 3 image 1", "review 1 image 1"],
+    [
+      "body image 1",
+      "body image 2",
+      "comment 3 image 1",
+      "comment 4 image 1",
+      "comment 4 image 2",
+      "review 1 image 1",
+      "line comment 1 image 1",
+    ],
   );
 
   const folders = await readdir(out);
@@ -109,4 +124,5 @@ test("downloads every image and never shows the token", async (t) => {
     assert.equal(request.authorization, toGitHub ? `Bearer ${token}` : null, request.url);
   }
   assert.ok(!requests.some((r) => r.url.startsWith("http://")), "a plain http URL was fetched");
+  assert.ok(!requests.some((r) => r.url.includes("wrong.example.com")), "data-src was taken for src");
 });
