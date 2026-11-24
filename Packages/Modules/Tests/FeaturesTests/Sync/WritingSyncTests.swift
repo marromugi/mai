@@ -29,7 +29,8 @@ struct WritingSyncTests {
     _ kept: [Writing] = [], signedIn: Bool = true, server: FakeWritingServer? = nil,
     deviceKey: OwnKey? = nil, refusingWritings: Int? = nil, holdingFirstListing: Bool = false,
     pause: Duration = .zero,
-    interval: Duration = .zero, deletion: ScriptedWorker.Answer? = nil
+    interval: Duration = .zero, deletion: ScriptedWorker.Answer? = nil,
+    startOver: ScriptedWorker.Answer? = nil
   ) throws -> Device {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defaults.removePersistentDomain(forName: suite)
@@ -50,6 +51,7 @@ struct WritingSyncTests {
       "POST /account": [.status(201, json: #"{"token":"\#(token)"}"#)],
     ]
     answers["DELETE /account"] = deletion.map { [$0] }
+    answers["PUT /account/own-key-check"] = startOver.map { [$0] }
     let sent = Requests(
       writings: server ?? FakeWritingServer(accepting: token), account: ScriptedWorker(answers),
       refusing: refusingWritings, holdingFirstListing: holdingFirstListing)
@@ -421,6 +423,25 @@ struct WritingSyncTests {
       Issue.record("the sync ran: \(device.sync.status)")
       return
     }
+  }
+
+  /// The account's key is lost with its recovery key: starting over makes the device's key the
+  /// account's, sends the writings sealed with it at once, then reads what the account uses.
+  @Test func startingOverSyncsAndReadsTheAccount() async throws {
+    let deviceKey = OwnKey.generate()
+    let device = try device(
+      [writing("朝", at: 1_000)], deviceKey: deviceKey, startOver: .status(204))
+    await device.account.checkAtLaunch()
+    await device.sync.syncNow()
+    #expect(device.account.phase == .recoveryKeyNeeded)
+
+    await device.sync.startOver()
+
+    #expect(device.account.phase == .signedIn)
+    #expect(device.account.recoveryKeyToShow == RecoveryKey(deviceKey))
+    #expect(device.sent.listings == 1)
+    let routes = device.sent.all.map { "\($0.httpMethod ?? "GET") \($0.url?.path() ?? "")" }
+    #expect(routes.last == "GET /account")
   }
 
   /// Any other failure is shown, and an edit still sets the next sync.

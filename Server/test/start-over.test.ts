@@ -251,6 +251,20 @@ describe("PUT /account/own-key-check with Mai-Replaces-Own-Key-Check", () => {
     expect(await countOf("writings", account.account)).toBe(1);
   });
 
+  it("changes nothing for a session past its life", async () => {
+    const now = Date.now();
+    const account = await filledAccount(now);
+    const answer = await startOver(account.token, hex(check), now + 181 * day);
+    expect(answer.status).toBe(401);
+    const { rows } = await database.execute({
+      sql: "SELECT own_key_check FROM accounts WHERE id = ?",
+      args: [account.account],
+    });
+    const kept = rows[0]?.["own_key_check"];
+    expect(kept instanceof ArrayBuffer && hex(new Uint8Array(kept))).toBe(hex(check));
+    expect(await countOf("writings", account.account)).toBe(1);
+  });
+
   it("needs a live session", async () => {
     const { token } = await newSessionToken();
     expect((await startOver(token)).status).toBe(401);

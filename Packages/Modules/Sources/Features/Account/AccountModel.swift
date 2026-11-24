@@ -322,7 +322,6 @@ enum AccountPhase: Equatable {
     kept.forget()
     canSignIn = false
     recoveryKeyToShow = nil
-    startedOver.forget()
     phase = .signedOut
   }
 
