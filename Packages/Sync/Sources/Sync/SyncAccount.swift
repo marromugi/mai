@@ -27,6 +27,12 @@ public enum AccountCheck: Sendable, Equatable {
   case subscriptionsSent(Int)
 }
 
+/// The session and the own key a sync runs with.
+public struct SyncKeys: Sendable, Equatable {
+  public let session: Session
+  public let ownKey: OwnKey
+}
+
 /// The account a plan pays for, from this device: signing in after a purchase, the own key, the
 /// check at each launch, and signing out (#22's design, §1 and §3).
 public struct SyncAccount: Sendable {
@@ -179,6 +185,30 @@ public struct SyncAccount: Sendable {
       sent += 1
     }
     return .subscriptionsSent(sent)
+  }
+
+  /// What a sync of the account's writings runs with: the session and the own key kept on the
+  /// device; nil while either is missing. Whether the key is the account's is `settleOwnKey`'s.
+  public func syncKeys() throws(AccountError) -> SyncKeys? {
+    guard let session = try session(),
+      let ownKey = try keychain({ () throws(KeychainError) in try ownKeys.load() })
+    else { return nil }
+    return SyncKeys(session: session, ownKey: ownKey)
+  }
+
+  /// Syncs `writings` with the account's writings on the server, sealed with `keys.ownKey`. Its
+  /// state is kept in `stateDirectory`, one file per account. Syncs run one after the other only
+  /// on the same `Synchronizer`, so one is kept per `SyncKeys`.
+  public func synchronizer(
+    writings: any PlainWritingStore, stateDirectory: URL, keys: SyncKeys
+  ) -> Synchronizer {
+    Synchronizer(
+      writings: writings,
+      stateFile: stateDirectory.appending(
+        path: "\(keys.session.account.uuidString.lowercased()).json", directoryHint: .notDirectory),
+      server: WritingServer(
+        url: server.url, token: keys.session.token, transport: server.transport),
+      ownKey: keys.ownKey)
   }
 
   /// Ends the session on the server, then on the device. Kept when the server can't be reached,

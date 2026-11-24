@@ -171,8 +171,12 @@ public enum ServerError: LocalizedError {
     switch self {
     case .unreachable:
       "サーバーにつながりませんでした。ネットワークを確かめて、もう一度同期してください。"
-    case .refused(let status, _) where status == 401:
-      "サーバーがこの端末の鍵を受け付けませんでした。"
+    case .refused(status: 401, _):
+      "サインインが切れています。設定の「同期」から、もう一度サインインしてください。"
+    case .refused(status: 402, _):
+      "プランの期限が切れているため、変更をサーバーに送れません。文書はこの端末に残っています。"
+    case .refused(status: 429, _):
+      "プランの上限に達したため、同期を止めました。1 日の回数の上限なら、日付が変わると（協定世界時の 0 時、日本時間の 9 時）また同期できます。容量の上限なら、文書を減らすか、上のプランに変えてください。文書はこの端末に残っています。"
     case .refused(let status, _):
       "サーバーが同期を断りました（\(status)）。"
     case .unexpectedAnswer:
