@@ -25,6 +25,15 @@ public struct OwnKey: Sendable, Equatable {
     key.withUnsafeBytes { Data($0) }
   }
 
+  /// The account's own key check (`PUT /account/own-key-check`): the SHA-256 of a value derived
+  /// one way from the key, so the server can tell one own key from another and learns nothing of
+  /// either.
+  public var check: Data {
+    let derived = HKDF<SHA256>.deriveKey(
+      inputKeyMaterial: key, info: Data("mai own key check".utf8), outputByteCount: 32)
+    return Data(derived.withUnsafeBytes { SHA256.hash(data: $0) })
+  }
+
   /// What the server is shown to let this user in. It is derived one way from the own key, so the
   /// server, which keeps only its SHA-256, learns nothing of the key.
   public var accessToken: String {

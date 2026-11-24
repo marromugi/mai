@@ -14,6 +14,7 @@ struct PlansView: View {
   @State private var bought: PlanOffer?
   @State private var notice: PlanNotice?
   @Environment(\.purchase) private var purchase
+  @Environment(\.account) private var account
 
   var body: some View {
     Group {
@@ -25,7 +26,10 @@ struct PlansView: View {
       case .success(let products):
         let offers = PlanOffer.all(in: products)
         if let bought {
-          PlanBought(offer: bought)
+          PlanBought(
+            offer: bought, phase: account?.phase,
+            signIn: { Task { await account?.signIn() } },
+            restore: { await account?.restore(from: $0) })
         } else if offers.isEmpty {
           PlansUnavailable(reason: "App Store にプランが見つかりませんでした。") { attempt += 1 }
         } else {
@@ -69,6 +73,7 @@ struct PlansView: View {
       {
       case .bought:
         bought = offer
+        await account?.refresh()
       case .waiting:
         notice = .waiting
       case .cancelled:
@@ -133,14 +138,46 @@ struct PlansUnavailable: View {
   }
 }
 
-/// Shown in place of the plans once `offer` is bought.
+/// Shown in place of the plans once `offer` is bought. Where there is an account to sign in to,
+/// its `phase` leads on to signing in with `signIn`, or to the recovery key with `restore`.
 struct PlanBought: View {
   let offer: PlanOffer
+  var phase: AccountPhase?
+  var signIn: () -> Void = {}
+  var restore: (String) async -> String? = { _ in nil }
 
   var body: some View {
-    ContentUnavailableView(
-      "\(offer.plan.name)に入りました", systemImage: "checkmark.circle",
-      description: Text("月 \(offer.price) の購読です。"))
+    ContentUnavailableView {
+      Label("\(offer.plan.name)に入りました", systemImage: "checkmark.circle")
+    } description: {
+      Text(description)
+    } actions: {
+      switch phase {
+      case nil, .signedIn:
+        EmptyView()
+      case .signedOut:
+        AppleSignInButton(action: signIn)
+          .frame(maxWidth: 320)
+      case .working:
+        ProgressView()
+      case .recoveryKeyNeeded:
+        NavigationLink("リカバリーキーを入力") {
+          RecoveryKeyEntryView(restore: restore)
+        }
+        .buttonStyle(.borderedProminent)
+      }
+    }
+  }
+
+  private var description: String {
+    let paid = "月 \(offer.price) の購読です。"
+    return switch phase {
+    case nil: paid
+    case .signedOut, .working: "\(paid)Apple でサインインすると、同期のアカウントができます。"
+    case .signedIn: "\(paid)Apple でサインインしました。"
+    case .recoveryKeyNeeded:
+      "\(paid)このアカウントの自分の鍵が、この端末にありません。書き留めたリカバリーキーを入力してください。"
+    }
   }
 }
 

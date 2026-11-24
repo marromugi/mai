@@ -13,11 +13,15 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", exact: "1.19.7"),
     .package(path: "../Typesetting"),
+    .package(path: "../Sync"),
   ],
   targets: [
     .target(
       name: "Features",
-      dependencies: [.product(name: "Typesetting", package: "Typesetting")],
+      dependencies: [
+        .product(name: "Typesetting", package: "Typesetting"),
+        .product(name: "Sync", package: "Sync"),
+      ],
       resources: [.copy("Resources/Fonts"), .process("Resources/Icons.xcassets")],
       swiftSettings: mainActor),
     .testTarget(
@@ -25,6 +29,7 @@ let package = Package(
       dependencies: [
         "Features",
         .product(name: "Typesetting", package: "Typesetting"),
+        .product(name: "Sync", package: "Sync"),
         .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
       ],
       exclude: ["Shared/Fonts/Fixtures"],

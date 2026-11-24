@@ -32,6 +32,21 @@ struct OwnKeyKeychainTests {
     #expect(try keychain.load() == first)
   }
 
+  @Test func replacesAKeptKeyOnlyWhenToldTo() throws {
+    defer { remove() }
+    try keychain.save(OwnKey.generate())
+    let restored = OwnKey.generate()
+    try keychain.replace(with: restored)
+    #expect(try keychain.load() == restored)
+  }
+
+  @Test func replacingWithNoKeyKeptKeepsTheKey() throws {
+    defer { remove() }
+    let restored = OwnKey.generate()
+    try keychain.replace(with: restored)
+    #expect(try keychain.load() == restored)
+  }
+
   @Test func keepsTheKeyForICloudKeychainToCarry() throws {
     defer { remove() }
     try keychain.save(OwnKey.generate())

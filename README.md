@@ -14,7 +14,7 @@ open Mai.xcodeproj
 
 Xcode から実行したアプリは、同期のプランを App Store ではなく `StoreKit/Mai.storekit` から読み、購入もそこで済ませる(`Mai` スキームの StoreKit Configuration)。
 
-コードは `Packages/Modules` のローカルパッケージに置き、`App/` はアプリの入り口だけを持つ。UIKit と SwiftUI を使わない文字組みの計算(文字の大きさ、行の高さ、余白、版面など)は `Packages/Typesetting` に置き、`Packages/Modules` がそれを使う。文書の暗号化と同期は `Packages/Sync` に、同期先のサーバー(Cloudflare Worker)は `Server/` に置く(`Server/README.md`)。
+コードは `Packages/Modules` のローカルパッケージに置き、`App/` はアプリの入り口だけを持つ。UIKit と SwiftUI を使わない文字組みの計算(文字の大きさ、行の高さ、余白、版面など)は `Packages/Typesetting` に置き、`Packages/Modules` がそれを使う。文書の暗号化と同期、同期のアカウント(Apple でのサインイン、セッション、自分の鍵)のクライアントは `Packages/Sync` に置き、`Packages/Modules` がそれを使う。同期先のサーバー(Cloudflare Worker)は `Server/` に置く(`Server/README.md`)。
 
 ## テスト
 
@@ -24,7 +24,7 @@ Xcode から実行したアプリは、同期のプランを App Store ではな
 swift test --package-path Packages/Typesetting
 ```
 
-`Packages/Sync` のテストも Mac で走る。名前に `Contract` の付くテストは手元の Worker が要るので外し、`scripts/server-contract-test.sh` で走らせる(`Server/README.md`)。
+`Packages/Sync` のテストも Mac で走る。名前に `Contract` の付くテスト(文書の同期と、Apple でのサインイン・自分の鍵)は手元の Worker が要るので外し、`scripts/server-contract-test.sh` で走らせる(`Server/README.md`)。
 
 ```sh
 swift test --package-path Packages/Sync --skip Contract

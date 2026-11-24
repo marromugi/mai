@@ -24,6 +24,10 @@ targets:
     platform: iOS
     sources:
       - App
+    entitlements:
+      path: App/Mai.entitlements
+      properties:
+        com.apple.developer.applesignin: [Default]
     dependencies:
       - package: Modules
         product: Features

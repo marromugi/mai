@@ -28,7 +28,7 @@
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /challenges`                  | 201 と `{"challenge"}`。5 分使える。アプリはその SHA-256(小文字の 16 進)を Sign in with Apple の nonce にする                                                                                                                                                                                                                                                                                                                                                        |
 | `POST /account`                     | `{"account", "challenge", "identityToken", "authorizationCode", "transaction"}`。`account` はアプリが作った UUID で、購入の `appAccountToken` と同じもの。`transaction` はそのアカウントのために買った購読の StoreKit 2 の取引(`Transaction.jwsRepresentation`)。201 と `{"token"}`(セッションのトークン)。その Apple の利用者かその ID のアカウントがもうあれば 409 で、アカウントもセッションも作らない(サインインは `POST /sessions`)。取引の断り方は下の「購読」 |
-| `POST /sessions`                    | `{"challenge", "identityToken"}`。200 と `{"account", "token"}`。その Apple の利用者のアカウントがなければ 404                                                                                                                                                                                                                                                                                                                                                       |
+| `POST /sessions`                    | `{"challenge", "identityToken"}`(アプリは `authorizationCode` も送るが、サーバーはまだ読まない)。200 と `{"account", "token"}`。その Apple の利用者のアカウントがなければ 404                                                                                                                                                                                                                                                                                        |
 | `POST /app-store/notifications`     | Apple が送る App Store Server Notifications V2 の `{"signedPayload"}`。下の「購読」                                                                                                                                                                                                                                                                                                                                                                                  |
 | `POST /apple/sign-in-notifications` | Apple が送る Sign in with Apple の通知の `{"payload"}`。下の「Sign in with Apple の通知」                                                                                                                                                                                                                                                                                                                                                                            |
 
@@ -242,7 +242,7 @@ pnpm lint          # oxlint
 pnpm fmt:check     # oxfmt
 ```
 
-手元で Worker を動かすときは、データベースのファイルに表とセッションを作ってから `turso dev` で出す。`new-session.sh` がトークンを出す。サインインの経路は Apple に届かないと使えないので、手元では動かさず、テストが偽物の Apple で確かめる(秘密は `TURSO_` のほかは渡さない。`POST /challenges` などは 500)。
+手元で Worker を動かすときは、データベースのファイルに表とセッションを作ってから `turso dev` で出す。`new-session.sh` がトークンを出す。サインインの経路は Apple に届かないと使えないので、この形では動かさない(秘密は `TURSO_` のほかは渡さない。`POST /challenges` などは 500)。サインインも通すときは下の偽物の Apple の Worker にする。
 
 ```sh
 sqlite3 /private/tmp/mai.db < schema.sql
@@ -251,7 +251,17 @@ turso dev --db-file /private/tmp/mai.db --port 8080
 pnpm exec wrangler dev --var TURSO_URL:http://127.0.0.1:8080 --var TURSO_TOKEN:
 ```
 
-アプリの同期の部品(`Packages/Sync`)を、`turso dev` と `wrangler dev` の Worker に通して確かめる。
+サインインも手元で通すときは、`test/stand-in-apple.ts` を Worker にする。`src/index.ts` と同じ経路を、Apple の鍵・`/auth/token`・`/auth/revoke` を偽物が答え、App Store の署名をその偽物の認証局で確かめる形で出す。アプリが Apple から受け取るものは、偽物の経路 `POST /stand-in-apple/sign-in`(`{"user", "nonce"}` → ID トークンと認可コード)と `POST /stand-in-apple/subscription`(`{"account", "plan"}` → 署名つき取引と更新の情報)が出す。デプロイはしない。
+
+```sh
+pnpm exec wrangler dev test/stand-in-apple.ts --var TURSO_URL:http://127.0.0.1:8080 --var TURSO_TOKEN: \
+  --var CHALLENGE_KEY:$(openssl rand 32 | base64) --var REFRESH_TOKEN_KEY:$(openssl rand 32 | base64) \
+  --var APPLE_CLIENT_ID:com.marromugi.mai
+```
+
+デバッグ版のアプリは、`MAI_SERVER_URL` にこの Worker を、`MAI_STAND_IN_APPLE_USER` に Apple の利用者の代わりの名前を渡すと、本物の Apple と App Store の代わりにこの偽物でサインインする(`MAI_STAND_IN_APPLE_REVOKED=1` で、Apple がサインインの取り消しを答える)。プランの購入の代わりに、アカウント ID を `-syncAccountID <UUID>` の起動引数で渡す。
+
+アプリの同期の部品(`Packages/Sync`)を、`turso dev` と、偽物の Apple の `wrangler dev` の Worker に通して確かめる。文書の契約と 2 台の同期は `new-session.sh` のセッションで、サインイン・自分の鍵・起動ごとの確かめ・サインアウトは `AccountContractTests` が偽物の Apple で。
 
 ```sh
 scripts/server-contract-test.sh
