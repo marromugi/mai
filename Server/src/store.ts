@@ -1426,6 +1426,16 @@ function keptByAnother(account: string): string {
 }
 
 /**
+ * The plan of the account `accounts.id` from those of its subscriptions `which` holds for: the
+ * plan of the one paid for longest, on a tie the larger plan; the plan it has when it has none.
+ */
+function planOf(which: string): string {
+  return `coalesce((SELECT p.tier FROM subscriptions s JOIN plans p ON p.product_id = s.product_id
+                    WHERE s.account_id = accounts.id AND ${which}
+                    ORDER BY s.paid_until DESC, p.writings_bytes DESC LIMIT 1), tier)`;
+}
+
+/**
  * Cuts the account the subscription `:original` is kept for to `:signed`, when the purchase moves
  * the subscription from it to `account`, which `there` says can take it: that purchase ended what
  * the subscription paid for there. The account's other subscriptions still count. Holds
@@ -1436,9 +1446,7 @@ function leaving(account: string, there: string, condition: string): string {
        paid_until = max(min(paid_until, :signed), coalesce((SELECT max(s.paid_until)
          FROM subscriptions s
          WHERE s.account_id = accounts.id AND s.original_transaction_id != :original), 0)),
-       tier = coalesce((SELECT p.tier FROM subscriptions s JOIN plans p ON p.product_id = s.product_id
-                        WHERE s.account_id = accounts.id AND s.original_transaction_id != :original
-                        ORDER BY s.paid_until DESC, p.writings_bytes DESC LIMIT 1), tier)
+       tier = ${planOf("s.original_transaction_id != :original")}
      WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original
                    AND account_id != ${account} AND ${later} AND ${plan} AND ${there})
        AND deleting = 0 AND ${condition}`;
@@ -1487,9 +1495,7 @@ function keepStatements(condition: string): string[] {
      ON CONFLICT (original_transaction_id) DO NOTHING`,
     `UPDATE accounts SET
        paid_until = (SELECT max(paid_until) FROM subscriptions WHERE account_id = accounts.id),
-       tier = coalesce((SELECT p.tier FROM subscriptions s JOIN plans p ON p.product_id = s.product_id
-                        WHERE s.account_id = accounts.id
-                        ORDER BY s.paid_until DESC, p.writings_bytes DESC LIMIT 1), tier)
+       tier = ${planOf("true")}
      WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original)
        AND deleting = 0 AND ${condition}`,
   ];
