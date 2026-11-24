@@ -261,7 +261,7 @@ pnpm exec wrangler dev test/stand-in-apple.ts --var TURSO_URL:http://127.0.0.1:8
 
 デバッグ版のアプリは、`MAI_SERVER_URL` にこの Worker を、`MAI_STAND_IN_APPLE_USER` に Apple の利用者の代わりの名前を渡すと、本物の Apple と App Store の代わりにこの偽物でサインインする(`MAI_STAND_IN_APPLE_REVOKED=1` で、Apple がサインインの取り消しを答える)。プランの購入の代わりに、アカウント ID を `-syncAccountID <UUID>` の起動引数で渡す。
 
-アプリの同期の部品(`Packages/Sync`)を、`turso dev` と、偽物の Apple の `wrangler dev` の Worker に通して確かめる。文書の契約と 2 台の同期は `new-session.sh` のセッションで、サインイン・自分の鍵・起動ごとの確かめ・サインアウトは `AccountContractTests` が偽物の Apple で。
+アプリの同期の部品(`Packages/Sync`)を、`turso dev` と、偽物の Apple の `wrangler dev` の Worker に通して確かめる。文書の契約と 2 台の同期は `new-session.sh` のセッションで、サインイン・自分の鍵・起動ごとの確かめ・サインアウトは `AccountContractTests` が、1 つのアカウントにサインインした 2 台の同期(両向き、409 のあとに両方を残すこと、送るバイト列に平文がないこと、決まった形でない書き込みが断られること)は `AccountSyncContractTests` が、偽物の Apple で。
 
 ```sh
 scripts/server-contract-test.sh
