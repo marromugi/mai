@@ -251,7 +251,17 @@ turso dev --db-file /private/tmp/mai.db --port 8080
 pnpm exec wrangler dev --var TURSO_URL:http://127.0.0.1:8080 --var TURSO_TOKEN:
 ```
 
-アプリの同期の部品(`Packages/Sync`)を、`turso dev` と `wrangler dev` の Worker に通して確かめる。
+サインインも手元で通すときは、`test/stand-in-apple.ts` を Worker にする。`src/index.ts` と同じ経路を、Apple の鍵・`/auth/token`・`/auth/revoke` を偽物が答え、App Store の署名をその偽物の認証局で確かめる形で出す。アプリが Apple から受け取るものは、偽物の経路 `POST /stand-in-apple/sign-in`(`{"user", "nonce"}` → ID トークンと認可コード)と `POST /stand-in-apple/subscription`(`{"account", "plan"}` → 署名つき取引と更新の情報)が出す。デプロイはしない。
+
+```sh
+pnpm exec wrangler dev test/stand-in-apple.ts --var TURSO_URL:http://127.0.0.1:8080 --var TURSO_TOKEN: \
+  --var CHALLENGE_KEY:$(openssl rand 32 | base64) --var REFRESH_TOKEN_KEY:$(openssl rand 32 | base64) \
+  --var APPLE_CLIENT_ID:com.marromugi.mai
+```
+
+デバッグ版のアプリは、`MAI_SERVER_URL` にこの Worker を、`MAI_STAND_IN_APPLE_USER` に Apple の利用者の代わりの名前を渡すと、本物の Apple と App Store の代わりにこの偽物でサインインする(`MAI_STAND_IN_APPLE_REVOKED=1` で、Apple がサインインの取り消しを答える)。プランの購入の代わりに、アカウント ID を `-syncAccountID <UUID>` の起動引数で渡す。
+
+アプリの同期の部品(`Packages/Sync`)を、`turso dev` と、偽物の Apple の `wrangler dev` の Worker に通して確かめる。文書の契約と 2 台の同期は `new-session.sh` のセッションで、サインイン・自分の鍵・起動ごとの確かめ・サインアウトは `AccountContractTests` が偽物の Apple で。
 
 ```sh
 scripts/server-contract-test.sh

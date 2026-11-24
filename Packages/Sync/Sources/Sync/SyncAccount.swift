@@ -12,8 +12,8 @@ public enum OwnKeyOutcome: Sendable, Equatable {
   case recoveryKeyNeeded
 }
 
-/// What the check at launch found.
-public enum LaunchCheck: Sendable, Equatable {
+/// What `SyncAccount.check()` found.
+public enum AccountCheck: Sendable, Equatable {
   case signedOut
   /// Apple says the user no longer signs in with Apple here: the session was ended.
   case credentialRevoked
@@ -130,9 +130,10 @@ public struct SyncAccount: Sendable {
     }
   }
 
-  /// At each launch: ends the session when Apple says the user stopped signing in with Apple here,
-  /// and otherwise sends the account's subscriptions again, catching what the server missed.
-  public func checkAtLaunch() async throws(AccountError) -> LaunchCheck {
+  /// At each launch, and when StoreKit tells of a new transaction: ends the session when Apple says
+  /// the user stopped signing in with Apple here, and otherwise sends the account's subscriptions
+  /// again, catching what the server missed.
+  public func check() async throws(AccountError) -> AccountCheck {
     guard let session = try session() else { return .signedOut }
     // Unknown, such as offline, is taken as still signed in.
     let state = try? await apple.credentialState(of: session.appleUser)

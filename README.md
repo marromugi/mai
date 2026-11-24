@@ -24,7 +24,7 @@ Xcode から実行したアプリは、同期のプランを App Store ではな
 swift test --package-path Packages/Typesetting
 ```
 
-`Packages/Sync` のテストも Mac で走る。名前に `Contract` の付くテストは手元の Worker が要るので外し、`scripts/server-contract-test.sh` で走らせる(`Server/README.md`)。
+`Packages/Sync` のテストも Mac で走る。名前に `Contract` の付くテスト(文書の同期と、Apple でのサインイン・自分の鍵)は手元の Worker が要るので外し、`scripts/server-contract-test.sh` で走らせる(`Server/README.md`)。
 
 ```sh
 swift test --package-path Packages/Sync --skip Contract

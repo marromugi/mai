@@ -113,7 +113,7 @@ struct AccountContractTests {
     let (device, session, _) = try await signedIn()
     device.apple.change { $0.credentialState = .revoked }
 
-    #expect(try await device.account.checkAtLaunch() == .credentialRevoked)
+    #expect(try await device.account.check() == .credentialRevoked)
     #expect(try device.sessions.load() == nil)
     await #expect(
       performing: { try await device.server.account(token: session.token) },
@@ -129,7 +129,7 @@ struct AccountContractTests {
       $0.expiresDate = renewed
     }
 
-    #expect(try await device.account.checkAtLaunch() == .subscriptionsSent(1))
+    #expect(try await device.account.check() == .subscriptionsSent(1))
     let state = try await device.server.account(token: session.token)
     #expect(state.plan == "plus")
     #expect(state.paidUntil == renewed)
@@ -140,7 +140,7 @@ struct AccountContractTests {
     let (device, session, _) = try await signedIn()
     try await device.server.endSession(token: session.token)
 
-    #expect(try await device.account.checkAtLaunch() == .sessionEnded)
+    #expect(try await device.account.check() == .sessionEnded)
     #expect(try device.sessions.load() == nil)
   }
 
@@ -153,7 +153,7 @@ struct AccountContractTests {
     await #expect(
       performing: { try await device.server.account(token: session.token) },
       throws: isRefused(401))
-    #expect(try await device.account.checkAtLaunch() == .signedOut)
+    #expect(try await device.account.check() == .signedOut)
   }
 
   @Test func aPurchaseOfAnotherAccountIsRefusedWhenTheAppleUserHasNone() async throws {

@@ -3,6 +3,7 @@ import SwiftUI
 public struct RootView: View {
   private let store: any WritingStore
   private let fonts: FontLibrary
+  private let account: AccountModel?
   /// Nil until the store has been read.
   @State private var writings: Result<[Writing], any Error>?
   @State private var path: [Writing.ID] = []
@@ -16,17 +17,20 @@ public struct RootView: View {
   @AppStorage(ColorTheme.key) private var theme = ColorTheme.system
   @AppStorage(StoredFontStack.key) private var fontStack = StoredFontStack.standard
 
-  /// The writings kept on the device, set in the families of `fonts`.
-  public init(fonts: FontLibrary) {
-    self.init(store: FileWritingStore.onDevice, fonts: fonts)
+  /// The writings kept on the device, set in the families of `fonts`, with the account a plan pays
+  /// for when there is a server to sign in to.
+  public init(fonts: FontLibrary, account: AccountModel?) {
+    self.init(store: FileWritingStore.onDevice, fonts: fonts, account: account)
   }
 
   /// Opened on the writings in `path`, the last one on top.
   init(
-    store: any WritingStore, fonts: FontLibrary = FontLibrary(server: nil), path: [Writing.ID] = []
+    store: any WritingStore, fonts: FontLibrary = FontLibrary(server: nil),
+    account: AccountModel? = nil, path: [Writing.ID] = []
   ) {
     self.store = store
     self.fonts = fonts
+    self.account = account
     _path = State(initialValue: path)
   }
 
@@ -73,8 +77,10 @@ public struct RootView: View {
       }
     }
     .environment(\.fontFamilies, fontStack.stack.families(from: fonts.available))
+    .task { await account?.checkAtLaunch() }
     .sheet(isPresented: $showingSettings) {
       SettingsView(fonts: fonts)
+        .environment(\.account, account)
     }
     .alert(
       "保存できませんでした", isPresented: Binding(get: { unsaved != nil }, set: { _ in unsaved = nil }),
@@ -108,5 +114,5 @@ private struct UnsavedWriting: LocalizedError {
 }
 
 #Preview {
-  RootView(fonts: FontLibrary(server: nil))
+  RootView(fonts: FontLibrary(server: nil), account: nil)
 }

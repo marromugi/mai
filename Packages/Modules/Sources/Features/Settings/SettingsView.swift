@@ -8,6 +8,7 @@ struct SettingsView: View {
   @AppStorage(StoredFontStack.key) private var fontStack = StoredFontStack.standard
   @AppStorage(ColorTheme.key) private var theme = ColorTheme.system
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.account) private var account
 
   var body: some View {
     NavigationStack {
@@ -26,18 +27,38 @@ struct SettingsView: View {
         }
       }
     }
+    .sheet(
+      isPresented: Binding(
+        get: { account?.recoveryKeyToShow != nil },
+        set: { if !$0 { account?.recoveryKeyToShow = nil } })
+    ) {
+      if let recoveryKey = account?.recoveryKeyToShow {
+        NavigationStack {
+          RecoveryKeyView(recoveryKey: recoveryKey) { account?.recoveryKeyToShow = nil }
+        }
+      }
+    }
+    .alert(
+      "同期のアカウント",
+      isPresented: Binding(
+        get: { account?.problem != nil }, set: { if !$0 { account?.problem = nil } })
+    ) {
+    } message: {
+      Text(verbatim: account?.problem ?? "")
+    }
   }
 }
 
 /// iOS's grouped list of settings. Its 「フォント」 section leads to `fontStack`, the families text
 /// is set in, and steps `defaultSetting`, the body setting a writing is set in until its own is
 /// adjusted, over a sample set in both; its 「カラーテーマ」 section chooses `theme`; its 「同期」
-/// section opens the plans.
+/// section opens the plans, followed, where there is a server, by the account's (`AccountRows`).
 struct SettingsForm: View {
   @Binding var defaultSetting: BodySetting
   @Binding var fontStack: FontStack
   let fonts: FontLibrary
   @Binding var theme: ColorTheme
+  @Environment(\.account) private var account
 
   var body: some View {
     Form {
@@ -82,6 +103,9 @@ struct SettingsForm: View {
         Text("同期")
       } footer: {
         Text("文書はこの端末の中に置かれます。ほかの端末とそろえるには、プランに入ります。")
+      }
+      if let account {
+        AccountSection(account: account)
       }
     }
   }
