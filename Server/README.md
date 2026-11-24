@@ -62,7 +62,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 | 経路                         | 内容                                                                                                                                                                                                                                      |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DELETE /session`            | サインアウト。このセッションを終えて 204                                                                                                                                                                                                  |
-| `GET /account`               | 200 と `{"plan", "paidUntil", "lapsed", "deletesAt", "usage", "ownKeyCheck"}`。期限の切れたアカウントも読める。表の下に                                                                                                                   |
+| `GET /account`               | 200 と `{"plan", "paidUntil", "lapsed", "gracePeriod", "deletesAt", "usage", "ownKeyCheck"}`。期限の切れたアカウントも読める。表の下に                                                                                                    |
 | `PUT /account/subscription`  | アプリが起動のたびに、今の購読の取引と更新の情報を `{"transaction", "renewalInfo"}`(どちらも `jwsRepresentation`)で送り直す。200 と `{"plan", "paidUntil"}`(送り直したあとのプランと、いつまで払われているか)。下の「購読」               |
 | `PUT /account/own-key-check` | 自分の鍵から作った確かめの値(32 バイト)を `application/octet-stream` で。アカウントにまだなければ置いて 204、同じ値なら 204、別の値なら 409(2 つ目の自分の鍵は作らせない)。長さが違えば 400、型が違えば 415                               |
 | `DELETE /account`            | アカウントを消す。Apple の refresh トークンを取り消し、R2 とすべての表からそのアカウントのものを消して 204。期限の切れたアカウントも、その日のリクエストを使い切ったアカウントも消せる。下の「アカウントの削除」                          |
@@ -74,7 +74,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 `PUT /writings/<ID>` は `Specs/ReadMode` のモデルの `Save` のうち文書そのものを置く部分にあたり、受けた保存はその文書の前の版の写しを消す(下の「読み取りモード」)。モデルには断られる保存がないので、端末は受けられた保存にだけ写しを送る。`GET /writings/<ID>` は文書を取るもので、モデルは文書の中身を扱わない。
 
-`GET /account` はセッションのアカウントのことを答える。`plan` はプラン、`paidUntil` はいつまで払われているか(1970 年からのミリ秒)、`lapsed` はそれを過ぎたか。`deletesAt` は期限の切れたアカウントが消える時刻(`paidUntil` の 90 日あと、1970 年からのミリ秒)で、期限が切れていなければ null(下の「期限切れのあとの削除」)。`usage` は `writingsBytes`・`writings`・`photosBytes`・`requests`・`lists`・`saves`・`photos` それぞれの `{"used", "limit"}` で、`limit` はプランの上限、`requests`・`lists`・`saves`・`photos` の `used` はその日(UTC)の、この要求の前までの数。`ownKeyCheck` は自分の鍵の確かめの値(小文字の 16 進)で、まだなければ null。端末はこれで自分の鍵を決める(#22 の設計の 3 節)。
+`GET /account` はセッションのアカウントのことを答える。`plan` はプラン、`paidUntil` はいつまで払われているか(1970 年からのミリ秒)、`lapsed` はそれを過ぎたか。`gracePeriod` は、請求のやり直しの猶予だけで払われているか(期限の切れていない購読のどれも、今の請求の期間が終わっている)。`deletesAt` は期限の切れたアカウントが消える時刻(`paidUntil` の 90 日あと、1970 年からのミリ秒)で、期限が切れていなければ null(下の「期限切れのあとの削除」)。`usage` は `writingsBytes`・`writings`・`photosBytes`・`requests`・`lists`・`saves`・`photos` それぞれの `{"used", "limit"}` で、`limit` はプランの上限、`requests`・`lists`・`saves`・`photos` の `used` はその日(UTC)の、この要求の前までの数。`ownKeyCheck` は自分の鍵の確かめの値(小文字の 16 進)で、まだなければ null。端末はこれで自分の鍵を決める(#22 の設計の 3 節)。
 
 - 端末に自分の鍵があるとき: その鍵から作った値と同じならそのまま使う。null なら `PUT /account/own-key-check` でその値を置く。違えばその鍵は使わず、リカバリーキーを求める。
 - 端末に自分の鍵がないとき: null なら鍵を作って、その値を置く。null でなければ鍵を作らず、リカバリーキーを求める。
@@ -178,7 +178,7 @@ AI のエージェント(Mac の MCP サーバーなど)に、期間を決めて
 
 ### プランの上限
 
-アカウントはプラン(`plans` 表の `basic`・`plus`・`pro`)に入っている。上限に届いた要求は 429 で、何も書かず、数えもしない。
+アカウントはプラン(`plans` 表の `basic`・`plus`・`pro`)に入っている。上限に届いた要求は 429 と `{"error", "limit"}` で、何も書かず、数えもしない。`limit` はどの上限か: `requests`・`lists`・`saves`・`photos`(1 日の数)、`storage`(文書の大きさか本数)、`photo-storage`(写真の大きさ)。
 
 - 1 日(UTC)のリクエスト数、そのうちの一覧(`GET /writings`)と保存(`PUT`、409 になったものも数える)と写真(`PUT /photos/<ID>`。サムネイルは数えない。409 になったものと、取っておいたあと失敗したものも数える)の数。`usage` 表で数える。
 - 文書の合計の大きさと本数。`writings` のトリガーが `accounts` に足し、超えた保存は batch ごと戻る。大きさの減る保存は断らない。

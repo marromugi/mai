@@ -125,6 +125,11 @@ export type AccountState = {
   tier: string;
   paidUntil: number;
   lapsed: boolean;
+  /**
+   * Whether the account is paid for only by a billing grace period: none of its subscriptions is
+   * paid for by a billing period that hasn't ended.
+   */
+  gracePeriod: boolean;
   /** When a lapsed account is deleted, `lapsedKept` after `paidUntil`; null while it is paid for. */
   deletesAt: number | null;
   usage: Record<
@@ -793,6 +798,10 @@ export class Store {
     const answer = await this.#run(caller, now, "other", (account, allowed) => [
       {
         sql: `SELECT a.tier, a.paid_until, NOT ${paidNow} AS lapsed, a.own_key_check,
+                ${paidNow} AND NOT EXISTS (
+                  SELECT 1 FROM subscriptions s
+                  WHERE s.account_id = a.id AND s.period_ends > :now AND s.paid_until > :now
+                ) AS grace_period,
                 a.writings_bytes, p.writings_bytes AS writings_bytes_limit,
                 a.writings_count, p.writings_count AS writings_count_limit,
                 a.photos_bytes, p.photos_bytes AS photos_bytes_limit,
@@ -829,6 +838,7 @@ export class Store {
         tier: stored((tier) => tier, row["tier"]),
         paidUntil,
         lapsed,
+        gracePeriod: Number(row["grace_period"]) === 1,
         deletesAt: lapsed ? paidUntil + lapsedKept : null,
         usage: {
           writingsBytes: use("writings_bytes", "writings_bytes_limit"),

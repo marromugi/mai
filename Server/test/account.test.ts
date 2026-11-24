@@ -54,6 +54,7 @@ describe("GET /account", () => {
       plan: "basic",
       paidUntil: await paidUntilOf(account),
       lapsed: false,
+      gracePeriod: false,
       deletesAt: null,
       usage: {
         writingsBytes: { used: 0, limit: 100_000_000 },
@@ -163,6 +164,53 @@ describe("GET /account", () => {
     expect(await store.account(caller, paidUntil)).toMatchObject({
       ok: true,
       value: { lapsed: true },
+    });
+  });
+
+  it("says an account paid for only by a billing grace period is in it", async () => {
+    const { account, caller } = await newAccount(products.basic, Date.now(), Date.now() - day);
+    const paidUntil = await paidUntilOf(account);
+    expect(await store.account(caller, paidUntil - 1)).toMatchObject({
+      ok: true,
+      value: { lapsed: false, gracePeriod: true, deletesAt: null },
+    });
+    expect(await store.account(caller, paidUntil)).toMatchObject({
+      ok: true,
+      value: { lapsed: true, gracePeriod: false },
+    });
+  });
+
+  it("says an account isn't in a grace period while its billing period runs", async () => {
+    const { account, caller } = await newAccount();
+    const paidUntil = await paidUntilOf(account);
+    expect(await store.account(caller, Date.now())).toMatchObject({
+      ok: true,
+      value: { gracePeriod: false },
+    });
+    expect(await store.account(caller, paidUntil - 1)).toMatchObject({
+      ok: true,
+      value: { lapsed: false, gracePeriod: false },
+    });
+  });
+
+  it("says an account isn't in a grace period while another subscription's period runs", async () => {
+    const { account, caller } = await newAccount(products.basic, Date.now(), Date.now() - day);
+    await database.execute({
+      sql: `INSERT INTO subscriptions (original_transaction_id, account_id, product_id,
+              period_ends, paid_until, environment, signed_date)
+            VALUES (?, ?, ?, ?, ?, 'Production', ?)`,
+      args: [
+        crypto.randomUUID(),
+        account,
+        products.plus,
+        Date.now() + day,
+        Date.now() + day,
+        Date.now(),
+      ],
+    });
+    expect(await store.account(caller, Date.now())).toMatchObject({
+      ok: true,
+      value: { gracePeriod: false },
     });
   });
 
