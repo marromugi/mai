@@ -18,6 +18,8 @@ import {
 const database = createClient({ url: env.TURSO_URL });
 
 let signIn: SignIn;
+/** A Worker that takes Production purchases only. */
+let productionOnly: SignIn;
 
 function send(url: string): Promise<Response> {
   throw new Error(`the subscription routes reached ${url}; they reach nothing outside`);
@@ -25,9 +27,15 @@ function send(url: string): Promise<Response> {
 
 beforeAll(async () => {
   signIn = signInOf(env, send, await caches.open(crypto.randomUUID()), await appStoreRoot());
+  productionOnly = signInOf(
+    { ...env, APP_STORE_ENVIRONMENTS: "Production" },
+    send,
+    await caches.open(crypto.randomUUID()),
+    await appStoreRoot(),
+  );
 });
 
-function call(path: string, body: unknown, token?: string): Promise<Response> {
+function call(path: string, body: unknown, token?: string, on = signIn): Promise<Response> {
   const headers = new Headers({ "Content-Type": "application/json" });
   if (token !== undefined) {
     headers.set("Authorization", `Bearer ${token}`);
@@ -38,7 +46,7 @@ function call(path: string, body: unknown, token?: string): Promise<Response> {
       headers,
       body: JSON.stringify(body),
     }),
-    signIn,
+    on,
     photos,
   );
 }
@@ -371,6 +379,7 @@ describe("the subscription the app resends", () => {
         renewalInfo: await signedRenewalInfo(original, { environment: "Sandbox" }),
       },
       token,
+      productionOnly,
     );
     expect(answer.status).toBe(403);
     expect(await accountOf(account)).toEqual(before);
@@ -690,16 +699,21 @@ describe("an App Store notification", () => {
   it("from an environment the server doesn't take is refused and changes nothing", async () => {
     const { account, original } = await newAccount();
     const before = await accountOf(account);
-    const answer = await call("/app-store/notifications", {
-      signedPayload: await signedNotification("EXPIRED", "VOLUNTARY", {
-        environment: "Sandbox",
-        transaction: await signedTransaction(account, {
-          originalTransactionId: original,
+    const answer = await call(
+      "/app-store/notifications",
+      {
+        signedPayload: await signedNotification("EXPIRED", "VOLUNTARY", {
           environment: "Sandbox",
-          expiresDate: Date.now() - day,
+          transaction: await signedTransaction(account, {
+            originalTransactionId: original,
+            environment: "Sandbox",
+            expiresDate: Date.now() - day,
+          }),
         }),
-      }),
-    });
+      },
+      undefined,
+      productionOnly,
+    );
     expect(answer.status).toBe(403);
     expect(await accountOf(account)).toEqual(before);
   });
@@ -766,15 +780,20 @@ describe("an App Store notification", () => {
   it("is refused when its own environment isn't taken, whatever its transaction says", async () => {
     const { account, original } = await newAccount();
     const before = await accountOf(account);
-    const answer = await call("/app-store/notifications", {
-      signedPayload: await signedNotification("DID_RENEW", undefined, {
-        environment: "Sandbox",
-        transaction: await signedTransaction(account, {
-          originalTransactionId: original,
-          expiresDate: Date.now() + 90 * day,
+    const answer = await call(
+      "/app-store/notifications",
+      {
+        signedPayload: await signedNotification("DID_RENEW", undefined, {
+          environment: "Sandbox",
+          transaction: await signedTransaction(account, {
+            originalTransactionId: original,
+            expiresDate: Date.now() + 90 * day,
+          }),
         }),
-      }),
-    });
+      },
+      undefined,
+      productionOnly,
+    );
     expect(answer.status).toBe(403);
     expect(await accountOf(account)).toEqual(before);
   });
@@ -1358,14 +1377,8 @@ describe("APP_STORE_ENVIRONMENTS", () => {
     expect(() => parseEnvironments(value)).toThrow(/APP_STORE_ENVIRONMENTS/);
   });
 
-  it("takes a Sandbox purchase on a Worker set to Sandbox", async () => {
+  it("takes a Sandbox purchase on the production Worker, as App Review buys with one", async () => {
     const { account, token, original } = await newAccount();
-    const sandbox = signInOf(
-      { ...env, APP_STORE_ENVIRONMENTS: "Sandbox" },
-      send,
-      await caches.open(crypto.randomUUID()),
-      await appStoreRoot(),
-    );
     const answer = await serve(
       new Request("https://mai.test/account/subscription", {
         method: "PUT",
@@ -1379,7 +1392,7 @@ describe("APP_STORE_ENVIRONMENTS", () => {
           renewalInfo: await signedRenewalInfo(original, { environment: "Sandbox" }),
         }),
       }),
-      sandbox,
+      signIn,
       photos,
     );
     expect(answer.status).toBe(200);

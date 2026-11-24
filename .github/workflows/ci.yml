@@ -50,10 +50,14 @@ jobs:
           echo "71720fc8648c19efef416efebd47145ef59b62e198770533530a858e1336879f  sqld.tar.xz" | sha256sum -c -
           mkdir sqld && tar -xf sqld.tar.xz -C sqld
           dirname "$(find "$PWD/sqld" -type f -name sqld)" >> "$GITHUB_PATH"
+      - name: Check worker-configuration.d.ts holds every environment of wrangler.jsonc
+        run: pnpm types:check
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm fmt:check
       - run: pnpm test
+      - name: Test that a deploy sets only the secrets a Worker lacks
+        run: node --test scripts/deploy.test.mts
 
   build:
     runs-on: macos-26

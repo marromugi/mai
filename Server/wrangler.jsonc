@@ -1,5 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  // The top level is production, Worker mai-server; env.dev is development, Worker mai-server-dev.
+  // scripts/deploy.sh deploys either (Server/README.md「デプロイ」).
   "name": "mai-server",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
@@ -11,7 +13,7 @@
     { "binding": "FONTS", "bucket_name": "mai-fonts" },
   ],
   // Whose purchases this Worker takes: Production, Sandbox, or both (Server/README.md).
-  "vars": { "APP_STORE_ENVIRONMENTS": "Production" },
+  "vars": { "APP_STORE_ENVIRONMENTS": "Production,Sandbox" },
   "secrets": {
     "required": [
       "TURSO_URL",
@@ -23,5 +25,27 @@
       "APPLE_SIGN_IN_KEY_ID",
       "APPLE_SIGN_IN_KEY",
     ],
+  },
+  "env": {
+    // An environment inherits none of r2_buckets, vars and secrets, so each names them all again.
+    "dev": {
+      "r2_buckets": [
+        { "binding": "PHOTOS", "bucket_name": "mai-photos-dev" },
+        { "binding": "FONTS", "bucket_name": "mai-fonts-dev" },
+      ],
+      "vars": { "APP_STORE_ENVIRONMENTS": "Sandbox" },
+      "secrets": {
+        "required": [
+          "TURSO_URL",
+          "TURSO_TOKEN",
+          "CHALLENGE_KEY",
+          "REFRESH_TOKEN_KEY",
+          "APPLE_CLIENT_ID",
+          "APPLE_TEAM_ID",
+          "APPLE_SIGN_IN_KEY_ID",
+          "APPLE_SIGN_IN_KEY",
+        ],
+      },
+    },
   },
 }
