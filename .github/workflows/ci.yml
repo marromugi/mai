@@ -101,3 +101,5 @@ jobs:
         run: grep -q "Assets.xcassets in Resources" Mai.xcodeproj/project.pbxproj
       - name: Check the app says why it uses the camera
         run: grep -q 'INFOPLIST_KEY_NSCameraUsageDescription = "[^"]' Mai.xcodeproj/project.pbxproj
+      - name: Check the home screen names the app Cotoma
+        run: grep -q 'INFOPLIST_KEY_CFBundleDisplayName = Cotoma;' Mai.xcodeproj/project.pbxproj
