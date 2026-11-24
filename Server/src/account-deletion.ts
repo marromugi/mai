@@ -3,7 +3,7 @@ import { problem } from "./http";
 import { uploadOfKey, type Photos } from "./photos";
 import type { Caller } from "./sessions";
 import type { SignIn } from "./sign-in";
-import type { Answer, Store, ToDelete } from "./store";
+import type { Answer, Store, Sealed } from "./store";
 
 /**
  * `DELETE /account`: Apple's refresh token is revoked, then the account is marked while the
@@ -130,7 +130,7 @@ type Held = { mark: () => Promise<boolean>; deleteRows: () => Promise<boolean> }
  * once the rows went, R2 is swept again, kept alive past the return.
  */
 async function deleteFound(
-  found: ToDelete,
+  found: Sealed,
   signIn: SignIn,
   photos: Photos,
   now: number,
