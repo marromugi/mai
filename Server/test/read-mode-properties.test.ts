@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { createClient } from "@libsql/client/web";
 import * as fc from "fast-check";
 import { expect, it } from "vitest";
+import type { AccountId } from "../src/account-id";
 import { newAccount, store } from "./accounts";
 import { callAt, type Sent } from "./calls";
 import { sealedWriting } from "./envelopes";
@@ -14,10 +15,7 @@ import { sealedWriting } from "./envelopes";
  */
 
 const database = createClient({ url: env.TURSO_URL });
-/**
- * The model's unit of time. Short, since the sweep is the cron trigger's, over every account: the
- * runs keep its time within minutes of the other tests'.
- */
+/** The model's unit of time, in milliseconds. */
 const tick = 100;
 const writingCount = 2;
 
@@ -69,7 +67,7 @@ type Seen = {
   /** The server's time. */
   now: number;
   token: string;
-  account: string;
+  account: AccountId;
   writings: string[];
   /** Every revision each writing was saved as, newest last. */
   revisions: string[][];
@@ -128,7 +126,8 @@ async function run(seen: Seen, next: Step, reached: Reached): Promise<void> {
       }
       const approved = await call(seen, "/agents", seen.token, {
         method: "POST",
-        json: { publicKey: "aa", signature: "bb" },
+        // A new key each time: a revoked key is never approved again.
+        json: { publicKey: `0${seen.agents.length}`, signature: "bb" },
       });
       expect(approved.status).toBe(201);
       seen.agents.push(await approved.json<{ agent: string; token: string }>());
@@ -149,7 +148,7 @@ async function run(seen: Seen, next: Step, reached: Reached): Promise<void> {
       return;
     case "sweep":
       reached.swept += await count("copies WHERE account_id = :account AND expires <= :now", seen);
-      await store.sweep(seen.now);
+      await store.sweepReadMode(seen.now, [seen.account]);
       // ExpiredCopiesSwept and ModeEndsOnTime: after a sweep, until the time moves on.
       expect(await count("copies WHERE account_id = :account AND expires <= :now", seen)).toBe(0);
       expect(await count("read_modes WHERE account_id = :account AND until <= :now", seen)).toBe(0);

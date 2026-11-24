@@ -85,7 +85,9 @@ async function agents(
           ? Response.json({ agent: made.agent, token: token.token }, { status: 201 })
           : problem(
               409,
-              `the account has ${liveAgentsAtMost} agents already; revoke one to approve another`,
+              made.reason === "too-many"
+                ? `the account has ${liveAgentsAtMost} agents already; revoke one to approve another`
+                : "an agent with this public key was revoked; an agent needs a new key",
             ),
       );
     }

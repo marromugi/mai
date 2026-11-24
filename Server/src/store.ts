@@ -49,7 +49,13 @@ export type Agent = {
 };
 
 /** Not approved: the account has `liveAgentsAtMost` agents that aren't revoked. */
-export type Approved = { approved: true; agent: AgentId } | { approved: false };
+/**
+ * Not approved: the account has `liveAgentsAtMost` agents that aren't revoked (`too-many`), or
+ * revoked an agent with this public key (`revoked-key`); revoking a key is final.
+ */
+export type Approved =
+  | { approved: true; agent: AgentId }
+  | { approved: false; reason: "too-many" | "revoked-key" };
 
 /** What the server did with each copy sent, in the order sent: kept, or why not. */
 export type CopyKept = { writing: WritingId; agent: AgentId; refused: CopyRefusal | null };
@@ -745,7 +751,7 @@ export class Store {
 
   /**
    * Keeps an agent the caller's device approved, under the ID and token secret of `token`, unless
-   * the account has `liveAgentsAtMost` agents that aren't revoked.
+   * the account has `liveAgentsAtMost` agents that aren't revoked or revoked its public key.
    */
   async approveAgent(
     caller: Caller,
@@ -759,7 +765,9 @@ export class Store {
               SELECT :agent_id, ${account}, :public_key, :signature, :token, :now
               WHERE ${allowed}
                 AND (SELECT count(*) FROM agents WHERE account_id = ${account} AND revoked = 0)
-                  < :most`,
+                  < :most
+                AND NOT EXISTS (SELECT 1 FROM agents WHERE account_id = ${account}
+                                  AND public_key = :public_key AND revoked = 1)`,
         args: {
           agent_id: token.agent,
           public_key: approval.publicKey,
@@ -767,6 +775,12 @@ export class Store {
           token: token.secretSha256,
           most: liveAgentsAtMost,
         },
+      },
+      {
+        sql: `SELECT 1 FROM agents
+              WHERE account_id = ${account} AND public_key = :public_key AND revoked = 1
+                AND ${allowed}`,
+        args: { public_key: approval.publicKey },
       },
     ]);
     if (!answer.ok) {
@@ -777,7 +791,10 @@ export class Store {
       value:
         answer.value[0]?.rowsAffected === 1
           ? { approved: true, agent: token.agent }
-          : { approved: false },
+          : {
+              approved: false,
+              reason: answer.value[1]?.rows.length === 0 ? "too-many" : "revoked-key",
+            },
     };
   }
 
@@ -805,10 +822,10 @@ export class Store {
 
   /**
    * Revokes the caller's agent `agent` and deletes the copies wrapped for it. False when the
-   * account has no such agent. Revoking keeps an agent from reading, so a lapsed account may.
+   * account has no such agent.
    */
   async revokeAgent(caller: Caller, agent: AgentId, now: number): Promise<Answer<boolean>> {
-    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+    const answer = await this.#run(caller, now, "write", (account, allowed) => [
       {
         sql: `UPDATE agents SET revoked = 1
               WHERE account_id = ${account} AND id = :agent_id AND ${allowed}`,
@@ -859,12 +876,9 @@ export class Store {
     return answer.ok ? { ok: true, value: undefined } : answer;
   }
 
-  /**
-   * Turns the caller's read mode off and deletes every copy. A lapsed account may, as it keeps
-   * agents from reading.
-   */
+  /** Turns the caller's read mode off and deletes every copy. */
   async turnOffReadMode(caller: Caller, now: number): Promise<Answer<undefined>> {
-    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+    const answer = await this.#run(caller, now, "write", (account, allowed) => [
       { sql: `DELETE FROM read_modes WHERE account_id = ${account} AND ${allowed}` },
       { sql: `DELETE FROM copies WHERE account_id = ${account} AND ${allowed}` },
     ]);
@@ -888,12 +902,9 @@ export class Store {
     };
   }
 
-  /**
-   * Excludes the caller's writing `id` and deletes its copies. A lapsed account may, as it keeps
-   * agents from reading.
-   */
+  /** Excludes the caller's writing `id` and deletes its copies. */
   async exclude(caller: Caller, id: WritingId, now: number): Promise<Answer<undefined>> {
-    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+    const answer = await this.#run(caller, now, "write", (account, allowed) => [
       {
         sql: `INSERT INTO exclusions (account_id, writing_id) SELECT ${account}, :id WHERE ${allowed}
               ON CONFLICT (account_id, writing_id) DO NOTHING`,
@@ -1060,20 +1071,18 @@ export class Store {
           sql: "DELETE FROM used_challenges WHERE expires <= :swept",
           args: { swept: now - usedChallengeMargin },
         },
-        // Read mode ends at its until, and when the account's subscription lapses.
-        {
-          sql: `DELETE FROM copies WHERE expires <= :now
-                  OR account_id IN (SELECT id FROM accounts WHERE paid_until <= :now)`,
-          args: { now },
-        },
-        {
-          sql: `DELETE FROM read_modes WHERE until <= :now
-                  OR account_id IN (SELECT id FROM accounts WHERE paid_until <= :now)`,
-          args: { now },
-        },
+        ...readModeSweep(now, "every"),
       ],
       "write",
     );
+  }
+
+  /**
+   * The part of `sweep` that ends read mode, and only that, for the accounts in `accounts`. Tests
+   * that run beside others sweep only their own accounts.
+   */
+  async sweepReadMode(now: number, accounts: readonly AccountId[]): Promise<void> {
+    await this.#client.batch(readModeSweep(now, accounts), "write");
   }
 
   /**
@@ -1251,6 +1260,28 @@ const paidNow = "a.paid_until > :now";
  */
 function agentMayRead(account: string): string {
   return `EXISTS (SELECT 1 FROM accounts a WHERE a.id = ${account} AND ${paidNow})`;
+}
+
+/**
+ * Read mode ends at its until, and when the account's subscription lapses: for every account, or
+ * for those listed.
+ */
+function readModeSweep(now: number, accounts: "every" | readonly AccountId[]): InStatement[] {
+  const among =
+    accounts === "every" ? "" : "AND account_id IN (SELECT value FROM json_each(:accounts))";
+  const values = accounts === "every" ? { now } : { now, accounts: JSON.stringify(accounts) };
+  return [
+    bind(
+      `DELETE FROM copies WHERE (expires <= :now
+         OR account_id IN (SELECT id FROM accounts WHERE paid_until <= :now)) ${among}`,
+      values,
+    ),
+    bind(
+      `DELETE FROM read_modes WHERE (until <= :now
+         OR account_id IN (SELECT id FROM accounts WHERE paid_until <= :now)) ${among}`,
+      values,
+    ),
+  ];
 }
 
 /** What `keepCopies` checks of each copy, `writing`, `agent` and `revision` being SQL for each. */

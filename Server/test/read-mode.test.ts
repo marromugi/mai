@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
 import { createClient } from "@libsql/client/web";
 import { beforeEach, describe, expect, it } from "vitest";
-import { newAccount, store } from "./accounts";
+import type { AccountId } from "../src/account-id";
+import { newAccount, runCron, store } from "./accounts";
 import { callAt, type Sent } from "./calls";
 import { sealedWriting } from "./envelopes";
 
@@ -23,13 +24,16 @@ function call(path: string, { token, ...sent }: Sent & { token: string }): Promi
   return callAt(now, path, token, sent);
 }
 
-/** The cron trigger's sweep, as of `now`. */
-function sweep(): Promise<void> {
-  return store.sweep(now);
+/**
+ * The read-mode part of the cron trigger's sweep, as of `now`. Only that part: `now` may be ahead
+ * of the other tests' time, and the rest of the sweep reaches every account.
+ */
+function sweep(account: AccountId): Promise<void> {
+  return store.sweepReadMode(now, [account]);
 }
 
 async function json<T>(response: Response | Promise<Response>): Promise<T> {
-  return (await (await response).json()) as T;
+  return (await response).json<T>();
 }
 
 /** Saves `writing` over `base`, as a device does, and answers its new revision. */
@@ -177,7 +181,7 @@ describe("an agent reading", () => {
     expect(await json(call("/agent/writings", { token: agent.token }))).toEqual({ writings: [] });
     expect(await copiesOf(account)).toBe(1);
 
-    await sweep();
+    await sweep(account);
     expect(await copiesOf(account)).toBe(0);
     expect(await readModesOf(account)).toBe(0);
   });
@@ -197,7 +201,7 @@ describe("an agent reading", () => {
     expect(resent.status).toBe(402);
     expect((await call("/read-mode", { method: "PUT", token, json: { until } })).status).toBe(402);
 
-    await sweep();
+    await sweep(account);
     expect(await copiesOf(account)).toBe(0);
     expect(await readModesOf(account)).toBe(0);
   });
@@ -264,17 +268,56 @@ describe("agents", () => {
     expect(unknown.status).toBe(404);
   });
 
-  it("are revoked by a lapsed account, and not approved by one", async () => {
-    const { account, token, agent } = await reading();
+  it("aren't approved again with a key that was revoked", async () => {
+    const { token, agent } = await reading();
+    await call(`/agents/${agent.agent}`, { method: "DELETE", token });
+    const again = { publicKey: "aa".repeat(32), signature: "bb".repeat(64) };
+    expect((await call("/agents", { method: "POST", token, json: again })).status).toBe(409);
+    const other = await newAccount();
+    expect(
+      (await call("/agents", { method: "POST", token: other.token, json: again })).status,
+    ).toBe(201);
+  });
+});
+
+describe("a lapsed account", () => {
+  it("changes nothing of read mode, and its agents read nothing", async () => {
+    const { account, token, writing, agent } = await reading();
     await database.execute({
       sql: "UPDATE accounts SET paid_until = ? WHERE id = ?",
       args: [now - 1, account],
     });
-    expect(
-      (await call("/agents", { method: "POST", token, json: { publicKey: "aa", signature: "bb" } }))
-        .status,
-    ).toBe(402);
-    expect((await call(`/agents/${agent.agent}`, { method: "DELETE", token })).status).toBe(204);
+    for (const [path, method, body] of [
+      ["/agents", "POST", { publicKey: "aa", signature: "bb" }],
+      [`/agents/${agent.agent}`, "DELETE", undefined],
+      ["/read-mode", "PUT", { until: now + minute }],
+      ["/read-mode", "DELETE", undefined],
+      [`/exclusions/${writing}`, "PUT", undefined],
+      [`/exclusions/${writing}`, "DELETE", undefined],
+    ] as const) {
+      expect((await call(path, { method, token, json: body })).status).toBe(402);
+    }
+    expect((await call("/agents", { token })).status).toBe(200);
+    expect((await call("/agent/writings", { token: agent.token })).status).toBe(200);
+    expect(await json(call("/agent/writings", { token: agent.token }))).toEqual({ writings: [] });
+  });
+});
+
+describe("the cron trigger", () => {
+  it("deletes copies and read modes that have ended", async () => {
+    const { account } = await newAccount();
+    const ended = Date.now() - 1;
+    await database.batch([
+      { sql: "INSERT INTO read_modes (account_id, until) VALUES (?, ?)", args: [account, ended] },
+      {
+        sql: `INSERT INTO copies (account_id, writing_id, agent_id, revision, wrapped, expires)
+              VALUES (?, ?, ?, 'r', X'01', ?)`,
+        args: [account, crypto.randomUUID(), crypto.randomUUID(), ended],
+      },
+    ]);
+    await runCron();
+    expect(await copiesOf(account)).toBe(0);
+    expect(await readModesOf(account)).toBe(0);
   });
 });
 
@@ -397,7 +440,7 @@ describe("copies", () => {
   });
 
   it.each([
-    ["no copies", (copy: object) => ({ expires: 1, copies: [] as object[], copy })],
+    ["no copies", (copy: object) => ({ expires: 1, copies: [copy].slice(1) })],
     [
       "101 copies",
       (copy: object) => ({ expires: 1, copies: Array.from({ length: 101 }, () => copy) }),
