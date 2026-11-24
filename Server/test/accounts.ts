@@ -5,7 +5,7 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import worker from "../src/index";
-import { parseAccountId } from "../src/account-id";
+import { parseAccountId, type AccountId } from "../src/account-id";
 import { challengeLifetime } from "../src/challenges";
 import { newSessionToken, type Caller } from "../src/sessions";
 import type { Photos } from "../src/photos";
@@ -53,7 +53,7 @@ export async function newAccount(
   now = Date.now(),
   periodEnds = now + month,
   id: string = crypto.randomUUID(),
-): Promise<{ account: string; token: string; caller: Caller; original: string }> {
+): Promise<{ account: AccountId; token: string; caller: Caller; original: string }> {
   const account = parseAccountId(id);
   if (account === undefined) {
     throw new Error(`${id} is not a lowercase UUID`);
