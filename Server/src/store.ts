@@ -89,6 +89,12 @@ export type Purchase = {
   /** When that period ends, the end of its billing grace period if later, or when it was refunded or revoked. */
   readonly paidUntil: number;
   readonly revoked: boolean;
+  /**
+   * Whether the transaction is one the person bought (`transactionReason` `PURCHASE`): a first buy,
+   * a resubscription or an upgrade, whose `appAccountToken` is the account it was bought for. A
+   * renewal keeps the token of an earlier purchase.
+   */
+  readonly purchased: boolean;
   readonly environment: Environment;
   /**
    * When the App Store signed what this was read from. It replaces what is kept only when signed
@@ -99,7 +105,7 @@ export type Purchase = {
 
 /**
  * `taken`: the account's ID or its Apple user has an account already. `purchase-taken`: the
- * subscription is another account's. `no-plan`: no plan is sold as the subscription's product.
+ * subscription is another account's, and the purchase is no later one that moves it. `no-plan`: no plan is sold as the subscription's product.
  */
 export type Made = "made" | "challenge-used" | "taken" | "purchase-taken" | "no-plan";
 
@@ -1398,11 +1404,12 @@ function blob(row: Row, column: string): Uint8Array {
 const plan = "EXISTS (SELECT 1 FROM plans WHERE product_id = :product)";
 
 /**
- * Whether the purchase, signed at `:signed` about the billing period ending `:period`, is signed
- * later and about a later period than the kept row of `subscriptions` it is compared in: a
- * resubscription or an upgrade, which may name another account than the row's.
+ * Whether the transaction, signed at `:signed` about the billing period ending `:period`, is a
+ * purchase (`:purchased`) signed later and about a later period than the kept row of
+ * `subscriptions` it is compared in: a resubscription or an upgrade, which may be for another
+ * account than the row's.
  */
-const later = "signed_date < :signed AND period_ends < :period";
+const later = ":purchased = 1 AND signed_date < :signed AND period_ends < :period";
 
 /**
  * Whether the subscription `:original` is kept for an account other than `account` and stays that
@@ -1421,6 +1428,7 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
     paid: purchase.paidUntil,
     environment: purchase.environment,
     signed: purchase.signedDate,
+    purchased: purchase.purchased ? 1 : 0,
   };
 }
 
@@ -1428,18 +1436,20 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
  * Replaces the kept subscription `:original` with newer data about the same or a later billing
  * period, or keeps it for the account `:account` when it isn't kept yet; then sets its account's
  * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan),
- * unless it is marked for deletion. Data naming another account `:account` changes nothing unless
- * it is about a later billing period and that account is there and not marked for deletion; then it
- * moves the subscription to that account, and the account it leaves keeps its plan and paid-until
- * time. Each statement holds `condition` in its WHERE.
+ * unless it is marked for deletion. A purchase naming another account `:account` changes nothing
+ * unless it is about a later billing period and that account is there and not marked for deletion;
+ * then it moves the subscription to that account, and the account it leaves keeps its plan and
+ * paid-until time. A renewal stays with the account it is kept for, whatever account it names. Each
+ * statement holds `condition` in its WHERE.
  */
 function keepStatements(condition: string): string[] {
   return [
-    `UPDATE subscriptions SET account_id = coalesce(:account, account_id), product_id = :product,
+    `UPDATE subscriptions SET account_id = CASE WHEN :purchased = 1 THEN coalesce(:account, account_id)
+       ELSE account_id END, product_id = :product,
        period_ends = :period, paid_until = :paid, environment = :environment, signed_date = :signed
      WHERE original_transaction_id = :original AND signed_date < :signed
        AND period_ends <= :period AND ${plan} AND ${condition}
-       AND (:account IS NULL OR :account = account_id
+       AND (:purchased = 0 OR :account IS NULL OR :account = account_id
             OR (${later} AND EXISTS (SELECT 1 FROM accounts WHERE id = :account AND deleting = 0)))`,
     `INSERT INTO subscriptions (original_transaction_id, account_id, product_id, period_ends,
        paid_until, environment, signed_date)
