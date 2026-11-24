@@ -1,0 +1,5 @@
+id: drop-environment
+language: Swift
+rule:
+  pattern: $V.environment($K, $X)
+fix: $V

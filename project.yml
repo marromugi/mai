@@ -9,6 +9,8 @@ settings:
     SWIFT_VERSION: "6"
     SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
     SWIFT_APPROACHABLE_CONCURRENCY: YES
+    DEVELOPMENT_TEAM: Q4DFD98D9R
+    CODE_SIGN_STYLE: Automatic
 packages:
   Modules:
     path: Packages/Modules

@@ -3,6 +3,7 @@ import { exports } from "cloudflare:workers";
 import { createClient } from "@libsql/client/web";
 import { beforeEach, describe, expect, it } from "vitest";
 import { newAccount, products, runCron, store } from "./accounts";
+import { sealedWriting } from "./envelopes";
 
 /** The session token of a new account made for each test. */
 let token: string;
@@ -17,22 +18,9 @@ const otherId = "00000000-0000-0000-0000-000000000001";
 const first = "7116a2b45463fea9eb9d2693081e287f187cd706b8c3a1dac3eb6ddecd0ef965";
 const second = "98a3d39a1490f41ea9ab710ccd548dedd3cc435701d0c926a2cd698487892c97";
 
-/** A sealed writing of `contentsLength` ciphertext bytes, laid out as `Server/README.md` says. */
-function envelope({
-  writing = id,
-  updated = 1_790_000_000_123n,
-  magic = [0x6d, 0x61, 0x69, 0x01],
-  contentsLength = 10,
-} = {}): Uint8Array<ArrayBuffer> {
-  const bytes = new Uint8Array(4 + 16 + 8 + 60 + 12 + contentsLength + 16);
-  bytes.set(magic, 0);
-  bytes.set(
-    Array.from(writing.replaceAll("-", "").match(/../g) ?? [], (pair) => parseInt(pair, 16)),
-    4,
-  );
-  new DataView(bytes.buffer).setBigUint64(20, updated);
-  bytes.fill(0xab, 28);
-  return bytes;
+/** A sealed writing of `id` unless another is given; see `test/envelopes.ts`. */
+function envelope(options: Parameters<typeof sealedWriting>[0] = {}): Uint8Array<ArrayBuffer> {
+  return sealedWriting({ writing: id, ...options });
 }
 
 function request(
@@ -89,7 +77,7 @@ describe("who may call", () => {
   });
 
   it.each([
-    ["at a path that isn't a route", "/copies", {}],
+    ["at a path that isn't a route", "/drafts", {}],
     ["at a path that isn't a writing's ID", "/writings/notes", {}],
     ["as POST /writings", "/writings", { method: "POST" }],
     ["as DELETE of a writing", `/writings/${id}`, { method: "DELETE" }],
@@ -112,9 +100,9 @@ describe("who may call", () => {
   it("counts a request turned down for its shape against the day's requests", async () => {
     const authorization = await onTheDailyPlan();
     for (let used = 0; used < 4; used += 1) {
-      expect((await request("/copies", { authorization })).status).toBe(404);
+      expect((await request("/drafts", { authorization })).status).toBe(404);
     }
-    expect((await request("/copies", { authorization })).status).toBe(429);
+    expect((await request("/drafts", { authorization })).status).toBe(429);
   });
 });
 
@@ -227,7 +215,7 @@ describe("a write not of the one shape", () => {
     expect(await listed()).toEqual({ writings: [] });
   });
 
-  it.each(["/", "/writings/a/b", `/writings/${id}/copies`, "/copies"])(
+  it.each(["/", "/writings/a/b", `/writings/${id}/copies`, "/drafts"])(
     "is refused at %s",
     async (path) => {
       const response = await request(path);
