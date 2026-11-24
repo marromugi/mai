@@ -154,13 +154,21 @@ describe("Sign in with Apple notifications", () => {
 
   it("does no harm sent again, after the user signed in again", async () => {
     const one = await accountWithSessions();
-    const sent = await notification({ sub: one.sub });
+    // Issued 30 seconds ago; the user signed in again 10 seconds ago, before it was sent again.
+    const sent = await notification({ sub: one.sub, iat: Math.floor(Date.now() / 1000) - 30 });
     expect((await notify(sent)).status).toBe(200);
     const again = await newSessionToken();
+    const signedInAgain = Date.now() - 10 * 1000;
     await database.execute({
       sql: `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
             VALUES (?, ?, ?, ?, ?)`,
-      args: [again.caller.session, one.account, again.caller.secretSha256, Date.now(), Date.now()],
+      args: [
+        again.caller.session,
+        one.account,
+        again.caller.secretSha256,
+        signedInAgain,
+        Date.now(),
+      ],
     });
     expect((await notify(sent)).status).toBe(200);
     expect(await sessionWorks(again.token)).toBe(true);
