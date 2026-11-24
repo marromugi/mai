@@ -1,13 +1,15 @@
 import Foundation
 import Sync
+import SyncFakes
 import Testing
 
 struct WritingServerTests {
   private let ownKey = OwnKey.generate()
+  private let token = "s1.session.token"
   private let fake: FakeWritingServer
 
   init() {
-    fake = FakeWritingServer(accepting: ownKey.accessToken)
+    fake = FakeWritingServer(accepting: token)
   }
 
   private func server(token: String? = nil, transport: (any HTTPTransport)? = nil) -> WritingServer
@@ -15,14 +17,13 @@ struct WritingServerTests {
     guard let url = URL(string: "https://fake.test") else {
       preconditionFailure("https://fake.test is a URL")
     }
-    return WritingServer(
-      url: url, accessToken: token ?? ownKey.accessToken, transport: transport ?? fake)
+    return WritingServer(url: url, token: token ?? self.token, transport: transport ?? fake)
   }
 
   @Test(arguments: ServerContract.allCases)
   func fakeAnswersAsTheWorkerDoes(_ contract: ServerContract) async throws {
     try await contract.check(
-      server: server(), stranger: server(token: OwnKey.generate().accessToken), ownKey: ownKey)
+      server: server(), stranger: server(token: "s1.stranger.token"), ownKey: ownKey)
   }
 
   @Test func twoDevicesSyncThroughTheFake() async throws {

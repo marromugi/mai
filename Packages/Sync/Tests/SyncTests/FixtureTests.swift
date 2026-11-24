@@ -1,5 +1,6 @@
 import Foundation
 import Sync
+import SyncFakes
 import Testing
 
 /// The writing in `Server/test/fixtures/sealed-writing.json`, which the Worker's tests open by the
@@ -37,7 +38,7 @@ struct FixtureTests {
   @Test func isWhatSealingTheWritingSends() async throws {
     let fake = FakeWritingServer(accepting: "t")
     let server = try WritingServer(
-      url: #require(URL(string: "https://fake.test")), accessToken: "t", transport: fake)
+      url: #require(URL(string: "https://fake.test")), token: "t", transport: fake)
     _ = try await server.save(ownKey.seal(writing), over: nil)
     let sent = try #require(await fake.requests.last?.httpBody)
     let kept = try Self.bytes(fixture.envelope)

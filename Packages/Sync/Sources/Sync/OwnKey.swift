@@ -33,15 +33,6 @@ public struct OwnKey: Sendable, Equatable {
       inputKeyMaterial: key, info: Data("mai own key check".utf8), outputByteCount: 32)
     return Data(derived.withUnsafeBytes { SHA256.hash(data: $0) })
   }
-
-  /// What the server is shown to let this user in. It is derived one way from the own key, so the
-  /// server, which keeps only its SHA-256, learns nothing of the key.
-  public var accessToken: String {
-    let derived = HKDF<SHA256>.deriveKey(
-      inputKeyMaterial: key, info: Data("mai server access token".utf8), outputByteCount: 32)
-    return derived.withUnsafeBytes { Data($0) }.base64EncodedString()
-      .replacing("+", with: "-").replacing("/", with: "_").replacing("=", with: "")
-  }
 }
 
 public struct OwnKeyLengthError: LocalizedError {

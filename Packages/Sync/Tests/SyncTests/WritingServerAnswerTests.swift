@@ -10,7 +10,7 @@ struct WritingServerAnswerTests {
     throws -> WritingServer
   {
     try WritingServer(
-      url: #require(URL(string: "https://fake.test")), accessToken: "t",
+      url: #require(URL(string: "https://fake.test")), token: "t",
       transport: Answering(status: status, body: Data(body.utf8), headers: headers))
   }
 

@@ -78,12 +78,13 @@ public enum SaveOutcome: Sendable, Equatable {
 /// which the model leaves out; its `Sync` takes the settings #26 adds.
 public struct WritingServer: Sendable {
   let url: URL
-  let accessToken: String
+  /// The session's token (`Session.token`).
+  let token: String
   let transport: any HTTPTransport
 
-  public init(url: URL, accessToken: String, transport: any HTTPTransport = URLSession.shared) {
+  public init(url: URL, token: String, transport: any HTTPTransport = URLSession.shared) {
     self.url = url
-    self.accessToken = accessToken
+    self.token = token
     self.transport = transport
   }
 
@@ -144,7 +145,7 @@ public struct WritingServer: Sendable {
 
   private func request(for path: String) -> URLRequest {
     var request = URLRequest(url: url.appending(path: path))
-    request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     return request
   }
 
