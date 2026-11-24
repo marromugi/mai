@@ -12,6 +12,8 @@
 # Needs wrangler and turso logged in.
 # Usage: setup.sh staging | prod
 set -euo pipefail
+# Listings are read as plain text.
+export FORCE_COLOR=0
 
 server="$(cd "$(dirname "$0")/.." && pwd)"
 environment="$(node "$server/scripts/environment.mjs" "${1:-}")"

@@ -52,7 +52,7 @@ targets:
         # Merged into the generated Info.plist; carries MAI_SERVER to the app.
         INFOPLIST_FILE: App/Info.plist
       # The Worker each configuration talks to (Server/wrangler.jsonc). Beta, archived for
-      # TestFlight, talks to production instead when the App Store installed it (App/ServerAddress.swift).
+      # TestFlight, talks to production instead when the App Store installed it (Features/Root/ServerAddress.swift).
       configs:
         Debug:
           MAI_SERVER: https://mai-server-staging.marrromugi-dev.workers.dev

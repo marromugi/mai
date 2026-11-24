@@ -26,22 +26,40 @@ public struct ServerAddress: Equatable, Sendable {
   }
 
   /// Whether the App Store installed this app, from StoreKit's app transaction; nil when it can't
-  /// be had or verified within `limit`.
-  static func installedFromAppStore(within limit: Duration = .seconds(5)) async -> Bool? {
-    await withTaskGroup(of: Bool?.self) { group in
-      group.addTask { await appTransactionEnvironmentIsProduction() }
-      group.addTask {
-        try? await Task.sleep(for: limit)
-        if !Task.isCancelled { log.error("StoreKit gave no app transaction within \(limit)") }
-        return nil
-      }
-      let first = await group.next() ?? nil
-      group.cancelAll()
-      return first
+  /// be had or verified within `limit`. `asking` is StoreKit, or a stand-in in tests. Answers at
+  /// `limit` even when `asking` doesn't stop on cancellation.
+  static func installedFromAppStore(
+    within limit: Duration = .seconds(5),
+    asking: @escaping @Sendable () async -> Bool? = {
+      await appTransactionEnvironmentIsProduction()
+    }
+  ) async -> Bool? {
+    // The first answer wins, StoreKit's or the time limit's; StoreKit isn't waited for past it.
+    let (answers, answer) = AsyncStream.makeStream(of: Answer.self)
+    let asked = Task { answer.yield(.given(await asking())) }
+    let timer = Task {
+      try? await Task.sleep(for: limit)
+      answer.yield(.timedOut)
+    }
+    var iterator = answers.makeAsyncIterator()
+    let first = await iterator.next()
+    answer.finish()
+    asked.cancel()
+    timer.cancel()
+    switch first {
+    case .given(let installed): return installed
+    case .timedOut, nil:
+      log.error("StoreKit gave no app transaction within \(limit)")
+      return nil
     }
   }
 
-  private static func appTransactionEnvironmentIsProduction() async -> Bool? {
+  private enum Answer: Sendable {
+    case given(Bool?)
+    case timedOut
+  }
+
+  nonisolated private static func appTransactionEnvironmentIsProduction() async -> Bool? {
     do {
       switch try await AppTransaction.shared {
       case .verified(let transaction):

@@ -47,3 +47,21 @@ struct ServerAddressTests {
     ServerAddress(info: ["MaiServer": staging, "MaiAppStoreServer": production], environment: [:])
   }
 }
+
+struct InstalledFromAppStoreTests {
+  @Test(arguments: [true, false, nil] as [Bool?])
+  func storeKitsAnswerWithinTheLimitIsTheAnswer(answer: Bool?) async {
+    #expect(await ServerAddress.installedFromAppStore(within: .seconds(10)) { answer } == answer)
+  }
+
+  /// A StoreKit that never answers and ignores cancellation: the time limit still answers.
+  @Test(.timeLimit(.minutes(1)))
+  func noAnswerWithinTheLimitIsNilWithoutWaitingForStoreKit() async {
+    let started = ContinuousClock.now
+    let installed = await ServerAddress.installedFromAppStore(within: .milliseconds(100)) {
+      while true { try? await Task.sleep(for: .seconds(1)) }
+    }
+    #expect(installed == nil)
+    #expect(ContinuousClock.now - started < .seconds(5))
+  }
+}

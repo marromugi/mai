@@ -40,6 +40,7 @@ case "$1 $2" in
     case "$LISTED" in
       missing) echo "✘ [ERROR] Worker \\"$WORKER\\" not found." >&2; exit 1 ;;
       "logged out") echo "✘ [ERROR] Not logged in." >&2; exit 1 ;;
+      "route not found") echo "✘ [ERROR] Route not found." >&2; exit 1 ;;
       *) echo "$LISTED" ;;
     esac
     ;;
@@ -56,7 +57,8 @@ case "$1 $2" in
       file=""
       shift 4
       while [[ $# -gt 0 ]]; do [[ "$1" == --file ]] && file="$2"; shift; done
-      if [[ " $STORED " == *" $name "* ]]; then printf 'font:%s' "$name" >"$file"
+      if [[ -n "$OBJECTS_FAIL" ]]; then echo "✘ [ERROR] Not logged in." >&2; exit 1
+      elif [[ " $STORED " == *" $name "* ]]; then printf 'font:%s' "$name" >"$file"
       elif [[ " $STALE " == *" $name "* ]]; then printf 'old' >"$file"
       else echo "✘ [ERROR] The specified key does not exist." >&2; exit 1
       fi
@@ -124,6 +126,7 @@ type State = {
   buckets: string;
   stored?: string;
   stale?: string;
+  objectsFail?: boolean;
   variables?: Record<string, string>;
 };
 
@@ -157,6 +160,7 @@ function setUp(environment: string, state: State) {
     BUCKETS: state.buckets,
     STORED: state.stored ?? "",
     STALE: state.stale ?? "",
+    OBJECTS_FAIL: state.objectsFail === true ? "1" : "",
   };
   for (const name of ["APPLE_TEAM_ID", "APPLE_SIGN_IN_KEY_ID", "APPLE_SIGN_IN_KEY_FILE"]) {
     delete env[name];
@@ -296,6 +300,31 @@ await describe("setup.sh", async () => {
     ]);
   });
 
+  await it("tells the names it wants from names that only contain them", () => {
+    const run = setUp("staging", {
+      listed: listing(required.filter((name) => name !== "APPLE_SIGN_IN_KEY")),
+      databases: "mai mai-staging-old",
+      objects: "0",
+      buckets: "mai-photos-staging2 xmai-fonts-staging",
+      variables: apple(),
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(run.changes.slice(0, 4), [
+      "turso db create mai-staging",
+      schemaLoad("mai-staging"),
+      "wrangler r2 bucket create mai-photos-staging --update-config=false",
+      "wrangler r2 bucket create mai-fonts-staging --update-config=false",
+    ]);
+    assert.deepEqual(Object.keys(run.sent ?? {}), ["APPLE_SIGN_IN_KEY"]);
+  });
+
+  await it("stops at a font it can't read, putting nothing", () => {
+    const run = setUp("prod", { ...production, objectsFail: true });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /Not logged in/);
+    assert.deepEqual(run.changes, []);
+  });
+
   await it("makes nothing when the shell lacks what a missing secret is made from", () => {
     const run = setUp("staging", nothing);
     assert.equal(run.status, 1);
@@ -317,6 +346,13 @@ await describe("setup.sh", async () => {
     const run = setUp("staging", { ...nothing, listed: "logged out", variables: apple() });
     assert.equal(run.status, 1);
     assert.match(run.stderr, /Not logged in/);
+    assert.deepEqual(run.calls, ["wrangler secret list --env staging"]);
+  });
+
+  await it("takes only its Worker not found as no Worker yet", () => {
+    const run = setUp("staging", { ...nothing, listed: "route not found", variables: apple() });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /Route not found/);
     assert.deepEqual(run.calls, ["wrangler secret list --env staging"]);
   });
 
