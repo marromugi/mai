@@ -8,7 +8,7 @@ import Typesetting
 extension Writing {
   /// Latin and Japanese mixed in each paragraph, to see each set in its own family.
   static let mixedBody = """
-    Mai で書く。朝の光が desk に届くころ、書きかけの draft をもう一度読み返す。
+    Cotoma で書く。朝の光が desk に届くころ、書きかけの draft をもう一度読み返す。
     The quick brown fox jumps over the lazy dog. 素早い茶色の狐が、のろまな犬を飛び越える。
     2026 年 11 月 24 日、Typography は font-family の順に組まれる。
     """
