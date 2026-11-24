@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { createClient } from "@libsql/client/web";
 import { beforeAll, describe, expect, it } from "vitest";
+import { parseAccountId, type AccountId } from "../src/account-id";
 import { appleIssuer, appleKeysUrl } from "../src/apple-sign-in";
 import { appleRevokeUrl, appleTokenUrl } from "../src/apple-tokens";
 import { Challenges, challengeLifetime } from "../src/challenges";
@@ -70,6 +71,10 @@ function fakeApple(
     keysAnswer?: () => Response;
     /** The Worker's `APP_STORE_ENVIRONMENTS`, `wrangler.jsonc`'s when left out. */
     environments?: string;
+    /** Runs when the token endpoint is asked, before it answers. */
+    onToken?: () => Promise<void>;
+    /** Runs when the revoke endpoint is asked, before it answers. */
+    onRevoke?: () => Promise<void>;
   } = {},
 ) {
   const codes = new Map<string, Grant>();
@@ -85,6 +90,7 @@ function fakeApple(
     }
     if (url === appleRevokeUrl && init?.body instanceof URLSearchParams) {
       revoked.push(init.body.get("token") ?? "");
+      await options.onRevoke?.();
       return new Response(null, { status: 200 });
     }
     if (url !== appleTokenUrl || !(init?.body instanceof URLSearchParams)) {
@@ -92,6 +98,7 @@ function fakeApple(
     }
     const form = init.body;
     asked.push({ url, form });
+    await options.onToken?.();
     if (options.answer !== undefined) {
       return options.answer();
     }
@@ -1085,6 +1092,88 @@ describe("signing in", () => {
     expect((await deployed("/writings", as(kept))).status).toBe(200);
   });
 });
+
+describe("signing in while the account is deleted", () => {
+  it("answers 404 for an account marked for deletion, asking Apple for no token", async () => {
+    const apple = fakeApple();
+    const { account, sub } = await makeAccount(apple);
+    const id = parseAccountId(account) ?? fail();
+    await store.markForDeletionNow(id);
+    const asked = apple.asked.length;
+
+    expect((await signInAs(apple, sub)).status).toBe(404);
+    expect(apple.asked.length).toBe(asked);
+    expect(await rowsOf(account, sub)).toEqual({ sessions: 1, accounts: 1 });
+    // The cron tests pick marked accounts from the same database.
+    await store.deleteAccount(id);
+  });
+
+  it.each([
+    ["marked", async (account: AccountId) => void (await store.markForDeletionNow(account))],
+    [
+      "deleted",
+      async (account: AccountId) => {
+        await store.markForDeletionNow(account);
+        await store.deleteAccount(account);
+      },
+    ],
+  ])(
+    "revokes the token of the code when the account is %s after it was looked up",
+    async (_, deletion) => {
+      let account: AccountId | undefined;
+      const apple = fakeApple({
+        onToken: async () => {
+          if (account !== undefined) {
+            await deletion(account);
+          }
+        },
+      });
+      const made = await makeAccount(apple);
+      account = parseAccountId(made.account) ?? fail();
+
+      const answer = await signInAs(apple, made.sub, "refresh-of-a-deleted-account");
+
+      expect(answer.status).toBe(404);
+      expect(apple.revoked).toEqual(["refresh-of-a-deleted-account"]);
+      await store.deleteAccount(account);
+    },
+  );
+
+  it("revokes the token a sign-in kept while DELETE /account revoked the one before", async () => {
+    let sub: string | undefined;
+    let signedIn: number | undefined;
+    const other = fakeApple();
+    const apple = fakeApple({
+      onRevoke: async () => {
+        if (sub !== undefined && signedIn === undefined) {
+          signedIn = (await signInAs(other, sub, "refresh-during-delete")).status;
+        }
+      },
+    });
+    const made = await makeAccount(apple);
+    const { token } = await (
+      await signInAs(apple, made.sub, "refresh-before-delete")
+    ).json<{
+      token: string;
+    }>();
+    sub = made.sub;
+
+    const deleted = await serve(
+      new Request("https://mai.test/account", { method: "DELETE", ...as(token) }),
+      await apple.signIn,
+      photos,
+    );
+
+    expect(signedIn).toBe(200);
+    expect(deleted.status).toBe(204);
+    expect(apple.revoked).toEqual(["refresh-before-delete", "refresh-during-delete"]);
+    expect(await rowsOf(made.account, made.sub)).toEqual({ sessions: 0, accounts: 0 });
+  });
+});
+
+function fail(): never {
+  throw new Error("the test's account ID is a UUID");
+}
 
 function as(bearer: string): RequestInit {
   return { headers: { Authorization: `Bearer ${bearer}` } };

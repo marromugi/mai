@@ -114,17 +114,18 @@ export async function startSession(
     return user.response;
   }
   const account = await signIn.store.accountOfAppleUser(user.sub);
-  let refreshToken: Sealed | undefined;
-  if (account !== undefined) {
-    const exchanged = await exchangeFor(user.sub, code, signIn, now);
-    if (!exchanged.ok) {
-      return exchanged.response;
-    }
-    refreshToken = {
-      account,
-      sealedRefreshToken: await signIn.refreshTokens.seal(exchanged.refreshToken, account),
-    };
+  const exchanged =
+    account === undefined ? undefined : await exchangeFor(user.sub, code, signIn, now);
+  if (exchanged?.ok === false) {
+    return exchanged.response;
   }
+  const refreshToken: Sealed | undefined =
+    account === undefined || exchanged === undefined
+      ? undefined
+      : {
+          account,
+          sealedRefreshToken: await signIn.refreshTokens.seal(exchanged.refreshToken, account),
+        };
   const { token, caller } = await newSessionToken();
   const signedIn = await signIn.store.signIn(
     user.sub,
@@ -134,9 +135,15 @@ export async function startSession(
     refreshToken,
   );
   if (!signedIn.signedIn) {
-    return signedIn.reason === "challenge-used"
-      ? problem(401, challengeUsed)
-      : problem(404, "this Apple user has no account");
+    if (signedIn.reason === "challenge-used") {
+      return problem(401, challengeUsed);
+    }
+    if (exchanged !== undefined) {
+      // The account went or was marked for deletion after it was looked up, and its deletion
+      // revokes only the token it keeps.
+      await signIn.tokens.revoke(exchanged.refreshToken, now);
+    }
+    return problem(404, "this Apple user has no account");
   }
   return Response.json({ account: signedIn.account, token });
 }

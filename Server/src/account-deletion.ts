@@ -127,7 +127,8 @@ type Held = { mark: () => Promise<boolean>; deleteRows: () => Promise<boolean> }
 
 /**
  * Revokes the account's Apple token, empties R2 of it, then deletes its rows, as `held` lets it;
- * once the rows went, R2 is swept again, kept alive past the return.
+ * once the rows went, R2 is swept again, kept alive past the return. A sign-in can replace the
+ * token until the account is marked, so the token kept once it is marked is revoked too.
  */
 async function deleteFound(
   found: Sealed,
@@ -145,12 +146,23 @@ async function deleteFound(
   if (!(await held.mark())) {
     return "kept";
   }
+  const marked = await signIn.store.refreshTokenOf(account);
+  if (marked !== undefined && !sameBytes(marked.sealedRefreshToken, sealedRefreshToken)) {
+    const replaced = await signIn.refreshTokens.open(marked.sealedRefreshToken, account);
+    if (!(await signIn.tokens.revoke(replaced, now)).ok) {
+      return "unrevoked";
+    }
+  }
   await deletePhotosOf(account, photos.bucket);
   if (!(await held.deleteRows())) {
     return "kept";
   }
   photos.keepAlive(deleteRowlessPhotosOf(account, photos.bucket, signIn.store));
   return "deleted";
+}
+
+function sameBytes(one: Uint8Array, other: Uint8Array): boolean {
+  return one.length === other.length && one.every((byte, index) => byte === other[index]);
 }
 
 /** Deletes every object R2 holds under `<account>/`. */

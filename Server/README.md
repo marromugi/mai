@@ -28,7 +28,7 @@
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /challenges`                  | 201 と `{"challenge"}`。5 分使える。アプリはその SHA-256(小文字の 16 進)を Sign in with Apple の nonce にする                                                                                                                                                                                                                                                                                                                                                        |
 | `POST /account`                     | `{"account", "challenge", "identityToken", "authorizationCode", "transaction"}`。`account` はアプリが作った UUID で、購入の `appAccountToken` と同じもの。`transaction` はそのアカウントのために買った購読の StoreKit 2 の取引(`Transaction.jwsRepresentation`)。201 と `{"token"}`(セッションのトークン)。その Apple の利用者かその ID のアカウントがもうあれば 409 で、アカウントもセッションも作らない(サインインは `POST /sessions`)。取引の断り方は下の「購読」 |
-| `POST /sessions`                    | `{"challenge", "identityToken", "authorizationCode"}`。200 と `{"account", "token"}`。その Apple の利用者のアカウントがなければ 404(Apple にはコードを送らない)。アカウントがあれば、コードを `POST /account` と同じく refresh トークンに替えて、アカウントの refresh トークンをそれに置き換える                                                                                                                                                                     |
+| `POST /sessions`                    | `{"challenge", "identityToken", "authorizationCode"}`。200 と `{"account", "token"}`。その Apple の利用者のアカウントがないか、削除の印(`deleting`)が付いていれば 404(Apple にはコードを送らない)。アカウントがあれば、コードを `POST /account` と同じく refresh トークンに替えて、アカウントの refresh トークンをそれに置き換える                                                                                                                                   |
 | `POST /app-store/notifications`     | Apple が送る App Store Server Notifications V2 の `{"signedPayload"}`。下の「購読」                                                                                                                                                                                                                                                                                                                                                                                  |
 | `POST /apple/sign-in-notifications` | Apple が送る Sign in with Apple の通知の `{"payload"}`。下の「Sign in with Apple の通知」                                                                                                                                                                                                                                                                                                                                                                            |
 
@@ -36,7 +36,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 `POST /account` は認可コードを Apple の `/auth/token` で refresh トークンに替え(`src/apple-tokens.ts`)、`REFRESH_TOKEN_KEY` の AES-256-GCM でアカウント ID を付けて封じて `accounts.apple_refresh_token` に置く(`src/refresh-tokens.ts`)。封じる前の値はどこにも置かない。Apple がコードを断るか(`invalid_grant`)、コードが別の利用者のものなら 401、Apple が答えなければ 502。Apple がそれ以外の 4xx を返したら Worker の要求か `APPLE_` の秘密の誤りなので 500。取引は Apple に引き換えを頼む前に確かめ、プランは取引の商品で決める。
 
-`POST /sessions` も同じようにコードを替え、セッションを始めるのと同じ書き込みでアカウントの refresh トークンを置き換える。利用者が Apple の設定で mai をやめると Apple は前のトークンを無効にするので、サインインし直したあとの `DELETE /account` が取り消すのは、そのときの許可のトークンになる(TN3194)。断り方は `POST /account` と同じで、401 や 502 のときはセッションも始めず、トークンも変えず、チャレンジも使わない。
+`POST /sessions` も同じようにコードを替え、セッションを始めるのと同じ書き込みでアカウントの refresh トークンを置き換える。利用者が Apple の設定で mai をやめると Apple は前のトークンを無効にするので、サインインし直したあとの `DELETE /account` が取り消すのは、そのときの許可のトークンになる(TN3194)。断り方は `POST /account` と同じで、401 や 502 のときはセッションも始めず、トークンも変えず、チャレンジも使わない。コードを替えたあとでアカウントが消えるか削除の印が付いていたら、替えたトークンを取り消して 404。
 
 ### Sign in with Apple の通知
 
@@ -84,7 +84,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 `DELETE /account`(`src/account-deletion.ts`)は次の順に進む。
 
 1. `accounts.apple_refresh_token` を開き、Apple の `/auth/revoke` で取り消す。Apple は前に取り消したトークンにも 200 を返す。Apple が答えなければ 502、それ以外の 4xx は Worker の要求か `APPLE_` の秘密の誤りなので 500。
-2. 要求のセッションが生きていれば `accounts.deleting` を 1 にする。生きていなければ 401 で、ここから先は何も消さない。
+2. 要求のセッションが生きていれば `accounts.deleting` を 1 にする。生きていなければ 401 で、ここから先は何も消さない。1 と 2 の間に `POST /sessions` がトークンを置き換えていたら、それも取り消す(印のあとは置き換わらない)。Apple が答えなければ 502。
 3. R2 の `<アカウント ID>/` の下を全部消す。
 4. `deleting` が 1 なら、`account_id` を持つ表(`src/store.ts` の `accountTables`)と `accounts` のそのアカウントの行を 1 つの batch で消す。セッションも全部なくなり、どの端末のトークンも 401 になる。2 のあとにセッションが終わっても(1 の取り消しで Apple が送る `consent-revoked` の通知が、上の「Sign in with Apple の通知」で全セッションを消しても)、ここは止まらない。
 5. 3 と 4 の間に送り終えた写真のために、R2 の `<アカウント ID>/` の下で `photos` に行のないものをもう一度消す(要求のあとも続ける)。行のあるものは、同じ ID で作り直したアカウント(同じ購入の `appAccountToken`)の写真なので残す。4 のあとに R2 に書き終えた写真は、行がないので `stored` にならず、その要求が自分で消す。
