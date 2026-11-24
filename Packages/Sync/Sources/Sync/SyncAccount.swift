@@ -211,8 +211,7 @@ public struct SyncAccount: Sendable {
   ) -> Synchronizer {
     Synchronizer(
       writings: writings,
-      stateFile: stateDirectory.appending(
-        path: "\(keys.session.account.uuidString.lowercased()).json", directoryHint: .notDirectory),
+      stateFile: Self.syncStateFile(of: keys.session.account, in: stateDirectory),
       server: WritingServer(
         url: server.url, token: keys.session.token, transport: server.transport),
       ownKey: keys.ownKey)
@@ -230,6 +229,44 @@ public struct SyncAccount: Sendable {
       throw .server(error)
     }
     try keychain { () throws(KeychainError) in try sessions.remove() }
+  }
+
+  /// Deletes the account on the server (`DELETE /account`), then forgets it on the device: the
+  /// session and the sync's state of it in `stateDirectory`. The device keeps everything when the
+  /// server doesn't answer 204, so the person can try again. A session the server no longer lets
+  /// in is dropped from the device, and the rest kept, since the server can't say whether the
+  /// account is gone.
+  public func deleteAccount(syncStateIn stateDirectory: URL) async throws(AccountError) {
+    guard let session = try session() else { throw .signInNeededToDelete }
+    do {
+      try await server.deleteAccount(token: session.token)
+    } catch .refused(status: 401, let reason) {
+      syncLogger.error("The server refused to delete the account for its session: \(reason)")
+      try keychain { () throws(KeychainError) in try sessions.remove() }
+      throw .signInNeededToDelete
+    } catch {
+      throw .server(error)
+    }
+    do {
+      try sessions.remove()
+    } catch {
+      throw .notForgotten(error)
+    }
+    do {
+      try FileManager.default.removeItem(
+        at: Self.syncStateFile(of: session.account, in: stateDirectory))
+    } catch CocoaError.fileNoSuchFile {
+      // Never synced.
+    } catch {
+      // Left behind, it only makes a later sync of the same account ID send every writing again.
+      syncLogger.error("The sync state of a deleted account couldn't be removed: \(error)")
+    }
+  }
+
+  /// Where the sync of `account` keeps its state, in `stateDirectory`.
+  static func syncStateFile(of account: UUID, in stateDirectory: URL) -> URL {
+    stateDirectory.appending(
+      path: "\(account.uuidString.lowercased()).json", directoryHint: .notDirectory)
   }
 
   private func credential(for challenge: String) async throws(AccountError) -> AppleCredential {
@@ -299,6 +336,11 @@ public enum AccountError: LocalizedError {
   case recoveryKey(RecoveryKeyError)
   /// The recovery key is of another own key than the account's.
   case notTheAccountsKey
+  /// The server no longer let the session in to delete the account, or none was kept; the
+  /// session was dropped.
+  case signInNeededToDelete
+  /// The account was deleted on the server, but the device couldn't forget its session.
+  case notForgotten(KeychainError)
 
   public var errorDescription: String? {
     switch self {
@@ -322,6 +364,10 @@ public enum AccountError: LocalizedError {
       error.localizedDescription
     case .notTheAccountsKey:
       "このリカバリーキーは、このアカウントの鍵ではありません。"
+    case .signInNeededToDelete:
+      "サインインが切れたため、アカウントを削除できませんでした。もう一度 Apple でサインインしてから削除してください。"
+    case .notForgotten:
+      "アカウントは削除しましたが、この端末のサインインの情報を消せませんでした。"
     }
   }
 }

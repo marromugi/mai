@@ -47,6 +47,8 @@ enum AccountPhase: Equatable {
   /// What went wrong, written for a person, until it is dismissed.
   var problem: String?
   private var settling = false
+  /// Whether the account is being deleted.
+  private(set) var deleting = false
   /// Where each account's sync keeps what it last synced.
   @ObservationIgnored private let syncState: URL
 
@@ -103,9 +105,9 @@ enum AccountPhase: Equatable {
 
   /// Checks the session with Apple and sends the subscriptions again (`SyncAccount.check()`), as at
   /// launch and when StoreKit tells of a transaction. Left to the next time while signing in or
-  /// out, which change the session themselves.
+  /// out or deleting the account, which change the session themselves.
   public func check() async {
-    guard phase != .working else { return }
+    guard phase != .working, !deleting else { return }
     do {
       let checked = try await account.check()
       switch checked {
@@ -184,9 +186,9 @@ enum AccountPhase: Equatable {
   }
 
   /// Settles the own key when signed in, as when the account's settings are shown. Not while
-  /// signing in or settling already, which would each make a key.
+  /// signing in or settling already, which would each make a key, nor while deleting the account.
   func settleOwnKey() async {
-    guard phase == .signedIn || phase == .recoveryKeyNeeded, !settling else { return }
+    guard phase == .signedIn || phase == .recoveryKeyNeeded, !settling, !deleting else { return }
     settling = true
     defer { settling = false }
     do {
@@ -223,6 +225,7 @@ enum AccountPhase: Equatable {
   }
 
   func signOut() async {
+    guard !deleting else { return }
     let before = phase
     phase = .working
     do {
@@ -234,12 +237,44 @@ enum AccountPhase: Equatable {
     }
   }
 
+  /// Deletes the account on the server, then forgets it on the device: the session, the sync's
+  /// state, and the account ID kept, so the device has no account. While it runs, the account is
+  /// neither checked, settled, synced, nor signed out of.
+  func deleteAccount() async {
+    guard phase == .signedIn || phase == .recoveryKeyNeeded, !deleting else { return }
+    deleting = true
+    defer { deleting = false }
+    do {
+      try await account.deleteAccount(syncStateIn: syncState)
+    } catch {
+      if case .notForgotten = error {
+        // Deleted on the server.
+        kept.forget()
+        canSignIn = false
+      }
+      report(error, "Deleting the account")
+      do {
+        if try account.session() == nil {
+          phase = .signedOut
+        }
+      } catch {
+        accountLogger.error("The session couldn't be read: \(error)")
+        phase = .signedOut
+      }
+      return
+    }
+    kept.forget()
+    canSignIn = false
+    recoveryKeyToShow = nil
+    phase = .signedOut
+  }
+
   /// What a sync of the writings runs with: the session and the account's own key. Settles the own
   /// key first when it hasn't been since the device became signed in, as when the account's
-  /// settings are shown. Nil while signed out, while the own key isn't the account's, or while
-  /// another settling runs.
+  /// settings are shown. Nil while signed out, while the own key isn't the account's, while
+  /// another settling runs, or while the account is being deleted.
   func syncKeys() async throws(AccountError) -> SyncKeys? {
-    guard phase == .signedIn else { return nil }
+    guard phase == .signedIn, !deleting else { return nil }
     if !ownKeySettled {
       guard !settling else { return nil }
       settling = true
@@ -282,11 +317,13 @@ enum AccountPhase: Equatable {
   }
 
   /// Settles the own key of `session`. False, settling nothing, when the device left the session
-  /// while the account was read.
+  /// while the account was read or the key settled, as when the account was deleted meanwhile.
   private func settle(_ session: Session) async throws(AccountError) -> Bool {
     let read = try await self.read(session)
     guard try stillIn(session, keeping: read) else { return false }
-    switch try await account.settleOwnKey(session, against: read.state) {
+    let outcome = try await account.settleOwnKey(session, against: read.state)
+    guard try account.session() == session else { return false }
+    switch outcome {
     case .ready:
       phase = .signedIn
       ownKeySettled = true

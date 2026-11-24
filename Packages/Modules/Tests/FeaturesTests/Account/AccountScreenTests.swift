@@ -6,7 +6,7 @@ import Testing
 @testable import Features
 
 /// The account's screens: the settings' 「同期」 section, the plans screen once Plus is bought, and
-/// the recovery key shown and typed.
+/// the recovery key shown and typed, and the page that deletes the account.
 struct AccountScreenTests {
   /// After a purchase, before signing in: the Apple button under 「同期のプラン」.
   @Test func syncSectionOffersSignInOnceAPlanIsBought() {
@@ -180,6 +180,19 @@ struct AccountScreenTests {
 
   @Test func theRecoveryKeyIsTypedOnAPageOfItsOwn() {
     assertPushed(RecoveryKeyEntryView(restore: { _ in nil }), title: nil)
+  }
+
+  /// What goes from the server and what stays, the subscription that goes on, and the button.
+  @Test func theAccountIsDeletedOnAPageOfItsOwn() {
+    assertPushed(AccountDeletionView(deleteAccount: { false }), title: nil)
+  }
+
+  @Test func theAccountDeletionPageInDarkMode() {
+    assertPushed(AccountDeletionView(deleteAccount: { false }), title: nil, colorScheme: .dark)
+  }
+
+  @Test func theAccountDeletionPageAtTheLargestSize() {
+    assertPushed(AccountDeletionView(deleteAccount: { false }), title: nil, size: .accessibility5)
   }
 
   private func planBought(_ phase: AccountPhase) -> PlanBought {

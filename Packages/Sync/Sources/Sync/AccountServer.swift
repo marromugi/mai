@@ -189,6 +189,14 @@ public struct AccountServer: Sendable {
     _ = try await transport.answer(request, expecting: [204])
   }
 
+  /// Deletes the account of `token` (`DELETE /account`): Apple's refresh token is revoked, and
+  /// the server's writings, photos and read mode copies of it go, with every session of it.
+  public func deleteAccount(token: String) async throws(ServerError) {
+    var request = authorized(URLRequest(url: url.appending(path: "account")), token)
+    request.httpMethod = "DELETE"
+    _ = try await transport.answer(request, expecting: [204])
+  }
+
   private func authorized(_ request: URLRequest, _ token: String) -> URLRequest {
     var request = request
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

@@ -174,6 +174,22 @@ struct AccountContractTests {
     #expect(try await device.account.check() == .signedOut)
   }
 
+  @Test func deletingTheAccountEndsEverySessionOfItAndForgetsItOnTheDevice() async throws {
+    let (first, session, recoveryKey) = try await signedIn()
+    let second = try device(user: first.user, ownKey: recoveryKey.ownKey)
+    let secondSession = try await second.account.signIn(for: session.account)
+    let states = FileManager.default.temporaryDirectory.appending(
+      path: "mai-contract-\(UUID().uuidString)", directoryHint: .isDirectory)
+
+    try await first.account.deleteAccount(syncStateIn: states)
+    #expect(try first.sessions.load() == nil)
+    for token in [session.token, secondSession.token] {
+      await #expect(
+        performing: { try await first.server.account(token: token) }, throws: isRefused(401))
+    }
+    #expect(try await second.account.check() == .sessionEnded)
+  }
+
   @Test func aPurchaseOfAnotherAccountIsRefusedWhenTheAppleUserHasNone() async throws {
     let (_, session, _) = try await signedIn()
     // Another Apple user on a device whose App Store account bought the first one's plan.
