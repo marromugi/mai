@@ -44,11 +44,11 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 - 中身の `events` は `type` と `sub`(Apple の利用者)を持つ。Apple の文書の例はオブジェクトだが、JSON の文字列で送られるという報告もあるので、どちらも読む。
 - `consent-revoked`(その人が mai で Apple でサインインするのをやめた)と `account-deleted`(Apple アカウントを消した。文書が前に書いていた `account-delete` も同じに扱う。[開発者フォーラムの Apple の答え](https://developer.apple.com/forums/thread/808898))は、そのアカウントのセッションのうち、`iat` の秒の終わりまでに始まったものを全部消す。`iat` のない通知は、受けた時までに始まったものを消す。
   - `consent-revoked` ではアカウントは消さない。もう一度サインインすれば(`POST /sessions`)同じアカウントに戻る。
-  - `account-deleted` では、続けてアカウントも消す(#69 の答え)。その Apple の利用者ではもうどの端末もサインインできないため。消し方は下の「アカウントの削除」の 1〜5 と同じで(`deleteAccountOfAppleUser`、`src/account-deletion.ts`)、要求のセッションの代わりに `sub` でアカウントを見つけ、印はセッションなしで付ける。Apple の取り消しが答えなければ 502 で、セッションのほかは何も消さない。同じ通知がまた来れば、そこから消す。
+  - `account-deleted` では、続けてアカウントも消す(#69 の答え)。その Apple の利用者ではもうどの端末もサインインできないため。消し方は下の「アカウントの削除」の 1〜5 と同じで(`deleteAccountOfAppleUser`、`src/account-deletion.ts`)、ただし要求のセッションの代わりに `sub` でアカウントを見つけ、Apple に取り消しを頼む前に印(`deleting`)を付ける。その端末からは `DELETE /account` をやり直せないので、Apple の取り消しが答えないときや、R2 か行の削除で失敗したときは、下の「期限切れのあとの削除」の Cron が次の回に終える。取り消しが答えなくても答えは 200 で、失敗したときは 500。
 - `email-enabled`・`email-disabled`(メールの転送の変更)と、ほかの種類は、mai がメールを頼んでいないので何もしない。
 - 同じ通知が何度来ても、消すセッションは同じで、そのあとにサインインし直して始まったセッションは残る。アカウントのない `sub`(`account-deleted` で消したあとの同じ通知も)は何もしない。
 
-答え方: 読めた通知は、何かしたかどうかによらず 200(本文なし)。`payload` がない、JWT でない、署名・`iss`・`aud` が通らない、`events` に `type` と `sub` がないものは 400 で、何もしない。Apple の鍵を取れないか、`account-deleted` で Apple の取り消しが答えなければ 502。Apple の文書は 200 の例を出すだけで、ほかの答えのときに送り直すかは書いていない。
+答え方: 読めた通知は、何かしたかどうかによらず 200(本文なし)。`payload` がない、JWT でない、署名・`iss`・`aud` が通らない、`events` に `type` と `sub` がないものは 400 で、何もしない。Apple の鍵を取れなければ 502。Apple の文書は 200 の例を出すだけで、ほかの答えのときに送り直すかは書いていない。
 
 `DELETE /account` が Apple のトークンを取り消すと、Apple はその利用者の `consent-revoked` を送ってくるものとして扱う([TN3194](https://developer.apple.com/documentation/technotes/tn3194-handling-account-deletions-and-revoking-tokens-for-sign-in-with-apple) は取り消しのあとにこの通知が来ると書く)。削除が終わっていればアカウントがないので何もせず、途中ならセッションは消えるが、削除は印を付けたあとなので止まらない(下の「アカウントの削除」)。
 
@@ -210,7 +210,7 @@ Cron(毎分)が、最後に使ってから 180 日たったセッションと、
 
 ### 期限切れのあとの削除
 
-期限が切れてから(`accounts.paid_until` から)90 日たったアカウントと、`DELETE /account` が印(`deleting`)を付けて終えなかったアカウントを、Cron が 1 回 10 件まで、その中から無作為に選んで消す(`deleteLapsedAccounts`、`src/account-deletion.ts`)。消し方は上の「アカウントの削除」と同じで、Apple の refresh トークンを取り消し、R2 の `<アカウント ID>/` の下を消し、すべての表の行を消す。
+期限が切れてから(`accounts.paid_until` から)90 日たったアカウントと、`DELETE /account` か Apple の `account-deleted` の通知が印(`deleting`)を付けて終えなかったアカウントを、Cron が 1 回 10 件まで、その中から無作為に選んで消す(`deleteLapsedAccounts`、`src/account-deletion.ts`)。消し方は上の「アカウントの削除」と同じで、Apple の refresh トークンを取り消し、R2 の `<アカウント ID>/` の下を消し、すべての表の行を消す。
 
 - 90 日のうちに購読し直せば(`paid_until` がまた先になれば)消さない。購読の送り直しと通知は上の「購読」の通りに `paid_until` を変える。
 - Apple が取り消したあと、R2 に触る前に `accounts.deleting` を 1 にする。そこまでに購読し直していれば何も消さない。そのあとの購読し直しはもう `paid_until` を変えず、アカウントは消える。

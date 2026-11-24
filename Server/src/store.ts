@@ -695,8 +695,9 @@ export class Store {
   }
 
   /**
-   * Deletes every row of `account`, its `accounts` row last, in one batch, when `markForDeletion`
-   * or `markForDeletionByCaller` marked it. False when it hadn't, and nothing was deleted.
+   * Deletes every row of `account`, its `accounts` row last, in one batch, when `markForDeletion`,
+   * `markForDeletionByCaller` or `markForDeletionNow` marked it. False when it hadn't, and nothing
+   * was deleted.
    */
   async deleteAccount(account: AccountId): Promise<boolean> {
     return this.#deleteRows(

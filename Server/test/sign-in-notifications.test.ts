@@ -1,12 +1,14 @@
 import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { createClient } from "@libsql/client/web";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { deleteLapsedAccounts } from "../src/account-deletion";
 import { appleIssuer, appleKeysUrl } from "../src/apple-sign-in";
 import { appleRevokeUrl } from "../src/apple-tokens";
 import { serve, signInOf } from "../src/index";
 import { RefreshTokens } from "../src/refresh-tokens";
 import { newSessionToken } from "../src/sessions";
+import type { SignIn } from "../src/sign-in";
 import { accountTables } from "../src/store";
 import { newAccount, photos } from "./accounts";
 import { jwks, makeSignInKey, signIdentityToken, type SignInKey } from "./apple-fakes";
@@ -17,6 +19,10 @@ const database = createClient({ url: env.TURSO_URL });
 let signer: SignInKey;
 /** The Worker's Sign in with Apple key, which signs `client_secret` for Apple's revoke endpoint. */
 let clientKeyPem: string;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 beforeAll(async () => {
   signer = await makeSignInKey("test-key");
@@ -43,10 +49,10 @@ type FakeApple = {
 };
 
 /**
- * Sends `body` to `POST /apple/sign-in-notifications` as Apple would, with Apple's JWKS answering
- * with `signer`'s key, and Apple's revoke endpoint, as `apple` has them.
+ * What the Worker reaches Apple and Turso through, with Apple's JWKS answering with `signer`'s key,
+ * and Apple's revoke endpoint, as `apple` has them.
  */
-async function notify(body: string, apple: FakeApple = { revoked: [] }): Promise<Response> {
+async function signInWith(apple: FakeApple): Promise<SignIn> {
   const send = async (url: string, init?: RequestInit): Promise<Response> => {
     if (url === appleKeysUrl) {
       return apple.keysAnswer?.() ?? new Response(await jwks([signer]));
@@ -57,17 +63,22 @@ async function notify(body: string, apple: FakeApple = { revoked: [] }): Promise
     }
     throw new Error(`the Worker reached ${url}, which the fake Apple doesn't serve`);
   };
+  return signInOf(
+    { ...env, APPLE_SIGN_IN_KEY: clientKeyPem },
+    send,
+    await caches.open(crypto.randomUUID()),
+  );
+}
+
+/** Sends `body` to `POST /apple/sign-in-notifications` as Apple would, with Apple as `apple` has it. */
+async function notify(body: string, apple: FakeApple = { revoked: [] }): Promise<Response> {
   return serve(
     new Request("https://mai.test/apple/sign-in-notifications", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
     }),
-    signInOf(
-      { ...env, APPLE_SIGN_IN_KEY: clientKeyPem },
-      send,
-      await caches.open(crypto.randomUUID()),
-    ),
+    await signInWith(apple),
     photos,
   );
 }
@@ -107,8 +118,8 @@ async function notification(options: Notification): Promise<string> {
 }
 
 /**
- * An account with two sessions, both started a minute ago, an object in R2, and its Apple user.
- * Its Apple refresh token is sealed as `POST /account` seals it.
+ * An account with two sessions, both started a minute ago, a writing, its subscription, an object
+ * in R2, and its Apple user. Its Apple refresh token is sealed as `POST /account` seals it.
  */
 async function accountWithSessions() {
   const started = Date.now() - 60 * 1000;
@@ -128,6 +139,11 @@ async function accountWithSessions() {
           await new RefreshTokens(env.REFRESH_TOKEN_KEY).seal(refreshToken, made.account),
           made.account,
         ],
+      },
+      {
+        sql: `INSERT INTO writings (account_id, id, revision, updated, size, envelope)
+              VALUES (?, ?, 'r', 0, 3, X'010203')`,
+        args: [made.account, crypto.randomUUID()],
       },
     ],
     "write",
@@ -221,20 +237,38 @@ describe("Sign in with Apple notifications", () => {
     expect(apple.revoked).toEqual([]);
   });
 
-  it("answers 502 and deletes nothing but sessions when Apple's revoke endpoint doesn't answer, then deletes when sent again", async () => {
+  it("leaves the account marked when Apple's revoke endpoint doesn't answer, for the cron trigger to finish", async () => {
     const one = await accountWithSessions();
     const sent = await notification({ type: "account-deleted", sub: one.sub });
     const down: FakeApple = {
       revoked: [],
       revokeAnswer: () => new Response(null, { status: 503 }),
     };
-    expect((await notify(sent, down)).status).toBe(502);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    expect((await notify(sent, down)).status).toBe(200);
     expect(await accountKept(one.account)).toBe(true);
     expect(await objectsOf(one.account)).toBe(1);
     expect(await sessionsOf(one.account)).toBe(0);
 
-    expect((await notify(sent)).status).toBe(200);
+    // The cron trigger, kept to this account: other test files' accounts are due too.
+    const apple: FakeApple = { revoked: [] };
+    const signIn = await signInWith(apple);
+    const store = new Proxy(signIn.store, {
+      get(target, key, receiver) {
+        if (key === "dueForDeletion") {
+          return async (now: number) =>
+            (await target.dueForDeletion(now, 1000)).filter(
+              ({ account }) => account === one.account,
+            );
+        }
+        const value: unknown = Reflect.get(target, key, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    await deleteLapsedAccounts({ ...signIn, store }, photos, Date.now());
+    expect(apple.revoked).toEqual([one.refreshToken]);
     expect(await accountKept(one.account)).toBe(false);
+    expect(await objectsOf(one.account)).toBe(0);
   });
 
   for (const type of ["email-enabled", "email-disabled", "some-later-event"]) {

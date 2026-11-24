@@ -23,7 +23,7 @@ const sessionEnding = new Set(["consent-revoked", ...accountDeleting]);
 /**
  * `{"payload"}`: a JWT Apple signed with a Sign in with Apple key, for this app, whose `events`
  * claim names the event and the user. Answers 200 for every event it reads, acted on or not, and
- * for a user with no account; 502 when Apple's revoke endpoint didn't answer while deleting one.
+ * for a user with no account.
  */
 export async function receiveSignInNotification(
   request: Request,
@@ -60,11 +60,8 @@ export async function receiveSignInNotification(
       iat === undefined ? now : (iat + 1) * 1000,
     );
   }
-  if (
-    accountDeleting.has(event.type) &&
-    (await deleteAccountOfAppleUser(event.sub, signIn, photos, now)) === "unrevoked"
-  ) {
-    return problem(502, "Apple's revoke endpoint didn't answer; the account wasn't deleted");
+  if (accountDeleting.has(event.type)) {
+    await deleteAccountOfAppleUser(event.sub, signIn, photos, now);
   }
   return new Response(null, { status: 200 });
 }

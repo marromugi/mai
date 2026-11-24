@@ -47,18 +47,19 @@ export async function deleteAccount(
 
 /**
  * Deletes the Apple user's account as `deleteAccount` does, for Apple's `account-deleted`: no device
- * can sign in to it again. `none`: the user has no account, as when it went already.
- * `unrevoked`: Apple didn't answer, and nothing was deleted.
+ * can sign in to it again. It is marked before Apple is asked, so that the cron trigger finishes it
+ * when Apple's revoke endpoint doesn't answer or a later step fails; nothing else can, since no
+ * device can call `DELETE /account` for it.
  */
 export async function deleteAccountOfAppleUser(
   appleSub: string,
   signIn: SignIn,
   photos: Photos,
   now: number,
-): Promise<"deleted" | "unrevoked" | "none"> {
+): Promise<void> {
   const found = await signIn.store.appleUserToDelete(appleSub);
-  if (found === undefined) {
-    return "none";
+  if (found === undefined || !(await signIn.store.markForDeletionNow(found.account))) {
+    return;
   }
   const deleted = await deleteFound(found, signIn, photos, now, {
     mark: () => signIn.store.markForDeletionNow(found.account),
@@ -68,15 +69,19 @@ export async function deleteAccountOfAppleUser(
       return true;
     },
   });
-  return deleted === "kept" ? "none" : deleted;
+  if (deleted === "unrevoked") {
+    console.warn(
+      `the account ${found.account}, whose Apple Account was deleted, is marked and wasn't deleted: Apple's revoke endpoint didn't answer; the cron trigger tries again`,
+    );
+  }
 }
 
 /** At most this many accounts are deleted each time the cron trigger runs. */
 export const lapsedDeletedAtOnce = 10;
 
 /**
- * Deletes the accounts lapsed `lapsedKept` or longer, and those a `DELETE /account` marked and
- * didn't finish, at most `lapsedDeletedAtOnce` picked at random, as `deleteAccount` does; run by
+ * Deletes the accounts lapsed `lapsedKept` or longer, and those marked for deletion that weren't
+ * finished (by `DELETE /account` or Apple's `account-deleted`), at most `lapsedDeletedAtOnce` picked at random, as `deleteAccount` does; run by
  * the cron trigger. Each is marked once Apple has revoked its token and before R2 is touched: a
  * resubscription before then keeps a lapsed account whole, and one after it no longer keeps it, so
  * an account that fails partway is finished by a later run. One that fails is logged and left for

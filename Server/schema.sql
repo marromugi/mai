@@ -27,7 +27,8 @@ INSERT INTO plans VALUES
 -- the one paid for longest, and paid_until the latest time any of them is paid until. Past
 -- paid_until the account has lapsed: it is read but not written, and 90 days past it the cron
 -- trigger deletes it (lapsedKept in src/store.ts). deleting is 1 once DELETE /account or the cron
--- trigger has revoked its Apple token and before it touches R2; from then on its subscriptions no
+-- trigger has revoked its Apple token and before it touches R2, or once Apple's account-deleted
+-- notification for its Apple user arrives; from then on its subscriptions no
 -- longer change paid_until or tier, so a resubscription comes too late, and its rows are deleted
 -- without a live session.
 CREATE TABLE accounts (
