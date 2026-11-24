@@ -87,7 +87,7 @@ async function agents(
               409,
               made.reason === "too-many"
                 ? `the account has ${liveAgentsAtMost} agents already; revoke one to approve another`
-                : "an agent with this public key was revoked; an agent needs a new key",
+                : "the account has had an agent with this public key; an agent needs a new key",
             ),
       );
     }

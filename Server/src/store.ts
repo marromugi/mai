@@ -51,11 +51,12 @@ export type Agent = {
 /** Not approved: the account has `liveAgentsAtMost` agents that aren't revoked. */
 /**
  * Not approved: the account has `liveAgentsAtMost` agents that aren't revoked (`too-many`), or
- * revoked an agent with this public key (`revoked-key`); revoking a key is final.
+ * an agent with this public key, revoked or not (`known-key`): a key is approved once, and
+ * revoking it is final.
  */
 export type Approved =
   | { approved: true; agent: AgentId }
-  | { approved: false; reason: "too-many" | "revoked-key" };
+  | { approved: false; reason: "too-many" | "known-key" };
 
 /** What the server did with each copy sent, in the order sent: kept, or why not. */
 export type CopyKept = { writing: WritingId; agent: AgentId; refused: CopyRefusal | null };
@@ -751,7 +752,7 @@ export class Store {
 
   /**
    * Keeps an agent the caller's device approved, under the ID and token secret of `token`, unless
-   * the account has `liveAgentsAtMost` agents that aren't revoked or revoked its public key.
+   * the account has `liveAgentsAtMost` agents that aren't revoked or has an agent with its public key.
    */
   async approveAgent(
     caller: Caller,
@@ -767,7 +768,7 @@ export class Store {
                 AND (SELECT count(*) FROM agents WHERE account_id = ${account} AND revoked = 0)
                   < :most
                 AND NOT EXISTS (SELECT 1 FROM agents WHERE account_id = ${account}
-                                  AND public_key = :public_key AND revoked = 1)`,
+                                  AND public_key = :public_key)`,
         args: {
           agent_id: token.agent,
           public_key: approval.publicKey,
@@ -778,7 +779,7 @@ export class Store {
       },
       {
         sql: `SELECT 1 FROM agents
-              WHERE account_id = ${account} AND public_key = :public_key AND revoked = 1
+              WHERE account_id = ${account} AND public_key = :public_key
                 AND ${allowed}`,
         args: { public_key: approval.publicKey },
       },
@@ -793,7 +794,7 @@ export class Store {
           ? { approved: true, agent: token.agent }
           : {
               approved: false,
-              reason: answer.value[1]?.rows.length === 0 ? "too-many" : "revoked-key",
+              reason: answer.value[1]?.rows.length === 0 ? "too-many" : "known-key",
             },
     };
   }

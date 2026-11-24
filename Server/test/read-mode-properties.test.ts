@@ -33,9 +33,9 @@ const step = fc.oneof(
   fc.record({ op: fc.constant("revoke"), agent: fc.nat(2) }),
   {
     arbitrary: fc.record({ op: fc.constant("tick"), ticks: fc.integer({ min: 1, max: 70 }) }),
-    weight: 2,
+    weight: 3,
   },
-  fc.record({ op: fc.constant("sweep") }),
+  { arbitrary: fc.record({ op: fc.constant("sweep") }), weight: 2 },
   { arbitrary: fc.record({ op: fc.constant("fetch") }), weight: 2 },
   {
     arbitrary: fc.record({
@@ -56,6 +56,9 @@ const start: Step[] = [
   { op: "turnOn", ticks: 60 },
   { op: "copy", period: 0, revisions: [0, 0] },
 ];
+
+/** Each run ends past every period it could have turned on, read and swept there. */
+const end: Step[] = [{ op: "tick", ticks: 200 }, { op: "fetch" }, { op: "sweep" }];
 
 /**
  * How many copies the server kept, agents were served, and sweeps found expired, over every run.
@@ -246,7 +249,8 @@ it("keeps the server's properties of Specs/ReadMode over any run of its operatio
       async (steps) => {
         const { account, token } = await newAccount();
         const seen: Seen = {
-          now: Date.now(),
+          // Ahead of the other tests' time, so that the cron trigger they run reaches nothing here.
+          now: Date.now() + 60 * 60 * 1000,
           token,
           account,
           writings: Array.from({ length: writingCount }, () => crypto.randomUUID()),
@@ -255,7 +259,7 @@ it("keeps the server's properties of Specs/ReadMode over any run of its operatio
           periods: [],
           saves: 0,
         };
-        for (const next of [...start, ...steps]) {
+        for (const next of [...start, ...steps, ...end]) {
           await run(seen, next, reached);
           await holds(seen);
         }
@@ -266,5 +270,5 @@ it("keeps the server's properties of Specs/ReadMode over any run of its operatio
   // The runs reach the states the properties are about.
   expect(reached.kept).toBeGreaterThan(100);
   expect(reached.served).toBeGreaterThan(20);
-  expect(reached.swept).toBeGreaterThan(0);
+  expect(reached.swept).toBeGreaterThan(20);
 }, 120_000);

@@ -48,14 +48,22 @@ async function save(token: string, writing: string, base = "none", updated = 1n)
   return (await json<{ revision: string }>(saved)).revision;
 }
 
-async function approve(token: string): Promise<{ agent: string; token: string }> {
+/** A public key of 32 bytes no other agent has, in hex. */
+function newKey(): string {
+  return crypto.randomUUID().replaceAll("-", "").repeat(2);
+}
+
+async function approve(
+  token: string,
+  publicKey = newKey(),
+): Promise<{ agent: string; token: string; publicKey: string }> {
   const approved = await call("/agents", {
     method: "POST",
     token,
-    json: { publicKey: "aa".repeat(32), signature: "bb".repeat(64) },
+    json: { publicKey, signature: "bb".repeat(64) },
   });
   expect(approved.status).toBe(201);
-  return json(approved);
+  return { ...(await json<{ agent: string; token: string }>(approved)), publicKey };
 }
 
 async function turnOn(token: string, until: number): Promise<void> {
@@ -215,9 +223,9 @@ describe("agents", () => {
     expect(first.token).toMatch(new RegExp(`^agent\\.${first.agent}\\.[A-Za-z0-9_-]{43}$`));
     expect(second.agent).not.toBe(first.agent);
     expect(await json(call("/agents", { token }))).toEqual({
-      agents: [first, second].map(({ agent }) => ({
+      agents: [first, second].map(({ agent, publicKey }) => ({
         id: agent,
-        publicKey: "aa".repeat(32),
+        publicKey,
         signature: "bb".repeat(64),
         revoked: false,
       })),
@@ -243,7 +251,7 @@ describe("agents", () => {
     for (let count = 0; count < 10; count += 1) {
       approved.push(await approve(token));
     }
-    const eleventh = { publicKey: "aa", signature: "bb" };
+    const eleventh = { publicKey: newKey(), signature: "bb" };
     expect((await call("/agents", { method: "POST", token, json: eleventh })).status).toBe(409);
     const [first] = approved;
     await call(`/agents/${first?.agent}`, { method: "DELETE", token });
@@ -268,10 +276,11 @@ describe("agents", () => {
     expect(unknown.status).toBe(404);
   });
 
-  it("aren't approved again with a key that was revoked", async () => {
+  it("aren't approved twice with one key, nor again once it is revoked", async () => {
     const { token, agent } = await reading();
+    const again = { publicKey: agent.publicKey, signature: "bb".repeat(64) };
+    expect((await call("/agents", { method: "POST", token, json: again })).status).toBe(409);
     await call(`/agents/${agent.agent}`, { method: "DELETE", token });
-    const again = { publicKey: "aa".repeat(32), signature: "bb".repeat(64) };
     expect((await call("/agents", { method: "POST", token, json: again })).status).toBe(409);
     const other = await newAccount();
     expect(
