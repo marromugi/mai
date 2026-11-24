@@ -67,6 +67,24 @@ struct AccountContractTests {
     #expect(try await device.server.account(token: session.token).ownKeyCheck == kept.check)
   }
 
+  @Test func aNewAccountIsPaidForOnItsPlanWithNothingUsedButTheRequestsBefore() async throws {
+    let (device, session, _) = try await signedIn()
+    let state = try await device.account.state(session)
+    #expect(state.plan == "basic")
+    guard case .paid(let until) = state.standing else {
+      Issue.record("A new account is paid for, but it reads as \(state.standing)")
+      return
+    }
+    #expect(until > .now)
+    #expect(state.usage.writingsBytes == PlanUsage.Use(used: 0, limit: 100_000_000))
+    #expect(state.usage.writings == PlanUsage.Use(used: 0, limit: 10_000))
+    #expect(state.usage.saves == PlanUsage.Use(used: 0, limit: 500))
+    #expect(state.usage.lists == PlanUsage.Use(used: 0, limit: 200))
+    // signIn's and settleOwnKey's requests, counted before this one.
+    #expect(state.usage.requests.used > 0)
+    #expect(state.usage.requests.limit == 3_000)
+  }
+
   @Test func anExistingAccountWhoseCheckMatchesSignsInAndUsesTheKey() async throws {
     let (first, session, recoveryKey) = try await signedIn()
     let second = try device(user: first.user, ownKey: recoveryKey.ownKey)
@@ -132,7 +150,7 @@ struct AccountContractTests {
     #expect(try await device.account.check() == .subscriptionsSent(1))
     let state = try await device.server.account(token: session.token)
     #expect(state.plan == "plus")
-    #expect(state.paidUntil == renewed)
+    #expect(state.standing == .paid(until: Date(timeIntervalSince1970: Double(renewed) / 1000)))
     #expect(try device.sessions.load() == session)
   }
 

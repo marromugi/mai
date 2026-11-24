@@ -83,7 +83,7 @@ internal import Sync
       status = .stopped(ServerError.refused(status: 402, reason: "").localizedDescription)
     } catch let error as ServerError {
       switch error {
-      case .refused(status: 429, _):
+      case .limitReached:
         status = .stopped(error.localizedDescription)
       case .refused(status: 401, _):
         status = .sessionEnded(error.localizedDescription)

@@ -28,16 +28,36 @@ extension HTTPTransport {
     }
     let (data, response) = answer
     guard statuses.contains(response.statusCode) else {
-      let reason = (try? JSONDecoder().decode(Problem.self, from: data))?.error
-      throw .refused(status: response.statusCode, reason: reason ?? "")
+      let problem = try? JSONDecoder().decode(Problem.self, from: data)
+      if response.statusCode == 429 {
+        throw .limitReached(problem?.limit.flatMap(PlanLimit.init(rawValue:)))
+      }
+      throw .refused(status: response.statusCode, reason: problem?.error ?? "")
     }
     return answer
   }
 }
 
-/// The body of the Worker's answer to a request it refused.
+/// The body of the Worker's answer to a request it refused; `limit` comes with a 429.
 private struct Problem: Decodable {
   let error: String
+  let limit: String?
+}
+
+/// A limit of the account's plan, as the Worker names it in a 429.
+public enum PlanLimit: String, Sendable, Equatable {
+  /// Today's requests.
+  case requests
+  /// Today's listings of the writings.
+  case lists
+  /// Today's saves of a writing.
+  case saves
+  /// Today's photos.
+  case photos
+  /// The writings' bytes, or their number.
+  case storage
+  /// The photos' bytes.
+  case photoStorage = "photo-storage"
 }
 
 /// Tells one save of a writing from another: the SHA-256 of what was saved, as the server gives it.
@@ -162,8 +182,11 @@ public struct WritingServer: Sendable {
 public enum ServerError: LocalizedError {
   /// The request didn't reach the server, or its answer didn't come back.
   case unreachable(any Error)
-  /// The server answered with a status the request doesn't expect, and the reason it gave.
+  /// The server answered with a status the request doesn't expect, and the reason it gave. Never
+  /// 429, which is `limitReached`.
   case refused(status: Int, reason: String)
+  /// A limit of the plan is reached (429); nil when the answer didn't say which.
+  case limitReached(PlanLimit?)
   /// The server's answer was not of the shape it promises.
   case unexpectedAnswer(String)
 
@@ -174,13 +197,29 @@ public enum ServerError: LocalizedError {
     case .refused(status: 401, _):
       "サインインが切れました。もう一度 Apple でサインインしてください。文書はこの端末に残っています。"
     case .refused(status: 402, _):
-      "プランの期限が切れているため、この端末の変更をサーバーに送れません。ほかの端末の変更は受け取ります。文書はこの端末に残っています。"
-    case .refused(status: 429, _):
+      "プランの期限が切れているため、この端末の変更をサーバーに送れません。ほかの端末の変更は受け取ります。プランに入り直すと、また送れます。文書はこの端末に残っています。"
+    case .limitReached(.requests?):
+      Self.dailyLimit("リクエストの回数")
+    case .limitReached(.lists?):
+      Self.dailyLimit("一覧の回数")
+    case .limitReached(.saves?):
+      Self.dailyLimit("保存の回数")
+    case .limitReached(.photos?):
+      Self.dailyLimit("写真の枚数")
+    case .limitReached(.storage?):
+      "文書の容量か本数がプランの上限に達したため、同期を止めました。文書を減らすか、上のプランに変えてください。文書はこの端末に残っています。"
+    case .limitReached(.photoStorage?):
+      "写真の容量がプランの上限に達したため、同期を止めました。写真を減らすか、上のプランに変えてください。文書はこの端末に残っています。"
+    case .limitReached(nil):
       "プランの上限に達したため、同期を止めました。1 日の回数の上限なら、日付が変わると（協定世界時の 0 時、日本時間の 9 時）また同期できます。容量の上限なら、文書を減らすか、上のプランに変えてください。文書はこの端末に残っています。"
     case .refused(let status, _):
       "サーバーが同期を断りました（\(status)）。"
     case .unexpectedAnswer:
       "サーバーの答えが読めませんでした。"
     }
+  }
+
+  private static func dailyLimit(_ what: String) -> String {
+    "今日の\(what)がプランの上限に達したため、同期を止めました。日付が変わると（協定世界時の 0 時、日本時間の 9 時）また同期できます。文書はこの端末に残っています。"
   }
 }

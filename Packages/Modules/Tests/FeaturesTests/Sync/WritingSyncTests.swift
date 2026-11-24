@@ -242,8 +242,8 @@ struct WritingSyncTests {
     await device.account.checkAtLaunch()
 
     await device.sync.syncNow()
-    let message = ServerError.refused(status: status, reason: "").localizedDescription
-    #expect(device.sync.status == .stopped(message))
+    let error = status == 429 ? ServerError.limitReached(.saves) : .refused(status: 402, reason: "")
+    #expect(device.sync.status == .stopped(error.localizedDescription))
     try device.library.edit(written.id, at: .now) { $0.title = "夜" }
     device.sync.edited()
     #expect(device.sync.pending == nil)
@@ -526,6 +526,6 @@ nonisolated final class Requests: HTTPTransport {
       let response = HTTPURLResponse(
         url: url, statusCode: refusing, httpVersion: nil, headerFields: nil)
     else { throw URLError(.cannotConnectToHost) }
-    return (Data(#"{"error":"refused"}"#.utf8), response)
+    return (Data(#"{"error":"refused","limit":"saves"}"#.utf8), response)
   }
 }

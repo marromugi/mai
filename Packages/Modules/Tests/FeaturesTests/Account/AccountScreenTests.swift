@@ -44,7 +44,60 @@ struct AccountScreenTests {
   @Test func syncSectionStoppedByThePlansLimit() {
     assertSyncSection(
       .signedIn, canSignIn: true,
-      syncStatus: .stopped(ServerError.refused(status: 429, reason: "").localizedDescription))
+      syncStatus: .stopped(ServerError.limitReached(.saves).localizedDescription))
+  }
+
+  @Test func syncSectionStoppedByThePlansStorage() {
+    assertSyncSection(
+      .signedIn, canSignIn: true,
+      syncStatus: .stopped(ServerError.limitReached(.storage).localizedDescription))
+  }
+
+  /// Paid for, with some of the plan used.
+  @Test func planPaidFor() {
+    assertPlan(.paid(until: date("2026-12-24")))
+  }
+
+  @Test func planPaidForAtTheLargestSize() {
+    assertPlan(.paid(until: date("2026-12-24")), size: .accessibility5)
+  }
+
+  /// The App Store retrying the payment: when it lapses, and where the payment is checked.
+  @Test func planInItsGracePeriod() {
+    assertPlan(.gracePeriod(until: date("2026-11-30")))
+  }
+
+  /// Lapsed: what stopped, how many days are left before the server's writings go, and how to
+  /// keep them.
+  @Test func planLapsed() {
+    assertPlan(.lapsed(since: date("2026-11-01"), deletesAt: date("2027-01-30")))
+  }
+
+  @Test func planLapsedInDarkMode() {
+    assertPlan(
+      .lapsed(since: date("2026-11-01"), deletesAt: date("2027-01-30")), colorScheme: .dark)
+  }
+
+  /// Past when it is deleted, before the cron trigger has deleted it.
+  @Test func planLapsedPastItsDeletion() {
+    assertPlan(.lapsed(since: date("2026-08-01"), deletesAt: date("2026-10-30")))
+  }
+
+  /// Today's saves used up: the row says so, in red.
+  @Test func planWithTodaysSavesUsedUp() {
+    assertPlan(.paid(until: date("2026-12-24")), saves: 500)
+  }
+
+  @Test(arguments: [
+    ("2026-11-24T12:00:00Z", "2027-01-30T12:00:00Z", 67),
+    ("2026-11-24T12:00:00Z", "2026-11-24T12:00:01Z", 1),
+    ("2026-11-24T12:00:00Z", "2026-11-24T12:00:00Z", 0),
+    ("2026-11-24T12:00:00Z", "2026-11-20T12:00:00Z", 0),
+  ])
+  func daysLeftCountAPartOfADayAsOne(now: String, deletesAt: String, days: Int) throws {
+    let read = Date.ISO8601FormatStyle()
+    #expect(
+      PlanStateSections.daysLeft(from: try read.parse(now), to: try read.parse(deletesAt)) == days)
   }
 
   @Test func syncSectionStoppedByALapsedPlanInDarkMode() {
@@ -144,6 +197,40 @@ private func assertSyncSection(
         phase: phase, canSignIn: canSignIn, signIn: {}, signOut: {}, restore: { _ in nil },
         syncStatus: syncStatus)
     },
+    title: "設定", colorScheme: colorScheme, size: size, testName: testName)
+}
+
+/// Noon in Tokyo on `day`, written `2026-12-24`.
+private func date(_ day: String) -> Date {
+  guard let date = try? Date.ISO8601FormatStyle().parse("\(day)T03:00:00Z") else {
+    preconditionFailure("\(day) is a day written as yyyy-MM-dd")
+  }
+  return date
+}
+
+/// The plan's sections of a Basic account at `standing`, read at noon on 2026-11-24 in Tokyo,
+/// with `saves` saved today.
+private func assertPlan(
+  _ standing: AccountState.Standing,
+  saves: Int64 = 12,
+  colorScheme: ColorScheme = .light,
+  size: DynamicTypeSize = .large,
+  testName: String = #function
+) {
+  let state = AccountState(
+    plan: "basic", standing: standing,
+    usage: PlanUsage(
+      writingsBytes: .init(used: 1_234_567, limit: 100_000_000),
+      writings: .init(used: 42, limit: 10_000),
+      photosBytes: .init(used: 0, limit: 5_000_000_000),
+      requests: .init(used: 87, limit: 3_000),
+      lists: .init(used: 9, limit: 200),
+      saves: .init(used: saves, limit: 500),
+      photos: .init(used: 0, limit: 100)))
+  assertPushed(
+    Form { PlanStateSections(state: state, now: date("2026-11-24")) }
+      .environment(\.locale, Locale(identifier: "ja_JP"))
+      .environment(\.timeZone, TimeZone(identifier: "Asia/Tokyo") ?? .gmt),
     title: "設定", colorScheme: colorScheme, size: size, testName: testName)
 }
 

@@ -27,8 +27,14 @@ enum AccountPhase: Equatable {
       if phase != .signedIn {
         ownKeySettled = false
       }
+      if phase == .signedOut {
+        state = nil
+      }
     }
   }
+  /// What the server last said of the account, read on settling the own key and by
+  /// `readState()`; nil while signed out.
+  private(set) var state: AccountState?
   /// Whether the own key on the device was found to be the account's since the device last
   /// became signed in. A sync waits for it.
   private var ownKeySettled = false
@@ -113,11 +119,27 @@ enum AccountPhase: Equatable {
     await readWhetherBought()
   }
 
-  /// Reads again whether the plan is paid for, then settles the own key, as when the account's
-  /// settings are shown.
+  /// Reads again whether the plan is paid for, then settles the own key, which reads the account,
+  /// as when the account's settings are shown.
   func refresh() async {
     await readWhetherBought()
     await settleOwnKey()
+  }
+
+  /// Reads what the server says of the account now, while signed in, as after 「今すぐ同期」. The
+  /// state read before stays when it can't be read, as when today's requests are used up.
+  func readState() async {
+    guard phase == .signedIn || phase == .recoveryKeyNeeded else { return }
+    do {
+      guard let session = try account.session() else { return }
+      let read = try await account.state(session)
+      // Not when the device signed out while it was read.
+      if phase != .signedOut {
+        state = read
+      }
+    } catch {
+      accountLogger.error("The account couldn't be read: \(error)")
+    }
   }
 
   private func readWhetherBought() async {
@@ -230,7 +252,9 @@ enum AccountPhase: Equatable {
   }
 
   private func settle(_ session: Session) async throws(AccountError) {
-    switch try await account.settleOwnKey(session) {
+    let read = try await account.state(session)
+    state = read
+    switch try await account.settleOwnKey(session, against: read) {
     case .ready:
       phase = .signedIn
       ownKeySettled = true

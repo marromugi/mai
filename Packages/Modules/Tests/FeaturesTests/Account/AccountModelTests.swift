@@ -1,5 +1,6 @@
 import Foundation
 import Sync
+import SyncFakes
 import Synchronization
 import Testing
 
@@ -81,6 +82,45 @@ struct AccountModelTests {
     await model.refresh()
     #expect(model.phase == .signedIn)
     #expect(model.problem == nil)
+  }
+
+  /// Settings shown read the account as they settle the own key, and a read after a sync reads it
+  /// again; one that fails keeps what was read, and signing out forgets it.
+  @Test func settingsShownReadTheAccountUntilSignedOut() async throws {
+    let key = OwnKey.generate()
+    let model = try model(
+      [
+        "PUT /account/subscription": [.status(200)],
+        "GET /account": [
+          .status(200, json: accountAnswer(check: key.check, paidUntil: 6_000)),
+          .status(200, json: accountAnswer(check: key.check, paidUntil: 6_000, gracePeriod: true)),
+          .status(429, json: #"{"error":"x","limit":"requests"}"#),
+        ],
+        "DELETE /session": [.status(204)],
+      ], session: session, key: key)
+    await model.checkAtLaunch()
+    #expect(model.state == nil)
+    await model.refresh()
+    let until = Date(timeIntervalSince1970: 6)
+    #expect(model.state?.standing == .paid(until: until))
+
+    await model.readState()
+    #expect(model.state?.standing == .gracePeriod(until: until))
+    await model.readState()
+    #expect(model.state?.standing == .gracePeriod(until: until))
+
+    await model.signOut()
+    #expect(model.state == nil)
+  }
+
+  @Test func aSignedOutDeviceDoesntReadTheAccount() async throws {
+    let worker = ScriptedWorker([:])
+    let model = try model([:], worker: worker, keeps: false)
+    await model.checkAtLaunch()
+    await model.refresh()
+    await model.readState()
+    #expect(model.state == nil)
+    #expect(worker.asked.isEmpty)
   }
 
   /// Settings shown again while the own key is being settled don't settle it a second time.
@@ -283,6 +323,7 @@ nonisolated final class ScriptedWorker: HTTPTransport {
   private let answers: Mutex<[String: [Answer]]>
   private let holding: String?
   private let held = Mutex<(count: Int, gate: CheckedContinuation<Void, Never>?)>((0, nil))
+  private let routes = Mutex<[String]>([])
 
   /// Holds the first request to the route `holding` until `release()`.
   init(_ answers: [String: [Answer]], holding: String? = nil) {
@@ -293,6 +334,8 @@ nonisolated final class ScriptedWorker: HTTPTransport {
   /// How many requests to the held route came.
   var heldCount: Int { held.withLock { $0.count } }
   var isHolding: Bool { held.withLock { $0.gate != nil } }
+  /// The routes asked, in order.
+  var asked: [String] { routes.withLock { $0 } }
 
   func release() {
     held.withLock { $0.gate?.resume() }
@@ -300,6 +343,7 @@ nonisolated final class ScriptedWorker: HTTPTransport {
 
   func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     let route = "\(request.httpMethod ?? "GET") \(request.url?.path() ?? "")"
+    routes.withLock { $0.append(route) }
     if route == holding {
       let first = held.withLock { held -> Bool in
         held.count += 1
@@ -329,9 +373,7 @@ nonisolated final class ScriptedWorker: HTTPTransport {
   }
 
   static func account(check: Data?) -> Answer {
-    let hex = check.map { "\"\($0.map { String(format: "%02x", $0) }.joined())\"" } ?? "null"
-    return .status(
-      200, json: #"{"plan":"basic","paidUntil":1,"lapsed":false,"ownKeyCheck":"# + hex + "}")
+    .status(200, json: accountAnswer(check: check))
   }
 }
 
