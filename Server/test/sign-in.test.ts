@@ -629,17 +629,18 @@ describe("the purchase an account is made with", () => {
     expect(await rowsOf(account, sub)).toEqual({ sessions: 0, accounts: 0 });
   });
 
-  it("refuses a purchase another account was made with", async () => {
+  it("refuses a purchase another account was made with, about the same period", async () => {
     const apple = fakeApple();
     const first = crypto.randomUUID();
     const original = crypto.randomUUID();
+    const expiresDate = Date.now() + 30 * day;
     expect(
       (
         await makeAccount(
           apple,
           newSub(),
           first,
-          await signedTransaction(first, { originalTransactionId: original }),
+          await signedTransaction(first, { originalTransactionId: original, expiresDate }),
         )
       ).answer.status,
     ).toBe(201);
@@ -650,12 +651,59 @@ describe("the purchase an account is made with", () => {
       apple,
       sub,
       second,
-      await signedTransaction(second, { originalTransactionId: original }),
+      await signedTransaction(second, {
+        originalTransactionId: original,
+        expiresDate,
+        signedDate: Date.now() + 1000,
+      }),
     );
     expect(answer.status).toBe(409);
     expect(await answer.json()).toEqual({ error: "the purchase is another account's" });
     expect(await rowsOf(second, sub)).toEqual({ sessions: 0, accounts: 0 });
     expect(await paidFor(first)).toMatchObject({ subscriptions: original });
+  });
+});
+
+describe("an account made with a subscription bought again", () => {
+  it("takes the subscription when its purchase is about a later period", async () => {
+    const apple = fakeApple();
+    const first = crypto.randomUUID();
+    const original = crypto.randomUUID();
+    expect(
+      (
+        await makeAccount(
+          apple,
+          newSub(),
+          first,
+          await signedTransaction(first, {
+            originalTransactionId: original,
+            expiresDate: Date.now() + 30 * day,
+          }),
+        )
+      ).answer.status,
+    ).toBe(201);
+    const firstBefore = await paidFor(first);
+
+    const second = crypto.randomUUID();
+    const expires = Date.now() + 60 * day;
+    const { answer } = await makeAccount(
+      apple,
+      newSub(),
+      second,
+      await signedTransaction(second, {
+        originalTransactionId: original,
+        expiresDate: expires,
+        signedDate: Date.now() + 2000,
+      }),
+    );
+
+    expect(answer.status).toBe(201);
+    expect(await paidFor(second)).toMatchObject({ subscriptions: original, paid_until: expires });
+    expect(await paidFor(first)).toMatchObject({
+      tier: firstBefore?.["tier"],
+      paid_until: firstBefore?.["paid_until"],
+      subscriptions: null,
+    });
   });
 });
 

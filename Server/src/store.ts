@@ -447,8 +447,10 @@ export class Store {
   /**
    * Makes the account, its subscription and its first session, using up `challenge`. Nothing is
    * written when the challenge was used before or has expired, when the account's ID or Apple
-   * user already has an account, when the subscription is another account's, or when no plan is
-   * sold as its product; the challenge is used up all the same.
+   * user already has an account, when the subscription is another account's and the purchase is
+   * about no later billing period than what is kept for it, or when no plan is sold as its product;
+   * the challenge is used up all the same. A purchase about a later billing period moves the
+   * subscription to the new account.
    */
   async makeAccount(
     account: NewAccount,
@@ -461,13 +463,16 @@ export class Store {
       now,
       challenge,
       [
-        `SELECT ${plan} AS plan, EXISTS (SELECT 1 FROM subscriptions
-                   WHERE original_transaction_id = :original AND account_id != :id) AS taken`,
+        `SELECT ${plan} AS plan, ${keptByAnother(":id")} AS taken`,
         `INSERT INTO accounts (id, apple_sub, apple_refresh_token, tier, paid_until, created)
          SELECT :id, :sub, :refresh, tier, :paid, :now FROM plans
          WHERE product_id = :product AND ${claimed}
            AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = :id OR apple_sub = :sub)
-           AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE original_transaction_id = :original)`,
+           AND NOT ${keptByAnother(":id")}`,
+        `UPDATE subscriptions SET account_id = :id, product_id = :product, period_ends = :period,
+           paid_until = :paid, environment = :environment, signed_date = :signed
+         WHERE original_transaction_id = :original AND ${later}
+           AND EXISTS (SELECT 1 FROM accounts WHERE ${madeHere})`,
         `INSERT INTO subscriptions (original_transaction_id, account_id, product_id, period_ends,
            paid_until, environment, signed_date)
          SELECT :original, id, :product, :period, :paid, :environment, :signed FROM accounts
@@ -506,8 +511,7 @@ export class Store {
    */
   async keepPurchase(caller: Caller, purchase: Purchase, now: number): Promise<Answer<Kept>> {
     const answer = await this.#run(caller, now, "other", (account, allowed) => {
-      const mine = `coalesce(:account = ${account}, 0) AND NOT EXISTS (SELECT 1 FROM subscriptions
-        WHERE original_transaction_id = :original AND account_id != :account)`;
+      const mine = `coalesce(:account = ${account}, 0) AND NOT ${keptByAnother(":account")}`;
       return [
         `SELECT ${plan} AS plan, ${mine} AS mine`,
         ...keepStatements(`${mine} AND ${allowed}`),
@@ -1358,6 +1362,22 @@ function blob(row: Row, column: string): Uint8Array {
 /** Whether a plan is sold as the subscription's product, `:product`. */
 const plan = "EXISTS (SELECT 1 FROM plans WHERE product_id = :product)";
 
+/**
+ * Whether the purchase, signed at `:signed` about the billing period ending `:period`, is signed
+ * later and about a later period than the kept row of `subscriptions` it is compared in: a
+ * resubscription or an upgrade, which may name another account than the row's.
+ */
+const later = "signed_date < :signed AND period_ends < :period";
+
+/**
+ * Whether the subscription `:original` is kept for an account other than `account` and stays that
+ * account's: the purchase is about no later billing period than what is kept.
+ */
+function keptByAnother(account: string): string {
+  return `EXISTS (SELECT 1 FROM subscriptions WHERE original_transaction_id = :original
+            AND account_id != ${account} AND NOT (${later}))`;
+}
+
 function purchaseValues(purchase: Purchase): Record<string, InValue> {
   return {
     original: purchase.originalTransactionId,
@@ -1373,14 +1393,19 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
  * Replaces the kept subscription `:original` with newer data about the same or a later billing
  * period, or keeps it for the account `:account` when it isn't kept yet; then sets its account's
  * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan),
- * unless it is marked for deletion. Each statement holds `condition` in its WHERE.
+ * unless it is marked for deletion. Data naming another account `:account` changes nothing unless
+ * it is about a later billing period and that account is there and not marked for deletion; then it
+ * moves the subscription to that account, and the account it leaves keeps its plan and paid-until
+ * time. Each statement holds `condition` in its WHERE.
  */
 function keepStatements(condition: string): string[] {
   return [
-    `UPDATE subscriptions SET product_id = :product, period_ends = :period, paid_until = :paid,
-       environment = :environment, signed_date = :signed
+    `UPDATE subscriptions SET account_id = coalesce(:account, account_id), product_id = :product,
+       period_ends = :period, paid_until = :paid, environment = :environment, signed_date = :signed
      WHERE original_transaction_id = :original AND signed_date < :signed
-       AND period_ends <= :period AND ${plan} AND ${condition}`,
+       AND period_ends <= :period AND ${plan} AND ${condition}
+       AND (:account IS NULL OR :account = account_id
+            OR (${later} AND EXISTS (SELECT 1 FROM accounts WHERE id = :account AND deleting = 0)))`,
     `INSERT INTO subscriptions (original_transaction_id, account_id, product_id, period_ends,
        paid_until, environment, signed_date)
      SELECT :original, id, :product, :period, :paid, :environment, :signed FROM accounts
