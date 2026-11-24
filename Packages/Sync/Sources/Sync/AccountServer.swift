@@ -46,7 +46,8 @@ public struct AccountServer: Sendable {
   }
 
   /// A session of the account of the Apple user of `credential`, asked with `challenge`; nil when
-  /// the user has none. The authorization code goes along, which the server doesn't read yet.
+  /// the user has none. The authorization code goes along, for the server to keep Apple's newest
+  /// refresh token.
   public func startSession(challenge: String, credential: AppleCredential)
     async throws(ServerError) -> (account: UUID, token: String)?
   {

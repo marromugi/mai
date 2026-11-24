@@ -3,7 +3,7 @@ import { exports } from "cloudflare:workers";
 import { createClient } from "@libsql/client/web";
 import { beforeAll, describe, expect, it } from "vitest";
 import { appleIssuer, appleKeysUrl } from "../src/apple-sign-in";
-import { appleTokenUrl } from "../src/apple-tokens";
+import { appleRevokeUrl, appleTokenUrl } from "../src/apple-tokens";
 import { Challenges, challengeLifetime } from "../src/challenges";
 import { serve, signInOf } from "../src/index";
 import { newSessionToken } from "../src/sessions";
@@ -56,9 +56,10 @@ beforeAll(async () => {
 type Grant = { sub: string; refreshToken: string };
 
 /**
- * Apple's JWKS and token endpoints, answering from the test. `codes` are the authorization codes
- * Apple would take, each once; `answer`, when given, is what the token endpoint answers instead;
- * `key` is the Worker's `APPLE_SIGN_IN_KEY`, the .p8 as Apple gives it when left out.
+ * Apple's JWKS, token and revoke endpoints, answering from the test. `codes` are the authorization
+ * codes Apple would take, each once; `answer`, when given, is what the token endpoint answers
+ * instead; `key` is the Worker's `APPLE_SIGN_IN_KEY`, the .p8 as Apple gives it when left out.
+ * Every token the revoke endpoint was sent is in `revoked`.
  */
 function fakeApple(
   options: {
@@ -72,6 +73,7 @@ function fakeApple(
   } = {},
 ) {
   const codes = new Map<string, Grant>();
+  const revoked: string[] = [];
   const asked: { url: string; form?: URLSearchParams }[] = [];
   const send = async (url: string, init?: RequestInit): Promise<Response> => {
     if (options.delay !== undefined) {
@@ -80,6 +82,10 @@ function fakeApple(
     if (url === appleKeysUrl) {
       asked.push({ url });
       return options.keysAnswer?.() ?? new Response(await jwks([signer]));
+    }
+    if (url === appleRevokeUrl && init?.body instanceof URLSearchParams) {
+      revoked.push(init.body.get("token") ?? "");
+      return new Response(null, { status: 200 });
     }
     if (url !== appleTokenUrl || !(init?.body instanceof URLSearchParams)) {
       throw new Error(`the Worker reached ${url}, which the fake Apple doesn't serve`);
@@ -123,7 +129,7 @@ function fakeApple(
       root,
     ),
   );
-  return { codes, asked, signIn };
+  return { codes, asked, revoked, signIn };
 }
 
 async function clientSecretHolds(secret: string): Promise<boolean> {
@@ -221,12 +227,31 @@ async function makeAccount(
   return { account, sub, code, refreshToken, answer };
 }
 
-async function signInAs(apple: ReturnType<typeof fakeApple>, sub: string) {
+/**
+ * Signs in through `POST /sessions`, as the app does, with a code Apple gives `refreshToken` for.
+ */
+async function signInAs(
+  apple: ReturnType<typeof fakeApple>,
+  sub: string,
+  refreshToken = `refresh-${crypto.randomUUID()}`,
+) {
   const fresh = await challenge(apple.signIn);
   return call(apple.signIn, "/sessions", {
     challenge: fresh,
     identityToken: await identityToken(sub, fresh),
+    authorizationCode: codeFor(apple, sub, refreshToken),
   });
+}
+
+/** An authorization code Apple takes once, giving `refreshToken` for the Apple user `sub`. */
+function codeFor(
+  apple: ReturnType<typeof fakeApple>,
+  sub: string,
+  refreshToken = `refresh-${crypto.randomUUID()}`,
+): string {
+  const code = `code-${crypto.randomUUID()}`;
+  apple.codes.set(code, { sub, refreshToken });
+  return code;
 }
 
 /** How many sessions the account has, and how many accounts the Apple user has. */
@@ -666,9 +691,14 @@ describe("a challenge", () => {
     expect(answer.status).toBe(201);
 
     const fresh = await challenge(apple.signIn);
-    const body = { challenge: fresh, identityToken: await identityToken(sub, fresh) };
-    expect((await call(apple.signIn, "/sessions", body)).status).toBe(200);
-    expect((await call(apple.signIn, "/sessions", body)).status).toBe(401);
+    const token = await identityToken(sub, fresh);
+    const body = () => ({
+      challenge: fresh,
+      identityToken: token,
+      authorizationCode: codeFor(apple, sub),
+    });
+    expect((await call(apple.signIn, "/sessions", body())).status).toBe(200);
+    expect((await call(apple.signIn, "/sessions", body())).status).toBe(401);
     expect(await rowsOf(account, sub)).toEqual({ sessions: 2, accounts: 1 });
 
     const code = `code-${crypto.randomUUID()}`;
@@ -690,9 +720,15 @@ describe("a challenge", () => {
     const apple = fakeApple();
     const { account, sub } = await makeAccount(apple);
     const fresh = await challenge(apple.signIn);
-    const body = { challenge: fresh, identityToken: await identityToken(sub, fresh) };
+    const token = await identityToken(sub, fresh);
     const answers = await Promise.all(
-      Array.from({ length: 5 }, () => call(apple.signIn, "/sessions", body)),
+      Array.from({ length: 5 }, () =>
+        call(apple.signIn, "/sessions", {
+          challenge: fresh,
+          identityToken: token,
+          authorizationCode: codeFor(apple, sub),
+        }),
+      ),
     );
     expect(answers.map((answer) => answer.status).toSorted((a, b) => a - b)).toEqual([
       200, 401, 401, 401, 401,
@@ -727,6 +763,7 @@ describe("a challenge", () => {
     const session = await call(signIn.signIn, "/sessions", {
       challenge: late,
       identityToken: await identityToken(existing, late),
+      authorizationCode: codeFor(signIn, existing),
     });
     expect(session.status).toBe(401);
   });
@@ -752,6 +789,7 @@ describe("a challenge", () => {
         await call(apple.signIn, "/sessions", {
           challenge: fresh,
           identityToken: body.identityToken,
+          authorizationCode: codeFor(apple, first.sub),
         })
       ).status,
     ).toBe(401);
@@ -771,6 +809,7 @@ describe("a challenge", () => {
     const answer = await call(apple.signIn, "/sessions", {
       challenge: value,
       identityToken: await identityToken(sub, value),
+      authorizationCode: codeFor(apple, sub),
     });
     expect(answer.status).toBe(401);
   });
@@ -781,6 +820,7 @@ describe("a challenge", () => {
     const answer = await call(apple.signIn, "/sessions", {
       challenge: await challenge(apple.signIn),
       identityToken: await identityToken(sub, await challenge(apple.signIn)),
+      authorizationCode: codeFor(apple, sub),
     });
     expect(answer.status).toBe(401);
   });
@@ -798,6 +838,7 @@ describe("a challenge", () => {
     const answer = await call(apple.signIn, "/sessions", {
       challenge: twin,
       identityToken: await identityToken(sub, twin),
+      authorizationCode: codeFor(apple, sub),
     });
     expect(answer.status).toBe(401);
   });
@@ -806,10 +847,12 @@ describe("a challenge", () => {
     const apple = fakeApple();
     const { sub } = await makeAccount(apple);
     const fresh = await challenge(apple.signIn);
-    await call(apple.signIn, "/sessions", {
+    const used = await call(apple.signIn, "/sessions", {
       challenge: fresh,
       identityToken: await identityToken(sub, fresh),
+      authorizationCode: codeFor(apple, sub),
     });
+    expect(used.status).toBe(200);
     const kept = async () =>
       (
         await database.execute({
@@ -872,6 +915,7 @@ describe("signing in", () => {
     const answer = await call(apple.signIn, "/sessions", {
       challenge: await challenge(apple.signIn),
       identityToken: "not.a-token",
+      authorizationCode: "code",
     });
     expect(answer.status).toBe(401);
   });
@@ -892,6 +936,7 @@ describe("signing in", () => {
     const answer = await call(apple.signIn, "/sessions", {
       challenge: fresh,
       identityToken: await identityToken(newSub(), fresh),
+      authorizationCode: "code",
     });
     expect(answer.status).toBe(502);
   });
@@ -908,6 +953,7 @@ describe("signing in", () => {
       body: JSON.stringify({
         challenge: fresh,
         identityToken: await identityToken(newSub(), fresh),
+        authorizationCode: "code",
       }),
     });
     expect((await serve(request, await apple.signIn, photos)).status).toBe(status);
@@ -928,9 +974,102 @@ describe("signing in", () => {
     expect(listed.status).toBe(200);
   });
 
-  it("answers 404 for an Apple user with no account", async () => {
+  it("answers 404 for an Apple user with no account, asking Apple for no token", async () => {
     const apple = fakeApple();
     expect((await signInAs(apple, newSub())).status).toBe(404);
+    expect(apple.asked.filter(({ url }) => url === appleTokenUrl)).toEqual([]);
+  });
+
+  it("keeps the refresh token Apple gives for the code, sealed, in place of the account's", async () => {
+    const apple = fakeApple();
+    const { account, sub } = await makeAccount(apple);
+
+    expect((await signInAs(apple, sub, "refresh-again")).status).toBe(200);
+
+    const kept = (await accountRow(account))?.["apple_refresh_token"];
+    if (!(kept instanceof ArrayBuffer)) {
+      throw new Error("accounts.apple_refresh_token is a BLOB");
+    }
+    const opened = await new RefreshTokens(env.REFRESH_TOKEN_KEY).open(
+      new Uint8Array(kept),
+      account,
+    );
+    expect(opened).toBe("refresh-again");
+  });
+
+  it("revokes the newest grant when the account is deleted after the user revoked consent", async () => {
+    const apple = fakeApple();
+    const { sub, refreshToken } = await makeAccount(apple);
+    await store.endSessionsOfAppleUser(sub, Date.now() + 1);
+    const again = await signInAs(apple, sub, "refresh-after-consent");
+    const { token } = await again.json<{ token: string }>();
+
+    const deleted = await serve(
+      new Request("https://mai.test/account", { method: "DELETE", ...as(token) }),
+      await apple.signIn,
+      photos,
+    );
+
+    expect(deleted.status).toBe(204);
+    expect(apple.revoked).toEqual(["refresh-after-consent"]);
+    expect(apple.revoked).not.toContain(refreshToken);
+  });
+
+  it.each([
+    ["Apple refuses the code", () => "code-unknown"],
+    [
+      "the code is another Apple user's",
+      (apple: ReturnType<typeof fakeApple>) => codeFor(apple, newSub()),
+    ],
+  ])("answers 401, starts no session and keeps the token when %s", async (_, code) => {
+    const apple = fakeApple();
+    const { account, sub } = await makeAccount(apple);
+    const before = await accountRow(account);
+    const fresh = await challenge(apple.signIn);
+
+    const answer = await call(apple.signIn, "/sessions", {
+      challenge: fresh,
+      identityToken: await identityToken(sub, fresh),
+      authorizationCode: code(apple),
+    });
+
+    expect(answer.status).toBe(401);
+    expect(await rowsOf(account, sub)).toEqual({ sessions: 1, accounts: 1 });
+    expect((await accountRow(account))?.["apple_refresh_token"]).toEqual(
+      before?.["apple_refresh_token"],
+    );
+  });
+
+  it("answers 502 when Apple's token endpoint doesn't answer, starting no session", async () => {
+    const made = fakeApple();
+    const { account, sub } = await makeAccount(made);
+    const apple = fakeApple({ answer: () => new Response("down", { status: 503 }) });
+    const fresh = await challenge(apple.signIn);
+
+    const answer = await call(apple.signIn, "/sessions", {
+      challenge: fresh,
+      identityToken: await identityToken(sub, fresh),
+      authorizationCode: "code",
+    });
+
+    expect(answer.status).toBe(502);
+    expect(await rowsOf(account, sub)).toEqual({ sessions: 1, accounts: 1 });
+  });
+
+  it("answers 400 without a code, asking Apple for nothing", async () => {
+    const apple = fakeApple();
+    const { account, sub } = await makeAccount(apple);
+    const fresh = await challenge(apple.signIn);
+    const asked = apple.asked.length;
+
+    const answer = await call(apple.signIn, "/sessions", {
+      challenge: fresh,
+      identityToken: await identityToken(sub, fresh),
+    });
+
+    expect(answer.status).toBe(400);
+    expect(apple.asked.length).toBe(asked);
+    expect(await rowsOf(account, sub)).toEqual({ sessions: 1, accounts: 1 });
   });
 
   it("ends the session on sign-out, and only that session", async () => {

@@ -551,27 +551,50 @@ export class Store {
     );
   }
 
-  /** Starts a session on the Apple user's account, using up `challenge`. */
+  /** The Apple user's account; undefined when the user has none. */
+  async accountOfAppleUser(appleSub: string): Promise<AccountId | undefined> {
+    const { rows } = await this.#client.execute({
+      sql: "SELECT id FROM accounts WHERE apple_sub = :sub",
+      args: { sub: appleSub },
+    });
+    const row = rows[0];
+    return row === undefined ? undefined : stored(parseAccountId, row["id"]);
+  }
+
+  /**
+   * Starts a session on the Apple user's account, using up `challenge`. With `refreshToken`, its
+   * account, when it is still the Apple user's, keeps that token in place of the one it had.
+   */
   async signIn(
     appleSub: string,
     challenge: Challenge,
     session: Caller,
     now: number,
+    refreshToken?: Sealed,
   ): Promise<SignedIn> {
     const results = await this.#claiming(
       now,
       challenge,
       [
+        `UPDATE accounts SET apple_refresh_token = :refresh
+         WHERE id = :account AND apple_sub = :sub AND ${claimed}`,
         `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
          SELECT :session, id, :hash, :now, :now FROM accounts WHERE apple_sub = :sub AND ${claimed}`,
         `SELECT id FROM accounts WHERE apple_sub = :sub AND ${claimed}`,
       ],
-      { sub: appleSub, session: session.session, hash: session.secretSha256, now },
+      {
+        sub: appleSub,
+        session: session.session,
+        hash: session.secretSha256,
+        now,
+        account: refreshToken?.account ?? null,
+        refresh: refreshToken?.sealedRefreshToken ?? null,
+      },
     );
     if (results === undefined) {
       return { signedIn: false, reason: "challenge-used" };
     }
-    const [started, account] = results;
+    const [, started, account] = results;
     const row = account?.rows[0];
     if (started?.rowsAffected !== 1 || row === undefined) {
       return { signedIn: false, reason: "no-account" };

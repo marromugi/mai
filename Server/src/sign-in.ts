@@ -6,7 +6,7 @@ import { jsonBody, problem } from "./http";
 import { text, type Json } from "./jws";
 import type { RefreshTokens } from "./refresh-tokens";
 import { newSessionToken } from "./sessions";
-import type { Made, Store } from "./store";
+import type { Made, Sealed, Store } from "./store";
 import { notKept, purchaseRefused, readPurchase, type AppStore } from "./subscriptions";
 
 /**
@@ -68,21 +68,16 @@ export async function makeAccount(
         : "the purchase has expired; buy the plan again",
     );
   }
-  const exchanged = await signIn.tokens.exchange(code, now);
+  const exchanged = await exchangeFor(user.sub, code, signIn, now);
   if (!exchanged.ok) {
-    return exchanged.failure === "refused"
-      ? problem(401, "Apple refused the authorization code")
-      : problem(502, "Apple's token endpoint didn't answer");
-  }
-  if (exchanged.value.sub !== user.sub) {
-    return problem(401, "the authorization code is another Apple user's");
+    return exchanged.response;
   }
   const { token, caller } = await newSessionToken();
   const made = await signIn.store.makeAccount(
     {
       id: account,
       appleSub: user.sub,
-      sealedRefreshToken: await signIn.refreshTokens.seal(exchanged.value.refreshToken, account),
+      sealedRefreshToken: await signIn.refreshTokens.seal(exchanged.refreshToken, account),
       purchase: purchase.value,
     },
     user.challenge,
@@ -99,18 +94,45 @@ const notMade: Record<Exclude<Made, "made">, () => Response> = {
   "no-plan": () => notKept("no-plan"),
 };
 
-/** `{"challenge", "identityToken"}`: a challenge from `POST /challenges`, and Apple's ID token. */
+/**
+ * `{"challenge", "identityToken", "authorizationCode"}`: a challenge from `POST /challenges`, and
+ * what Sign in with Apple gave the app for it. The account keeps the refresh token Apple gives for
+ * the code in place of its own, which Apple may have revoked since.
+ */
 export async function startSession(
   request: Request,
   signIn: SignIn,
   now: number,
 ): Promise<Response> {
-  const user = await signedInUser(await jsonBody(request), signIn, now);
+  const body = await jsonBody(request);
+  const code = text(body?.["authorizationCode"]);
+  if (code === undefined) {
+    return problem(400, "a session is started from a challenge, an ID token and a code");
+  }
+  const user = await signedInUser(body, signIn, now);
   if (!user.ok) {
     return user.response;
   }
+  const account = await signIn.store.accountOfAppleUser(user.sub);
+  let refreshToken: Sealed | undefined;
+  if (account !== undefined) {
+    const exchanged = await exchangeFor(user.sub, code, signIn, now);
+    if (!exchanged.ok) {
+      return exchanged.response;
+    }
+    refreshToken = {
+      account,
+      sealedRefreshToken: await signIn.refreshTokens.seal(exchanged.refreshToken, account),
+    };
+  }
   const { token, caller } = await newSessionToken();
-  const signedIn = await signIn.store.signIn(user.sub, user.challenge, caller, Date.now());
+  const signedIn = await signIn.store.signIn(
+    user.sub,
+    user.challenge,
+    caller,
+    Date.now(),
+    refreshToken,
+  );
   if (!signedIn.signedIn) {
     return signedIn.reason === "challenge-used"
       ? problem(401, challengeUsed)
@@ -132,6 +154,29 @@ const signInFailures: Record<SignInFailure, { status: number; reason: string }> 
   expired: { status: 401, reason: "the ID token has expired" },
   nonce: { status: 401, reason: "the ID token wasn't made for this challenge" },
 };
+
+/** Apple's refresh token for `code`, which Apple gave for the Apple user `sub`. */
+async function exchangeFor(
+  sub: string,
+  code: string,
+  signIn: SignIn,
+  now: number,
+): Promise<{ ok: true; refreshToken: string } | { ok: false; response: Response }> {
+  const exchanged = await signIn.tokens.exchange(code, now);
+  if (!exchanged.ok) {
+    return {
+      ok: false,
+      response:
+        exchanged.failure === "refused"
+          ? problem(401, "Apple refused the authorization code")
+          : problem(502, "Apple's token endpoint didn't answer"),
+    };
+  }
+  if (exchanged.value.sub !== sub) {
+    return { ok: false, response: problem(401, "the authorization code is another Apple user's") };
+  }
+  return { ok: true, refreshToken: exchanged.value.refreshToken };
+}
 
 type User = { ok: true; sub: string; challenge: Challenge } | { ok: false; response: Response };
 
