@@ -494,7 +494,6 @@ struct AccountModelTests {
     #expect(!model.canSignIn)
     #expect(model.kept.id == nil)
     #expect(try sessions.load() == nil)
-    #expect(try ownKeys.load() == nil)
     #expect(!FileManager.default.fileExists(atPath: stateFile.path()))
   }
 
@@ -520,6 +519,41 @@ struct AccountModelTests {
     await model.deleteAccount()
     #expect(model.problem != nil)
     #expect(model.phase == .recoveryKeyNeeded)
+  }
+
+  /// A session that can't be read sends nothing, so the account ID is kept.
+  @Test func aDeletionWhoseSessionCantBeReadKeepsTheAccountID() async throws {
+    let worker = ScriptedWorker([
+      "PUT /account/subscription": [.status(200)], "DELETE /account": [.status(204)],
+    ])
+    let sessions = BreakingSessions()
+    try sessions.save(session)
+    let model = try model(over: worker, sessions: sessions)
+    await model.checkAtLaunch()
+    sessions.breaksAfterSave = true
+    try sessions.save(session)
+
+    await model.deleteAccount()
+    #expect(model.problem != nil)
+    #expect(!worker.asked.contains("DELETE /account"))
+    #expect(model.kept.id == bought)
+  }
+
+  /// Deleted on the server, the account ID goes even when the session can't be removed.
+  @Test func anAccountDeletedWhoseSessionCantBeRemovedForgetsItsID() async throws {
+    let worker = ScriptedWorker([
+      "PUT /account/subscription": [.status(200)], "DELETE /account": [.status(204)],
+    ])
+    let sessions = BreakingSessions()
+    try sessions.save(session)
+    let model = try model(over: worker, sessions: sessions)
+    await model.checkAtLaunch()
+    sessions.removalFails = true
+
+    await model.deleteAccount()
+    #expect(model.problem == AccountError.notForgotten(.failed(-25308)).localizedDescription)
+    #expect(model.kept.id == nil)
+    #expect(!model.canSignIn)
   }
 
   /// The server can't say whether the account is gone, so its ID is kept for signing in again.
@@ -660,13 +694,20 @@ nonisolated final class ScriptedApple: AppleSignIn, Purchases {
   func subscriptions(for account: UUID) async throws -> [SignedSubscription] { bought }
 }
 
-/// Keeps a session in memory; once `breaksAfterSave` and a session is saved, every load fails.
+/// Keeps a session in memory; once `breaksAfterSave` and a session is saved, every load fails,
+/// and while `removalFails`, every removal does.
 nonisolated final class BreakingSessions: SessionStore {
-  private let kept = Mutex<(session: Session?, breaks: Bool, broken: Bool)>((nil, false, false))
+  private let kept = Mutex<(session: Session?, breaks: Bool, broken: Bool, removalFails: Bool)>(
+    (nil, false, false, false))
 
   var breaksAfterSave: Bool {
     get { kept.withLock { $0.breaks } }
     set { kept.withLock { $0.breaks = newValue } }
+  }
+
+  var removalFails: Bool {
+    get { kept.withLock { $0.removalFails } }
+    set { kept.withLock { $0.removalFails = newValue } }
   }
 
   func load() throws(KeychainError) -> Session? {
@@ -683,7 +724,12 @@ nonisolated final class BreakingSessions: SessionStore {
     }
   }
 
-  func remove() throws(KeychainError) { kept.withLock { $0.session = nil } }
+  func remove() throws(KeychainError) {
+    try kept.withLock { kept throws(KeychainError) in
+      if kept.removalFails { throw .failed(-25308) }
+      kept.session = nil
+    }
+  }
 }
 
 nonisolated final class MemorySessions: SessionStore {
@@ -707,5 +753,4 @@ nonisolated final class MemoryOwnKeys: OwnKeyStore {
   }
 
   func replace(with key: OwnKey) throws(KeychainError) { kept.withLock { $0 = key } }
-  func remove() throws(KeychainError) { kept.withLock { $0 = nil } }
 }

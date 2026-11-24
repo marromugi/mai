@@ -47,13 +47,6 @@ struct OwnKeyKeychainTests {
     #expect(try keychain.load() == restored)
   }
 
-  @Test func holdsNoKeyOnceRemoved() throws {
-    try keychain.save(OwnKey.generate())
-    try keychain.remove()
-    #expect(try keychain.load() == nil)
-    try keychain.remove()
-  }
-
   @Test func keepsTheKeyForICloudKeychainToCarry() throws {
     defer { remove() }
     try keychain.save(OwnKey.generate())

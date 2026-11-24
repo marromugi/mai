@@ -237,9 +237,9 @@ enum AccountPhase: Equatable {
     }
   }
 
-  /// Deletes the account on the server, then forgets it on the device: the session, the own key,
-  /// the sync's state, and the account ID kept, so the device is as before a plan was bought.
-  /// While it runs, the account is neither checked, settled, synced, nor signed out of.
+  /// Deletes the account on the server, then forgets it on the device: the session, the sync's
+  /// state, and the account ID kept, so the device has no account. While it runs, the account is
+  /// neither checked, settled, synced, nor signed out of.
   func deleteAccount() async {
     guard phase == .signedIn || phase == .recoveryKeyNeeded, !deleting else { return }
     deleting = true
@@ -247,8 +247,8 @@ enum AccountPhase: Equatable {
     do {
       try await account.deleteAccount(syncStateIn: syncState)
     } catch {
-      if case .keychain = error {
-        // Deleted on the server; only forgetting it on the device failed.
+      if case .notForgotten = error {
+        // Deleted on the server.
         kept.forget()
         canSignIn = false
       }

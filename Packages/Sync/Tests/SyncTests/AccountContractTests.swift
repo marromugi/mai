@@ -183,7 +183,6 @@ struct AccountContractTests {
 
     try await first.account.deleteAccount(syncStateIn: states)
     #expect(try first.sessions.load() == nil)
-    #expect(try first.ownKeys.load() == nil)
     for token in [session.token, secondSession.token] {
       await #expect(
         performing: { try await first.server.account(token: token) }, throws: isRefused(401))
