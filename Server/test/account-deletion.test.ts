@@ -644,6 +644,7 @@ function renewal(made: { account: string; original: string }, signed: number): P
     periodEnds: signed + month,
     paidUntil: signed + month,
     revoked: false,
+    purchased: false,
     environment: "Production",
     signedDate: signed,
   };
@@ -885,7 +886,10 @@ describe("the cron trigger, for lapsed accounts", () => {
     });
     expect(await rowsOf(one.account)).toEqual(lapsedRows);
     expect(await keysOf(one.account)).toHaveLength(2);
-    expect(warned).toHaveBeenCalledTimes(1);
+    // Other test files' accounts marked for deletion can be picked in the same run.
+    expect(
+      warned.mock.calls.filter(([message]) => String(message).includes(one.account)),
+    ).toHaveLength(1);
 
     // Not marked, so a resubscription still keeps it.
     await testStore.keepNotified(renewal(one, at + lapsedKept));

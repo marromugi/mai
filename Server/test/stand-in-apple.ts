@@ -65,6 +65,8 @@ function standIn(): Promise<StandIn> {
 }
 
 const codePrefix = "stand-in.";
+/** Codes the token endpoint took already: Apple takes each code once. */
+const usedCodes = new Set<string>();
 const day = 24 * 60 * 60 * 1000;
 
 export default {
@@ -101,7 +103,7 @@ async function signedIn(request: Request, apple: StandIn, clientId: string): Pro
   }
   return Response.json({
     identityToken: await identityToken(apple, clientId, user, { nonce }),
-    authorizationCode: `${codePrefix}${user}`,
+    authorizationCode: `${codePrefix}${crypto.randomUUID()}.${user}`,
   });
 }
 
@@ -169,7 +171,10 @@ function identityToken(
   );
 }
 
-/** Answers the Worker's requests to Apple: the keys, a code `stand-in.<user>`, and revoking. */
+/**
+ * Answers the Worker's requests to Apple: the keys, a code `stand-in.<UUID>.<user>` once, and
+ * revoking.
+ */
 async function answerAsApple(url: string, apple: StandIn, init?: RequestInit): Promise<Response> {
   switch (url) {
     case appleKeysUrl:
@@ -178,10 +183,11 @@ async function answerAsApple(url: string, apple: StandIn, init?: RequestInit): P
       // AppleTokens posts a form.
       const form = init?.body instanceof URLSearchParams ? init.body : new URLSearchParams();
       const code = form.get("code") ?? "";
-      if (!code.startsWith(codePrefix)) {
+      const user = code.slice(codePrefix.length + 37);
+      if (!code.startsWith(codePrefix) || user === "" || usedCodes.has(code)) {
         return Response.json({ error: "invalid_grant" }, { status: 400 });
       }
-      const user = code.slice(codePrefix.length);
+      usedCodes.add(code);
       const refreshToken = base64url(crypto.getRandomValues(new Uint8Array(32)));
       return Response.json({
         refresh_token: refreshToken,

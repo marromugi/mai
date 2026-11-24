@@ -28,13 +28,15 @@
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /challenges`                  | 201 と `{"challenge"}`。5 分使える。アプリはその SHA-256(小文字の 16 進)を Sign in with Apple の nonce にする                                                                                                                                                                                                                                                                                                                                                        |
 | `POST /account`                     | `{"account", "challenge", "identityToken", "authorizationCode", "transaction"}`。`account` はアプリが作った UUID で、購入の `appAccountToken` と同じもの。`transaction` はそのアカウントのために買った購読の StoreKit 2 の取引(`Transaction.jwsRepresentation`)。201 と `{"token"}`(セッションのトークン)。その Apple の利用者かその ID のアカウントがもうあれば 409 で、アカウントもセッションも作らない(サインインは `POST /sessions`)。取引の断り方は下の「購読」 |
-| `POST /sessions`                    | `{"challenge", "identityToken"}`(アプリは `authorizationCode` も送るが、サーバーはまだ読まない)。200 と `{"account", "token"}`。その Apple の利用者のアカウントがなければ 404                                                                                                                                                                                                                                                                                        |
+| `POST /sessions`                    | `{"challenge", "identityToken", "authorizationCode"}`。200 と `{"account", "token"}`。その Apple の利用者のアカウントがないか、削除の印(`deleting`)が付いていれば 404(Apple にはコードを送らない)。アカウントがあれば、コードを `POST /account` と同じく refresh トークンに替えて、アカウントの refresh トークンをそれに置き換える                                                                                                                                   |
 | `POST /app-store/notifications`     | Apple が送る App Store Server Notifications V2 の `{"signedPayload"}`。下の「購読」                                                                                                                                                                                                                                                                                                                                                                                  |
 | `POST /apple/sign-in-notifications` | Apple が送る Sign in with Apple の通知の `{"payload"}`。下の「Sign in with Apple の通知」                                                                                                                                                                                                                                                                                                                                                                            |
 
 ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・`aud`(`APPLE_CLIENT_ID`)・`exp` と、nonce がチャレンジの SHA-256 であることを確かめる。チャレンジは `CHALLENGE_KEY` の HMAC で、サーバーは出すときには何も書かず、使ったものを期限の 1 時間あとまで `used_challenges` に置く。使ったもの、このサーバーが出していないもの、期限の切れたもの(Apple を待つ間に切れたものも)、ID トークンが別のチャレンジに作られたものは 401。チャレンジは通ればその場で使ったことになり、409 や 404 で終わっても使い直せない。
 
 `POST /account` は認可コードを Apple の `/auth/token` で refresh トークンに替え(`src/apple-tokens.ts`)、`REFRESH_TOKEN_KEY` の AES-256-GCM でアカウント ID を付けて封じて `accounts.apple_refresh_token` に置く(`src/refresh-tokens.ts`)。封じる前の値はどこにも置かない。Apple がコードを断るか(`invalid_grant`)、コードが別の利用者のものなら 401、Apple が答えなければ 502。Apple がそれ以外の 4xx を返したら Worker の要求か `APPLE_` の秘密の誤りなので 500。取引は Apple に引き換えを頼む前に確かめ、プランは取引の商品で決める。
+
+`POST /sessions` も同じようにコードを替え、セッションを始めるのと同じ書き込みでアカウントの refresh トークンを置き換える。利用者が Apple の設定で mai をやめると Apple は前のトークンを無効にするので、サインインし直したあとの `DELETE /account` が取り消すのは、そのときの許可のトークンになる(TN3194)。断り方は `POST /account` と同じで、401 や 502 のときはセッションも始めず、トークンも変えず、チャレンジも使わない。コードを替えたあとでアカウントが消えるか削除の印が付いていたら、替えたトークンを取り消して 404。
 
 ### Sign in with Apple の通知
 
@@ -43,7 +45,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 - `payload` は ID トークンと同じ Apple の鍵の RS256 で署名を確かめ、`iss` が `https://appleid.apple.com`、`aud` が `APPLE_CLIENT_ID` であることを見る。`exp` と nonce はない。
 - 中身の `events` は `type` と `sub`(Apple の利用者)を持つ。Apple の文書の例はオブジェクトだが、JSON の文字列で送られるという報告もあるので、どちらも読む。
 - `consent-revoked`(その人が mai で Apple でサインインするのをやめた)と `account-deleted`(Apple アカウントを消した。文書が前に書いていた `account-delete` も同じに扱う。[開発者フォーラムの Apple の答え](https://developer.apple.com/forums/thread/808898))は、そのアカウントのセッションのうち、`iat` の秒の終わりまでに始まったものを全部消す。`iat` のない通知は、受けた時までに始まったものを消す。
-  - `consent-revoked` ではアカウントは消さない。もう一度サインインすれば(`POST /sessions`)同じアカウントに戻る。
+  - `consent-revoked` ではアカウントは消さない。もう一度サインインすれば(`POST /sessions`)同じアカウントに戻り、refresh トークンもそのときのものに替わる。
   - `account-deleted` では、続けてアカウントも消す(#69 の答え)。その Apple の利用者ではもうどの端末もサインインできないため。消し方は下の「アカウントの削除」の 1〜5 と同じで(`deleteAccountOfAppleUser`、`src/account-deletion.ts`)、ただし要求のセッションの代わりに `sub` でアカウントを見つけ、Apple に取り消しを頼む前に印(`deleting`)を付ける。その端末からは `DELETE /account` をやり直せないので、Apple の取り消しが答えないときや、R2 か行の削除で失敗したときは、下の「期限切れのあとの削除」の Cron が次の回に終える。取り消しが答えなくても答えは 200 で、失敗したときは 500。
 - `email-enabled`・`email-disabled`(メールの転送の変更)と、ほかの種類は、mai がメールを頼んでいないので何もしない。
 - 同じ通知が何度来ても、消すセッションは同じで、そのあとにサインインし直して始まったセッションは残る。アカウントのない `sub`(`account-deleted` で消したあとの同じ通知も)は何もしない。
@@ -82,7 +84,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 `DELETE /account`(`src/account-deletion.ts`)は次の順に進む。
 
 1. `accounts.apple_refresh_token` を開き、Apple の `/auth/revoke` で取り消す。Apple は前に取り消したトークンにも 200 を返す。Apple が答えなければ 502、それ以外の 4xx は Worker の要求か `APPLE_` の秘密の誤りなので 500。
-2. 要求のセッションが生きていれば `accounts.deleting` を 1 にする。生きていなければ 401 で、ここから先は何も消さない。
+2. 要求のセッションが生きていれば `accounts.deleting` を 1 にする。生きていなければ 401 で、ここから先は何も消さない。1 と 2 の間に `POST /sessions` がトークンを置き換えていたら、それも取り消す(印のあとは置き換わらない)。Apple が答えなければ 502。
 3. R2 の `<アカウント ID>/` の下を全部消す。
 4. `deleting` が 1 なら、`account_id` を持つ表(`src/store.ts` の `accountTables`)と `accounts` のそのアカウントの行を 1 つの batch で消す。セッションも全部なくなり、どの端末のトークンも 401 になる。2 のあとにセッションが終わっても(1 の取り消しで Apple が送る `consent-revoked` の通知が、上の「Sign in with Apple の通知」で全セッションを消しても)、ここは止まらない。
 5. 3 と 4 の間に送り終えた写真のために、R2 の `<アカウント ID>/` の下で `photos` に行のないものをもう一度消す(要求のあとも続ける)。行のあるものは、同じ ID で作り直したアカウント(同じ購入の `appAccountToken`)の写真なので残す。4 のあとに R2 に書き終えた写真は、行がないので `stored` にならず、その要求が自分で消す。
@@ -163,9 +165,11 @@ AI のエージェント(Mac の MCP サーバーなど)に、期間を決めて
 
 購読のことはどれも、App Store が署名した取引と更新の情報から読む。通知の種類は見ない。更新(`DID_RENEW`)は新しい期限の取引を、期限切れ(`EXPIRED`・`GRACE_PERIOD_EXPIRED`・猶予のない `DID_FAIL_TO_RENEW`)は過ぎた期限の取引を、猶予(`DID_FAIL_TO_RENEW` の `GRACE_PERIOD`)は猶予の終わりの入った更新の情報を、返金と取り消し(`REFUND`・`REVOKE`)は `revocationDate` の入った取引を、すぐ変わる上のプランへの変更(`DID_CHANGE_RENEWAL_PREF` の `UPGRADE`)は新しい商品の取引を持ってくる。下のプランへの変更(`DOWNGRADE`)は次の更新で新しい商品の取引が来るまで、今のプランのまま。
 
-- **アカウントを作るとき**(`POST /account`): 取引が `src/app-store.ts` で通り(下の「Apple の署名」)、`appAccountToken` がそのアカウント ID で、まだ払われていて(期限切れや返金・取り消しでなく)、`APP_STORE_ENVIRONMENTS` の環境のもので、どれかのプランの商品であること。署名・形・別のアプリ・自動更新の購読でないものは 400、`appAccountToken` が別のアカウントか無いもの、その購読がもう別のアカウントのものなら 409、払われていなければ 402、受けない環境なら 403。
-- **送り直し**(`PUT /account/subscription`): 同じように確かめ、更新の情報は同じ `originalTransactionId` の取引のものに限る(別の購読のものは 400)。期限が過ぎたものや取り消されたものも受け、その通りに写す。`appAccountToken` が呼んだアカウントでないか、その購読が別のアカウントのものなら 409。期限の切れたアカウントからも送れる。今のものより古いか同じ時刻のもの、前の期間のものなら何も変えずに 200(アプリが同じ取引を送り直したときも)。
-- **通知**(`POST /app-store/notifications`): 署名と環境を同じように確かめ、通らなければ 400、受けない環境なら 403。取引のない通知(`TEST` など)、自動更新の購読でない取引、まだ置いていない購読で `appAccountToken` のアカウントがないものは、何もせず 200。まだ置いていない購読でアカウントがあれば、そのアカウントのものとして置く。今のものより古いか同じ時刻のもの、前の期間のものは何も変えない。Apple は 200 を返すまで送り直す。
+- **アカウントを作るとき**(`POST /account`): 取引が `src/app-store.ts` で通り(下の「Apple の署名」)、`appAccountToken` がそのアカウント ID で、まだ払われていて(期限切れや返金・取り消しでなく)、`APP_STORE_ENVIRONMENTS` の環境のもので、どれかのプランの商品であること。署名・形・別のアプリ・自動更新の購読でないものは 400、`appAccountToken` が別のアカウントか無いもの、その購読がもう別のアカウントのもので、置いてあるものより後の請求の期間でなければ 409、払われていなければ 402、受けない環境なら 403。後の期間なら購読を新しいアカウントに移す(下の「別のアカウントでの買い直し」)。
+- **送り直し**(`PUT /account/subscription`): 同じように確かめ、更新の情報は同じ `originalTransactionId` の取引のものに限る(別の購読のものは 400)。期限が過ぎたものや取り消されたものも受け、その通りに写す。`appAccountToken` が呼んだアカウントでないか、その購読が別のアカウントのもので、置いてあるものより後の請求の期間でなければ 409(後の期間なら呼んだアカウントに移す)。期限の切れたアカウントからも送れる。今のものより古いか同じ時刻のもの、前の期間のものなら何も変えずに 200(アプリが同じ取引を送り直したときも)。
+- **通知**(`POST /app-store/notifications`): 署名と環境を同じように確かめ、通らなければ 400、受けない環境なら 403。取引のない通知(`TEST` など)、自動更新の購読でない取引、まだ置いていない購読で `appAccountToken` のアカウントがないものは、何もせず 200。まだ置いていない購読でアカウントがあれば、そのアカウントのものとして置く。今のものより古いか同じ時刻のもの、前の期間のものは何も変えない。置いてある購読の取引の `appAccountToken` が別のアカウントなら、下の「別のアカウントでの買い直し」のとおり。Apple は 200 を返すまで送り直す。
+
+**別のアカウントでの買い直し**: 同じ App Store の Apple ID の購読は、買い直しても `originalTransactionId` が変わらない。取引が購入(`transactionReason` が `PURCHASE`:買い直しか上のプランへの変更)で、その `appAccountToken` が置いてある行と別のアカウントを指すとき、署名がより新しく、請求の期間(`expiresDate`)がより後で、そのアカウントがあって削除の印が付いていなければ、購読をそのアカウントに移す(#57)。移った先のプランと `paid_until` は上のとおり決め直す。元のアカウントの `paid_until` は、移した購入の署名の時刻より後なら、その時刻に縮める(その購入で、元のアカウントへの支払いは終わった。上のプランへの変更なら Apple が残りを返金する)。ほかの購読があれば、それが払っている時刻とプランは残る。そうでなければ(同じ期間か、そのアカウントがまだないか、削除の途中なら)何も変えない。更新(`RENEWAL`)は、どのアカウントを指していても置いてあるアカウントの購読として写す(Apple は上のプランへの変更のあとの更新に、変更の前の `appAccountToken` を付ける)。`transactionReason` のない取引は購入として扱わない。移ったあと、元のアカウントが前の取引を送り直すと 409。移った先のアカウントは、元のアカウントを指す更新も送り直せる。
 
 `accounts.paid_until` を過ぎたアカウントは期限切れで、文書と写真を読めるが書けない。文書の保存(`PUT /writings/<ID>`)、写真とサムネイル(`PUT /photos/<ID>`、`.../thumbnail`)、自分の鍵の確かめの値(`PUT /account/own-key-check`)は 402 で、何も書かず、数えもしない。一覧・読み出し、アカウントを読むこと(`GET /account`)、購読を戻すための送り直しはそのまま使える。`paid_until` が期限の切れた時刻で、その 90 日あとに Cron が消す(下の「期限切れのあとの削除」)。
 
@@ -212,7 +216,7 @@ Cron(毎分)が、最後に使ってから 180 日たったセッションと、
 
 期限が切れてから(`accounts.paid_until` から)90 日たったアカウントと、`DELETE /account` か Apple の `account-deleted` の通知が印(`deleting`)を付けて終えなかったアカウントを、Cron が 1 回 10 件まで、その中から無作為に選んで消す(`deleteLapsedAccounts`、`src/account-deletion.ts`)。消し方は上の「アカウントの削除」と同じで、Apple の refresh トークンを取り消し、R2 の `<アカウント ID>/` の下を消し、すべての表の行を消す。
 
-- 90 日のうちに購読し直せば(`paid_until` がまた先になれば)消さない。購読の送り直しと通知は上の「購読」の通りに `paid_until` を変える。
+- 90 日のうちに購読し直せば(`paid_until` がまた先になれば)消さない。別のアカウントのために買い直した購読は、そのアカウントに移るので、このアカウントは消える日が延びない(上の「別のアカウントでの買い直し」)。購読の送り直しと通知は上の「購読」の通りに `paid_until` を変える。
 - Apple が取り消したあと、R2 に触る前に `accounts.deleting` を 1 にする。そこまでに購読し直していれば何も消さない。そのあとの購読し直しはもう `paid_until` を変えず、アカウントは消える。
 - 無作為に選ぶので、毎回失敗するアカウントが 10 件あっても、ほかのアカウントも消える。
 - 1 件の失敗はほかを止めない。失敗したアカウントはログに残り、次の回にやり直す。Apple が答えなければ何も消さない。R2 か行の削除で失敗すれば、`deleting` が 1 のまま次の回に終える。
