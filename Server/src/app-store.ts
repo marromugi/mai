@@ -31,6 +31,8 @@ export type Transaction = {
   readonly purchaseDate: number;
   readonly expiresDate: number | undefined;
   readonly revocationDate: number | undefined;
+  /** `PURCHASE` or `RENEWAL`; undefined in a transaction signed before Apple wrote it. */
+  readonly transactionReason: string | undefined;
   readonly environment: Environment;
   readonly signedDate: number;
 };
@@ -292,6 +294,7 @@ function transactionOf(
   const appAccountToken = optional(payload["appAccountToken"], uuid);
   const expiresDate = optional(payload["expiresDate"], whole);
   const revocationDate = optional(payload["revocationDate"], whole);
+  const transactionReason = optional(payload["transactionReason"], text);
   if (
     transactionId === undefined ||
     originalTransactionId === undefined ||
@@ -302,7 +305,8 @@ function transactionOf(
     environment === undefined ||
     appAccountToken === null ||
     expiresDate === null ||
-    revocationDate === null
+    revocationDate === null ||
+    transactionReason === null
   ) {
     return undefined;
   }
@@ -317,6 +321,7 @@ function transactionOf(
       purchaseDate,
       expiresDate,
       revocationDate,
+      transactionReason,
       environment,
       signedDate,
     },

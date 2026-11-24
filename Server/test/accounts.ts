@@ -72,6 +72,7 @@ export async function newAccount(
         periodEnds,
         paidUntil: now + month,
         revoked: false,
+        purchased: true,
         environment: "Production",
         signedDate: now,
       },

@@ -30,7 +30,8 @@ public struct AccountServer: Sendable {
 
   /// Makes `account` for the Apple user of `credential`, asked with `challenge`, and paid for by
   /// `transaction`, and gives back its session token. Nil when the server refuses with 409: the
-  /// Apple user or the account has an account already, or the purchase is another account's.
+  /// Apple user or the account has an account already, or the purchase is another account's and
+  /// not a later purchase that moves it to `account`.
   public func makeAccount(
     _ account: UUID, challenge: String, credential: AppleCredential, transaction: String
   ) async throws(ServerError) -> String? {
