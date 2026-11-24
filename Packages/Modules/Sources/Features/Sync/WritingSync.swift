@@ -119,6 +119,24 @@ internal import Sync
     return nil
   }
 
+  /// Deletes the account once any sync running has ended, so none writes the sync's state after
+  /// it is removed; a sync asked for meanwhile runs after it.
+  func deleteAccount() async {
+    pending?.cancel()
+    pending = nil
+    let previous = running
+    let deletion = Task {
+      await previous?.value
+      await account.deleteAccount()
+    }
+    running = deletion
+    await deletion.value
+    if account.phase == .signedOut {
+      status = .notYet
+      lastStarted = nil
+    }
+  }
+
   /// Called after each edit saved on the device: sets a sync to run once edits pause.
   func edited() {
     guard account.phase == .signedIn else { return }

@@ -10,6 +10,8 @@ public protocol OwnKeyStore: Sendable {
   /// Keeps `key` in place of the one kept, which the account's own key check showed isn't the
   /// account's.
   func replace(with key: OwnKey) throws(KeychainError)
+  /// Forgets the key kept, as when its account is deleted; nothing when none is kept.
+  func remove() throws(KeychainError)
 }
 
 /// The own key in iCloud Keychain, which carries it to the user's other devices.
@@ -72,6 +74,14 @@ public struct OwnKeyKeychain: OwnKeyStore {
     case errSecItemNotFound:
       try save(key)
     default:
+      throw .failed(status)
+    }
+  }
+
+  /// Forgets the key here and, through iCloud Keychain, on the user's other devices.
+  public func remove() throws(KeychainError) {
+    let status = SecItemDelete(base as CFDictionary)
+    guard status == errSecSuccess || status == errSecItemNotFound else {
       throw .failed(status)
     }
   }

@@ -25,6 +25,10 @@ final class MemoryOwnKeys: OwnKeyStore {
   func replace(with key: OwnKey) throws(KeychainError) {
     kept.withLock { $0 = key }
   }
+
+  func remove() throws(KeychainError) {
+    kept.withLock { $0 = nil }
+  }
 }
 
 /// Keeps the session in memory.

@@ -57,8 +57,9 @@ private struct AppleIDButton: UIViewRepresentable {
 
 /// The settings' section for the account, under 「同期」: signing in once a plan is bought, the
 /// recovery key when the own key isn't here, how the sync went with 「今すぐ同期」 while signed in,
-/// and signing out; then, while signed in, the plan's (`PlanStateSections`) once `state` is read.
-/// Nothing while signed out with no plan bought.
+/// signing out, and the page that deletes the account (`AccountDeletionView`); then, while signed
+/// in, the plan's (`PlanStateSections`) once `state` is read. Nothing while signed out with no plan
+/// bought.
 struct AccountRows: View {
   let phase: AccountPhase
   let canSignIn: Bool
@@ -67,6 +68,7 @@ struct AccountRows: View {
   let signIn: () -> Void
   let signOut: () -> Void
   let restore: (String) async -> String?
+  var deleteAccount: () async -> Void = {}
   /// Nil where nothing syncs.
   var syncStatus: WritingSync.Status?
   var syncNow: () -> Void = {}
@@ -120,6 +122,9 @@ struct AccountRows: View {
         } message: {
           Text("この端末では同期をやめます。文書はこの端末に残ります。")
         }
+      NavigationLink("アカウントを削除") {
+        AccountDeletionView(deleteAccount: deleteAccount)
+      }
     }
   }
 
@@ -189,6 +194,13 @@ struct AccountSection: View {
           return await sync.restore(from: text)
         }
         return await account.restore(from: text)
+      },
+      deleteAccount: {
+        if let sync {
+          await sync.deleteAccount()
+        } else {
+          await account.deleteAccount()
+        }
       },
       syncStatus: sync?.status,
       syncNow: { Task { await sync?.syncAsked() } }

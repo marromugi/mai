@@ -136,10 +136,13 @@ struct AccountModelTests {
     #expect(model.state == nil)
   }
 
-  /// A model over `worker` whose session store and own key store the test holds.
+  /// A model over `worker` whose session store and own key store the test holds, keeping the
+  /// sync's state in `syncState`.
   private func model(
     over worker: ScriptedWorker, sessions: any SessionStore,
-    ownKeys: MemoryOwnKeys = MemoryOwnKeys()
+    ownKeys: MemoryOwnKeys = MemoryOwnKeys(),
+    syncState: URL = .applicationSupportDirectory.appending(
+      path: "Sync", directoryHint: .isDirectory)
   ) throws -> AccountModel {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defaults.removePersistentDomain(forName: suite)
@@ -151,7 +154,7 @@ struct AccountModelTests {
         server: AccountServer(
           url: try #require(URL(string: "https://worker.test")), transport: worker),
         apple: apple, purchases: apple, sessions: sessions, ownKeys: ownKeys),
-      kept: kept)
+      kept: kept, syncState: syncState)
   }
 
   /// The session dropped while signing in reads the account (a check that met a 401): signing in
@@ -451,6 +454,106 @@ struct AccountModelTests {
     #expect(model.phase == .signedOut)
     #expect(model.problem == nil)
   }
+
+  /// Signed in at launch over `worker`, with `key` on the device and a sync state file for the
+  /// account in a directory of its own.
+  private func signedInForDeletion(
+    _ answers: [String: [ScriptedWorker.Answer]], holding: String? = nil,
+    key: OwnKey = OwnKey.generate()
+  ) async throws -> (
+    model: AccountModel, worker: ScriptedWorker, sessions: MemorySessions,
+    ownKeys: MemoryOwnKeys, stateFile: URL
+  ) {
+    var answers = answers
+    answers["PUT /account/subscription"] = [.status(200)]
+    let worker = ScriptedWorker(answers, holding: holding)
+    let sessions = MemorySessions()
+    try sessions.save(session)
+    let ownKeys = MemoryOwnKeys()
+    try ownKeys.save(key)
+    let directory = FileManager.default.temporaryDirectory.appending(
+      path: "mai-account-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let stateFile = directory.appending(path: "\(bought.uuidString.lowercased()).json")
+    try Data("{}".utf8).write(to: stateFile)
+    let model = try model(over: worker, sessions: sessions, ownKeys: ownKeys, syncState: directory)
+    await model.checkAtLaunch()
+    return (model, worker, sessions, ownKeys, stateFile)
+  }
+
+  @Test func deletingTheAccountGoesBackToBeforeAPlanWasBought() async throws {
+    let (model, _, sessions, ownKeys, stateFile) = try await signedInForDeletion([
+      "DELETE /account": [.status(204)]
+    ])
+    #expect(model.phase == .signedIn)
+    #expect(model.canSignIn)
+
+    await model.deleteAccount()
+    #expect(model.problem == nil)
+    #expect(model.phase == .signedOut)
+    #expect(!model.canSignIn)
+    #expect(model.kept.id == nil)
+    #expect(try sessions.load() == nil)
+    #expect(try ownKeys.load() == nil)
+    #expect(!FileManager.default.fileExists(atPath: stateFile.path()))
+  }
+
+  @Test func anAccountTheServerDidntDeleteStaysSignedIn() async throws {
+    let (model, _, sessions, _, stateFile) = try await signedInForDeletion([
+      "DELETE /account": [.status(502)]
+    ])
+    await model.deleteAccount()
+    #expect(model.problem != nil)
+    #expect(model.phase == .signedIn)
+    #expect(model.kept.id == bought)
+    #expect(try sessions.load() == session)
+    #expect(FileManager.default.fileExists(atPath: stateFile.path()))
+  }
+
+  @Test func aDeletionThatFailsWhileTheRecoveryKeyIsNeededStillAsksForIt() async throws {
+    let (model, _, _, _, _) = try await signedInForDeletion([
+      "GET /account": [ScriptedWorker.account(check: OwnKey.generate().check)],
+      "DELETE /account": [.status(502)],
+    ])
+    await model.settleOwnKey()
+    #expect(model.phase == .recoveryKeyNeeded)
+    await model.deleteAccount()
+    #expect(model.problem != nil)
+    #expect(model.phase == .recoveryKeyNeeded)
+  }
+
+  /// The server can't say whether the account is gone, so its ID is kept for signing in again.
+  @Test func aDeletionRefusedForTheSessionSignsOutAndKeepsTheAccountID() async throws {
+    let (model, _, _, ownKeys, _) = try await signedInForDeletion([
+      "DELETE /account": [.status(401)]
+    ])
+    await model.deleteAccount()
+    #expect(model.problem == AccountError.signInNeededToDelete.localizedDescription)
+    #expect(model.phase == .signedOut)
+    #expect(model.kept.id == bought)
+    #expect(try ownKeys.load() != nil)
+  }
+
+  /// While the account is being deleted, nothing else reaches the server with its session.
+  @Test func whileDeletingNothingElseUsesTheSession() async throws {
+    let (model, worker, _, _, _) = try await signedInForDeletion(
+      ["DELETE /account": [.status(204)]], holding: "DELETE /account")
+    let deleting = Task { await model.deleteAccount() }
+    while !worker.isHolding {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    let before = worker.asked
+    #expect(try await model.syncKeys() == nil)
+    await model.check()
+    await model.settleOwnKey()
+    await model.signOut()
+    await model.deleteAccount()
+    #expect(worker.asked == before)
+    worker.release()
+    await deleting.value
+    #expect(worker.heldCount == 1)
+    #expect(model.phase == .signedOut)
+  }
 }
 
 /// Answers each request with the next answer written for its route; with none left, it fails the
@@ -604,4 +707,5 @@ nonisolated final class MemoryOwnKeys: OwnKeyStore {
   }
 
   func replace(with key: OwnKey) throws(KeychainError) { kept.withLock { $0 = key } }
+  func remove() throws(KeychainError) { kept.withLock { $0 = nil } }
 }

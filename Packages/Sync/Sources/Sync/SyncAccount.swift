@@ -231,6 +231,34 @@ public struct SyncAccount: Sendable {
     try keychain { () throws(KeychainError) in try sessions.remove() }
   }
 
+  /// Deletes the account on the server (`DELETE /account`), then forgets it on the device: the
+  /// session, the own key, and the sync's state of it in `stateDirectory`. Nothing is deleted
+  /// when the server can't delete it, so the person can try again. A session the server no longer
+  /// lets in is dropped from the device, and the account kept, since the server can't say whether
+  /// it is gone.
+  public func deleteAccount(syncStateIn stateDirectory: URL) async throws(AccountError) {
+    guard let session = try session() else { return }
+    do {
+      try await server.deleteAccount(token: session.token)
+    } catch .refused(status: 401, _) {
+      try keychain { () throws(KeychainError) in try sessions.remove() }
+      throw .signInNeededToDelete
+    } catch {
+      throw .server(error)
+    }
+    try keychain { () throws(KeychainError) in try sessions.remove() }
+    try keychain { () throws(KeychainError) in try ownKeys.remove() }
+    do {
+      try FileManager.default.removeItem(
+        at: Self.syncStateFile(of: session.account, in: stateDirectory))
+    } catch CocoaError.fileNoSuchFile {
+      // Never synced.
+    } catch {
+      // Left behind, it only makes a later sync of the same account ID send every writing again.
+      syncLogger.error("The sync state of a deleted account couldn't be removed: \(error)")
+    }
+  }
+
   /// Where the sync of `account` keeps its state, in `stateDirectory`.
   static func syncStateFile(of account: UUID, in stateDirectory: URL) -> URL {
     stateDirectory.appending(
@@ -304,6 +332,8 @@ public enum AccountError: LocalizedError {
   case recoveryKey(RecoveryKeyError)
   /// The recovery key is of another own key than the account's.
   case notTheAccountsKey
+  /// The server no longer let the session in to delete the account; the session was dropped.
+  case signInNeededToDelete
 
   public var errorDescription: String? {
     switch self {
@@ -327,6 +357,8 @@ public enum AccountError: LocalizedError {
       error.localizedDescription
     case .notTheAccountsKey:
       "このリカバリーキーは、このアカウントの鍵ではありません。"
+    case .signInNeededToDelete:
+      "サインインが切れたため、アカウントを削除できませんでした。もう一度 Apple でサインインしてから削除してください。"
     }
   }
 }
