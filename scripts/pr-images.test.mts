@@ -21,7 +21,7 @@ const view = {
     { body: "no images here" },
     { body: "![leaky](https://github.com/user-attachments/assets/leaky)" },
     { body: "![elsewhere](https://images.example.com/three.png) http://github.com/plain.png" },
-    { body: "![a [b] c](<https://images.example.com/four.png>)\n<img data-src=\"https://wrong.example.com/x\" src=https://images.example.com/five.png>" },
+    { body: "![a [b] c](<https://images.example.com/four.png>)\n<img alt=\"see src=https://wrong.example.com/y\" data-src=\"https://wrong.example.com/x\" src=https://images.example.com/five.png>" },
   ],
   reviews: [{ body: `![token in a name](https://github.com/user-attachments/assets/${token})` }],
 };
@@ -51,7 +51,7 @@ globalThis.fetch = async (input, init = {}) => {
 const fakeGh = `#!/bin/sh
 if [ "$1 $2" = "auth token" ]; then echo "${token}"; exit 0; fi
 if [ "$1 $2" = "pr view" ]; then cat "$GH_VIEW"; exit 0; fi
-if [ "$1" = "api" ]; then cat "$GH_LINE_COMMENTS"; exit 0; fi
+if [ "$1" = "api" ]; then case "$*" in *--paginate*) cat "$GH_LINE_COMMENTS"; exit 0;; esac; fi
 exit 1
 `;
 
@@ -124,5 +124,5 @@ test("downloads every image and never shows the token", async (t) => {
     assert.equal(request.authorization, toGitHub ? `Bearer ${token}` : null, request.url);
   }
   assert.ok(!requests.some((r) => r.url.startsWith("http://")), "a plain http URL was fetched");
-  assert.ok(!requests.some((r) => r.url.includes("wrong.example.com")), "data-src was taken for src");
+  assert.ok(!requests.some((r) => r.url.includes("wrong.example.com")), "another attribute was taken for src");
 });

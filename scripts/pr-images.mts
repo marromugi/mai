@@ -1,5 +1,5 @@
-// Downloads the images in a pull request's body, comments, and reviews into a new temporary folder,
-// and prints one line per image: where it was found and the path it was saved to.
+// Downloads the images in a pull request's body, comments, reviews, and line comments into a new
+// temporary folder, and prints one line per image: where it was found and the path it was saved to.
 //
 //   node scripts/pr-images.mts <PR number>
 //
@@ -33,8 +33,9 @@ function say(stream: NodeJS.WriteStream, line: string): void {
 
 function imageURLs(text: string): URL[] {
   const found: URL[] = [];
-  const markdown = String.raw`!\[(?:[^\[\]]|\[[^\]]*\])*\]\(\s*(?:<([^>]+)>|([^)\s]+))`;
-  const img = String.raw`<img\b[^>]*?(?<![\w-])src\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))`;
+  const markdown = String.raw`!\[(?:[^\[\]]|\[[^\]]*\])*\]\(\s*(?:<([^>\n]+)>|([^)\s]+))`;
+  const attribute = String.raw`\s+[\w-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?`;
+  const img = String.raw`<img\b(?:${attribute})*?\s+src\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'>]+))`;
   const bare = String.raw`^[ \t]*(https://github\.com/user-attachments/assets/\S+)[ \t]*$`;
   const pattern = new RegExp(`${markdown}|${img}|${bare}`, "gim");
   for (const match of text.matchAll(pattern)) {
