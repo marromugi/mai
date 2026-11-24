@@ -741,6 +741,50 @@ describe("an account made with a subscription bought again", () => {
   });
 });
 
+describe("an account refused though made with a later purchase", () => {
+  it("moves nothing and cuts nothing", async () => {
+    const apple = fakeApple();
+    const first = crypto.randomUUID();
+    const original = crypto.randomUUID();
+    expect(
+      (
+        await makeAccount(
+          apple,
+          newSub(),
+          first,
+          await signedTransaction(first, {
+            originalTransactionId: original,
+            expiresDate: Date.now() + 30 * day,
+          }),
+        )
+      ).answer.status,
+    ).toBe(201);
+    const firstBefore = await paidFor(first);
+    const taken = await makeAccount(apple);
+
+    const second = crypto.randomUUID();
+    const { answer } = await makeAccount(
+      apple,
+      taken.sub,
+      second,
+      await signedTransaction(second, {
+        originalTransactionId: original,
+        expiresDate: Date.now() + 60 * day,
+        signedDate: Date.now() + 2000,
+      }),
+    );
+
+    expect(answer.status).toBe(409);
+    expect(await paidFor(first)).toEqual(firstBefore);
+    expect(await accountRow(second)).toBeUndefined();
+    const { rows } = await database.execute({
+      sql: "SELECT account_id FROM subscriptions WHERE original_transaction_id = ?",
+      args: [original],
+    });
+    expect(rows[0]?.["account_id"]).toBe(first);
+  });
+});
+
 describe("a challenge", () => {
   it("is refused the second time, whichever route used it first", async () => {
     const apple = fakeApple();
