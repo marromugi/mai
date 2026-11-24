@@ -138,7 +138,8 @@ struct AccountModelTests {
 
   /// A model over `worker` whose session store and own key store the test holds.
   private func model(
-    over worker: ScriptedWorker, sessions: MemorySessions, ownKeys: MemoryOwnKeys = MemoryOwnKeys()
+    over worker: ScriptedWorker, sessions: any SessionStore,
+    ownKeys: MemoryOwnKeys = MemoryOwnKeys()
   ) throws -> AccountModel {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defaults.removePersistentDomain(forName: suite)
@@ -220,6 +221,36 @@ struct AccountModelTests {
     await first.value
     // The held read, started first, is answered last, with the second answer.
     #expect(model.state?.standing == .paid(until: Date(timeIntervalSince1970: 1)))
+  }
+
+  /// While the recovery key is asked for, the account is still read.
+  @Test func theAccountIsReadWhileTheRecoveryKeyIsNeeded() async throws {
+    let model = try model(
+      [
+        "PUT /account/subscription": [.status(200)],
+        "GET /account": [
+          ScriptedWorker.account(check: OwnKey.generate().check),
+          .status(200, json: accountAnswer(check: nil, paidUntil: 3_000, gracePeriod: true)),
+        ],
+      ], session: session, key: OwnKey.generate())
+    await model.checkAtLaunch()
+    await model.refresh()
+    #expect(model.phase == .recoveryKeyNeeded)
+    await model.readState()
+    #expect(model.state?.standing == .gracePeriod(until: Date(timeIntervalSince1970: 3)))
+  }
+
+  /// A sign-in that fails, on a device whose keychain then can't be read, ends signed out.
+  @Test func aFailedSignInWhoseSessionCantBeReadEndsSignedOut() async throws {
+    var answers = Self.newAccount
+    answers["GET /account"] = []
+    let worker = ScriptedWorker(answers)
+    let sessions = BreakingSessions()
+    let model = try model(over: worker, sessions: sessions)
+    sessions.breaksAfterSave = true
+    await model.signIn()
+    #expect(model.phase == .signedOut)
+    #expect(model.problem != nil)
   }
 
   @Test func aSignedOutDeviceDoesntReadTheAccount() async throws {
@@ -524,6 +555,32 @@ nonisolated final class ScriptedApple: AppleSignIn, Purchases {
   func credentialState(of user: String) async throws -> AppleCredentialState { .authorized }
 
   func subscriptions(for account: UUID) async throws -> [SignedSubscription] { bought }
+}
+
+/// Keeps a session in memory; once `breaksAfterSave` and a session is saved, every load fails.
+nonisolated final class BreakingSessions: SessionStore {
+  private let kept = Mutex<(session: Session?, breaks: Bool, broken: Bool)>((nil, false, false))
+
+  var breaksAfterSave: Bool {
+    get { kept.withLock { $0.breaks } }
+    set { kept.withLock { $0.breaks = newValue } }
+  }
+
+  func load() throws(KeychainError) -> Session? {
+    try kept.withLock { kept throws(KeychainError) in
+      if kept.broken { throw .failed(-25308) }
+      return kept.session
+    }
+  }
+
+  func save(_ session: Session) throws(KeychainError) {
+    kept.withLock {
+      $0.session = session
+      $0.broken = $0.breaks
+    }
+  }
+
+  func remove() throws(KeychainError) { kept.withLock { $0.session = nil } }
 }
 
 nonisolated final class MemorySessions: SessionStore {

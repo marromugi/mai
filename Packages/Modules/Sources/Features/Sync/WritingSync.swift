@@ -97,6 +97,12 @@ internal import Sync
     }
   }
 
+  /// 「今すぐ同期」: syncs, then reads the account again, for what the sync used of the plan.
+  func syncAsked() async {
+    await syncNow()
+    await account.readState()
+  }
+
   /// Signs in for the account a plan was bought for, then syncs.
   func signIn() async {
     await account.signIn()

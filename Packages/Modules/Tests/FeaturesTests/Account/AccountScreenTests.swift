@@ -78,6 +78,23 @@ struct AccountScreenTests {
       .lapsed(since: date("2026-11-01"), deletesAt: date("2027-01-30")), colorScheme: .dark)
   }
 
+  /// A day left: still counted in days, not 「まもなく」.
+  @Test func planLapsedADayBeforeItsDeletion() {
+    assertPlan(.lapsed(since: date("2026-08-27"), deletesAt: date("2026-11-25")))
+  }
+
+  /// Signed in, with the account read: the plan's sections follow the account's.
+  @Test func syncSectionSignedInWithTheAccountRead() {
+    assertSyncSection(
+      .signedIn, canSignIn: true, state: sampleState(.paid(until: date("2026-12-24"))))
+  }
+
+  /// Signed out, with no plan's sections even when an account was read.
+  @Test func syncSectionSignedOutShowsNoPlan() {
+    assertSyncSection(
+      .signedOut, canSignIn: true, state: sampleState(.paid(until: date("2026-12-24"))))
+  }
+
   /// Past when it is deleted, before the cron trigger has deleted it.
   @Test func planLapsedPastItsDeletion() {
     assertPlan(.lapsed(since: date("2026-08-01"), deletesAt: date("2026-10-30")))
@@ -180,6 +197,7 @@ private func assertSyncSection(
   _ phase: AccountPhase,
   canSignIn: Bool,
   syncStatus: WritingSync.Status? = nil,
+  state: AccountState? = nil,
   colorScheme: ColorScheme = .light,
   size: DynamicTypeSize = .large,
   testName: String = #function
@@ -194,8 +212,8 @@ private func assertSyncSection(
         Text(SettingsForm.syncFooter(phase))
       }
       AccountRows(
-        phase: phase, canSignIn: canSignIn, signIn: {}, signOut: {}, restore: { _ in nil },
-        syncStatus: syncStatus)
+        phase: phase, canSignIn: canSignIn, state: state, signIn: {}, signOut: {},
+        restore: { _ in nil }, syncStatus: syncStatus)
     },
     title: "設定", colorScheme: colorScheme, size: size, testName: testName)
 }
@@ -208,16 +226,9 @@ private func date(_ day: String) -> Date {
   return date
 }
 
-/// The plan's sections of a Basic account at `standing`, read at noon on 2026-11-24 in Tokyo,
-/// with `saves` saved today.
-private func assertPlan(
-  _ standing: AccountState.Standing,
-  saves: Int64 = 12,
-  colorScheme: ColorScheme = .light,
-  size: DynamicTypeSize = .large,
-  testName: String = #function
-) {
-  let state = AccountState(
+/// A Basic account at `standing`, with some of the plan used and `saves` saved today.
+private func sampleState(_ standing: AccountState.Standing, saves: Int64 = 12) -> AccountState {
+  AccountState(
     plan: "basic", standing: standing,
     usage: PlanUsage(
       writingsBytes: .init(used: 1_234_567, limit: 100_000_000),
@@ -227,8 +238,19 @@ private func assertPlan(
       lists: .init(used: 9, limit: 200),
       saves: .init(used: saves, limit: 500),
       photos: .init(used: 0, limit: 100)))
+}
+
+/// The plan's sections of a Basic account at `standing`, read at noon on 2026-11-24 in Tokyo,
+/// with `saves` saved today.
+private func assertPlan(
+  _ standing: AccountState.Standing,
+  saves: Int64 = 12,
+  colorScheme: ColorScheme = .light,
+  size: DynamicTypeSize = .large,
+  testName: String = #function
+) {
   assertPushed(
-    Form { PlanStateSections(state: state, now: date("2026-11-24")) }
+    Form { PlanStateSections(state: sampleState(standing, saves: saves), now: date("2026-11-24")) }
       .environment(\.locale, Locale(identifier: "ja_JP"))
       .environment(\.timeZone, TimeZone(identifier: "Asia/Tokyo") ?? .gmt),
     title: "設定", colorScheme: colorScheme, size: size, testName: testName)

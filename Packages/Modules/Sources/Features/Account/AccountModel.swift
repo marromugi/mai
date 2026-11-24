@@ -273,7 +273,7 @@ enum AccountPhase: Equatable {
   private func stillIn(_ session: Session, keeping read: (state: AccountState, number: Int))
     throws(AccountError) -> Bool
   {
-    guard phase != .signedOut, try account.session() == session else { return false }
+    guard try account.session() == session else { return false }
     if read.number > stateRead {
       state = read.state
       stateRead = read.number

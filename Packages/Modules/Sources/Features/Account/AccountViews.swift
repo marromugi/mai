@@ -191,12 +191,7 @@ struct AccountSection: View {
         return await account.restore(from: text)
       },
       syncStatus: sync?.status,
-      syncNow: {
-        Task {
-          await sync?.syncNow()
-          await account.readState()
-        }
-      }
+      syncNow: { Task { await sync?.syncAsked() } }
     )
     .task { await account.refresh() }
   }
