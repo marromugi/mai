@@ -35,6 +35,10 @@ enum AccountPhase: Equatable {
   /// What the server last said of the account, read on settling the own key and by
   /// `readState()`; nil while signed out.
   private(set) var state: AccountState?
+  /// The reads of the account started, and the one `state` is from, so an older read finishing
+  /// later doesn't replace a newer one.
+  @ObservationIgnored private var readsStarted = 0
+  @ObservationIgnored private var stateRead = 0
   /// Whether the own key on the device was found to be the account's since the device last
   /// became signed in. A sync waits for it.
   private var ownKeySettled = false
@@ -132,7 +136,8 @@ enum AccountPhase: Equatable {
     guard phase == .signedIn || phase == .recoveryKeyNeeded else { return }
     do {
       guard let session = try account.session() else { return }
-      keep(try await account.state(session), readWith: session)
+      let read = try await self.read(session)
+      _ = try stillIn(session, keeping: read)
     } catch {
       accountLogger.error("The account couldn't be read: \(error)")
     }
@@ -159,15 +164,22 @@ enum AccountPhase: Equatable {
       if session.account != id {
         kept.keep(session.account)
       }
-      try await settle(session)
+      if try await !settle(session) {
+        phaseFromSession()
+      }
     } catch {
       report(error, "Signing in")
-      do {
-        phase = try account.session() == nil ? .signedOut : .signedIn
-      } catch {
-        accountLogger.error("The session couldn't be read: \(error)")
-        phase = .signedOut
-      }
+      phaseFromSession()
+    }
+  }
+
+  /// Signed in or out as the session kept says, when signing in didn't end settled.
+  private func phaseFromSession() {
+    do {
+      phase = try account.session() == nil ? .signedOut : .signedIn
+    } catch {
+      accountLogger.error("The session couldn't be read: \(error)")
+      phase = .signedOut
     }
   }
 
@@ -182,7 +194,7 @@ enum AccountPhase: Equatable {
         phase = .signedOut
         return
       }
-      try await settle(session)
+      _ = try await settle(session)
     } catch {
       report(error, "Settling the own key")
     }
@@ -236,7 +248,7 @@ enum AccountPhase: Equatable {
         phase = .signedOut
         return nil
       }
-      try await settle(session)
+      guard try await settle(session) else { return nil }
     }
     guard phase == .signedIn else { return nil }
     return try account.syncKeys()
@@ -247,24 +259,34 @@ enum AccountPhase: Equatable {
     account.synchronizer(writings: writings, stateDirectory: syncState, keys: keys)
   }
 
-  /// Keeps `read`, the account as read with `session`, unless the device signed out or into
-  /// another session while it was read; answers whether it was kept.
-  @discardableResult private func keep(_ read: AccountState, readWith session: Session) -> Bool {
-    do {
-      guard phase != .signedOut, try account.session() == session else { return false }
-    } catch {
-      accountLogger.error("The session couldn't be read: \(error)")
-      return false
+  /// The account as read with `session`, and which read it was.
+  private func read(_ session: Session) async throws(AccountError) -> (
+    state: AccountState, number: Int
+  ) {
+    readsStarted += 1
+    let number = readsStarted
+    return (try await account.state(session), number)
+  }
+
+  /// Whether the device is still signed in to `session` after `read`, a read of the account with
+  /// it; then `read` is kept, unless a read started after it was kept already.
+  private func stillIn(_ session: Session, keeping read: (state: AccountState, number: Int))
+    throws(AccountError) -> Bool
+  {
+    guard phase != .signedOut, try account.session() == session else { return false }
+    if read.number > stateRead {
+      state = read.state
+      stateRead = read.number
     }
-    state = read
     return true
   }
 
-  /// Settles the own key of `session`; nothing when the device left it while the account was read.
-  private func settle(_ session: Session) async throws(AccountError) {
-    let read = try await account.state(session)
-    guard keep(read, readWith: session) else { return }
-    switch try await account.settleOwnKey(session, against: read) {
+  /// Settles the own key of `session`. False, settling nothing, when the device left the session
+  /// while the account was read.
+  private func settle(_ session: Session) async throws(AccountError) -> Bool {
+    let read = try await self.read(session)
+    guard try stillIn(session, keeping: read) else { return false }
+    switch try await account.settleOwnKey(session, against: read.state) {
     case .ready:
       phase = .signedIn
       ownKeySettled = true
@@ -275,6 +297,7 @@ enum AccountPhase: Equatable {
     case .recoveryKeyNeeded:
       phase = .recoveryKeyNeeded
     }
+    return true
   }
 
   private func report(_ error: any Error, _ step: String) {

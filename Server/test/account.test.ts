@@ -168,7 +168,12 @@ describe("GET /account", () => {
   });
 
   it("says an account paid for only by a billing grace period is in it", async () => {
-    const { account, caller } = await newAccount(products.basic, Date.now(), Date.now() - day);
+    const { account, caller, token } = await newAccount(
+      products.basic,
+      Date.now(),
+      Date.now() - day,
+    );
+    expect(await readAccount(token)).toMatchObject({ lapsed: false, gracePeriod: true });
     const paidUntil = await paidUntilOf(account);
     expect(await store.account(caller, paidUntil - 1)).toMatchObject({
       ok: true,
@@ -211,6 +216,28 @@ describe("GET /account", () => {
     expect(await store.account(caller, Date.now())).toMatchObject({
       ok: true,
       value: { gracePeriod: false },
+    });
+  });
+
+  it("says an account in its grace period is in it beside a refunded subscription", async () => {
+    const { account, caller } = await newAccount(products.basic, Date.now(), Date.now() - day);
+    // Refunded: its billing period runs on, but it was paid for only until it was revoked.
+    await database.execute({
+      sql: `INSERT INTO subscriptions (original_transaction_id, account_id, product_id,
+              period_ends, paid_until, environment, signed_date)
+            VALUES (?, ?, ?, ?, ?, 'Production', ?)`,
+      args: [
+        crypto.randomUUID(),
+        account,
+        products.plus,
+        Date.now() + 20 * day,
+        Date.now() - day,
+        Date.now(),
+      ],
+    });
+    expect(await store.account(caller, Date.now())).toMatchObject({
+      ok: true,
+      value: { gracePeriod: true },
     });
   });
 

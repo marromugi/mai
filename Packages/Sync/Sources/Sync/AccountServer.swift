@@ -28,8 +28,8 @@ public struct AccountState: Sendable, Equatable {
   }
 }
 
-/// How much of each of its plan's limits an account has used. The counts are today's (UTC), before
-/// the request that read them.
+/// How much of each of its plan's limits an account has used. The counts are today's (UTC);
+/// `requests` counts the read that answered them, which the server counts before answering.
 public struct PlanUsage: Sendable, Equatable, Decodable {
   public let writingsBytes: Use
   public let writings: Use
@@ -51,6 +51,14 @@ public struct PlanUsage: Sendable, Equatable, Decodable {
     /// Whether what is used is at the limit. A day's count past it is answered 429; storage can be
     /// refused sooner, by a save that would take it past.
     public var isUsedUp: Bool { used >= limit }
+  }
+
+  /// As read: the server gives the day's requests before the read that asked for them.
+  fileprivate var countingThisRead: Self {
+    Self(
+      writingsBytes: writingsBytes, writings: writings, photosBytes: photosBytes,
+      requests: Use(used: requests.used + 1, limit: requests.limit), lists: lists, saves: saves,
+      photos: photos)
   }
 
   public init(
@@ -149,7 +157,7 @@ public struct AccountServer: Sendable {
       )
     }
     return AccountState(
-      plan: read.plan, standing: standing, usage: read.usage, ownKeyCheck: check)
+      plan: read.plan, standing: standing, usage: read.usage.countingThisRead, ownKeyCheck: check)
   }
 
   /// Puts the account's own key check; false when the account has another one.

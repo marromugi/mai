@@ -42,6 +42,7 @@ struct AccountStateTests {
     accountAnswer(check: nil, lapsed: true),
     accountAnswer(check: nil, deletesAt: 91),
     accountAnswer(check: nil, lapsed: true, gracePeriod: true, deletesAt: 91),
+    accountAnswer(check: nil, gracePeriod: true, deletesAt: 91),
     accountAnswer(check: nil).replacing(#""gracePeriod":false,"#, with: ""),
     accountAnswer(check: nil).replacing(#""saves":{"used":0,"limit":500},"#, with: ""),
   ])
@@ -54,9 +55,22 @@ struct AccountStateTests {
     }
   }
 
-  @Test func usageAtItsLimitIsUsedUp() {
+  @Test func usageAtOrPastItsLimitIsUsedUp() {
     #expect(PlanUsage.Use(used: 500, limit: 500).isUsedUp)
+    // Past it: a plan changed to a smaller one, with the writings kept.
+    #expect(PlanUsage.Use(used: 501, limit: 500).isUsedUp)
     #expect(!PlanUsage.Use(used: 499, limit: 500).isUsedUp)
+  }
+
+  /// The server gives the day's requests before the read; the read itself is one more, so the last
+  /// one the day allows reads as used up.
+  @Test func theRequestsCountTheReadThatAnsweredThem() async throws {
+    let json = accountAnswer(check: nil).replacing(
+      #""requests":{"used":0,"limit":3000}"#, with: #""requests":{"used":2999,"limit":3000}"#)
+    let state = try await state(json)
+    #expect(state.usage.requests == PlanUsage.Use(used: 3_000, limit: 3_000))
+    #expect(state.usage.requests.isUsedUp)
+    #expect(state.usage.saves == PlanUsage.Use(used: 0, limit: 500))
   }
 
   @Test(arguments: [

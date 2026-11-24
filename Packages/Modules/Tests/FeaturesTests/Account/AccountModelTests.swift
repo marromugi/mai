@@ -136,6 +136,92 @@ struct AccountModelTests {
     #expect(model.state == nil)
   }
 
+  /// A model over `worker` whose session store and own key store the test holds.
+  private func model(
+    over worker: ScriptedWorker, sessions: MemorySessions, ownKeys: MemoryOwnKeys = MemoryOwnKeys()
+  ) throws -> AccountModel {
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defaults.removePersistentDomain(forName: suite)
+    let kept = KeptAccountID(defaults: defaults)
+    kept.keep(bought)
+    let apple = ScriptedApple()
+    return AccountModel(
+      account: SyncAccount(
+        server: AccountServer(
+          url: try #require(URL(string: "https://worker.test")), transport: worker),
+        apple: apple, purchases: apple, sessions: sessions, ownKeys: ownKeys),
+      kept: kept)
+  }
+
+  /// The session dropped while signing in reads the account (a check that met a 401): signing in
+  /// ends signed out, not still working.
+  @Test func aSignInWhoseSessionGoesWhileTheAccountIsReadEndsSignedOut() async throws {
+    let worker = ScriptedWorker(Self.newAccount, holding: "GET /account")
+    let sessions = MemorySessions()
+    let model = try model(over: worker, sessions: sessions)
+    let signingIn = Task { await model.signIn() }
+    while !worker.isHolding {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    try sessions.remove()
+    worker.release()
+    await signingIn.value
+    #expect(model.phase == .signedOut)
+    #expect(model.state == nil)
+  }
+
+  /// A sync whose session is replaced while the account is read gets no keys: the key on the
+  /// device wasn't settled against the new session's account.
+  @Test func aSyncWhoseSessionChangesWhileTheAccountIsReadGetsNoKeys() async throws {
+    let worker = ScriptedWorker(
+      [
+        "PUT /account/subscription": [.status(200)],
+        "GET /account": [ScriptedWorker.account(check: OwnKey.generate().check)],
+      ], holding: "GET /account")
+    let sessions = MemorySessions()
+    try sessions.save(session)
+    let ownKeys = MemoryOwnKeys()
+    try ownKeys.save(OwnKey.generate())
+    let model = try model(over: worker, sessions: sessions, ownKeys: ownKeys)
+    await model.checkAtLaunch()
+    let keys = Task { try await model.syncKeys() }
+    while !worker.isHolding {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    try sessions.save(Session(token: "s1.c.d", account: UUID(), appleUser: "user"))
+    worker.release()
+    #expect(try await keys.value == nil)
+    #expect(model.state == nil)
+  }
+
+  /// Two reads of the account at once: the one started later is kept, whichever ends last.
+  @Test func theLaterReadOfTheAccountIsKept() async throws {
+    let key = OwnKey.generate()
+    let worker = ScriptedWorker(
+      [
+        "PUT /account/subscription": [.status(200)],
+        "GET /account": [
+          .status(200, json: accountAnswer(check: key.check, paidUntil: 1_000)),
+          .status(200, json: accountAnswer(check: key.check, paidUntil: 2_000)),
+        ],
+      ], holding: "GET /account")
+    let sessions = MemorySessions()
+    try sessions.save(session)
+    let ownKeys = MemoryOwnKeys()
+    try ownKeys.save(key)
+    let model = try model(over: worker, sessions: sessions, ownKeys: ownKeys)
+    await model.checkAtLaunch()
+    let first = Task { await model.readState() }
+    while !worker.isHolding {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    await model.readState()
+    worker.release()
+    await first.value
+    // The held read, started first, is answered last, with the second answer.
+    #expect(model.state?.standing == .paid(until: Date(timeIntervalSince1970: 1)))
+  }
+
   @Test func aSignedOutDeviceDoesntReadTheAccount() async throws {
     let worker = ScriptedWorker([:])
     let model = try model([:], worker: worker, keeps: false)
