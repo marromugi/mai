@@ -2,6 +2,7 @@
 // /private/tmp, and checks which secrets each deploy sends.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   cpSync,
@@ -56,29 +57,6 @@ echo "turso $*" >>"$LOG"
 echo "turso:$*"
 `;
 
-before(() => {
-  directory = mkdtempSync(
-    join(existsSync("/private/tmp") ? "/private/tmp" : tmpdir(), "mai-deploy-test."),
-  );
-  copy = join(directory, "Server");
-  mkdirSync(join(copy, "node_modules", ".bin"), { recursive: true });
-  mkdirSync(join(directory, "bin"));
-  for (const name of ["scripts", "src", "wrangler.jsonc", "package.json"]) {
-    cpSync(join(server, name), join(copy, name), { recursive: true });
-  }
-  symlinkSync(join(server, "node_modules", "wrangler"), join(copy, "node_modules", "wrangler"));
-  writeFileSync(join(copy, "node_modules", ".bin", "wrangler"), wrangler);
-  chmodSync(join(copy, "node_modules", ".bin", "wrangler"), 0o755);
-  writeFileSync(join(directory, "bin", "turso"), turso);
-  chmodSync(join(directory, "bin", "turso"), 0o755);
-  writeFileSync(
-    join(directory, "key.p8"),
-    "-----BEGIN PRIVATE KEY-----\nAAAA\nBBBB\n-----END PRIVATE KEY-----\n",
-  );
-});
-
-after(() => rmSync(directory, { recursive: true, force: true }));
-
 const apple = () => ({
   APPLE_TEAM_ID: "TEAM",
   APPLE_SIGN_IN_KEY_ID: "KEY",
@@ -86,7 +64,7 @@ const apple = () => ({
 });
 
 function deploy(environment: string, listed: string, variables: Record<string, string> = {}) {
-  const log = join(directory, `log.${crypto.randomUUID()}`);
+  const log = join(directory, `log.${randomUUID()}`);
   const env: Record<string, string | undefined> = {
     ...process.env,
     PATH: `${join(directory, "bin")}:${process.env["PATH"]}`,
@@ -108,24 +86,59 @@ function deploy(environment: string, listed: string, variables: Record<string, s
         .split("\n")
         .filter((line) => line !== "")
     : [];
-  const sent: Record<string, string> | undefined = existsSync(`${log}.secrets`)
-    ? JSON.parse(readFileSync(`${log}.secrets`, "utf8"))
+  const sent = existsSync(`${log}.secrets`)
+    ? secretsIn(readFileSync(`${log}.secrets`, "utf8"))
     : undefined;
   return { status: run.status, stderr: run.stderr, calls, sent };
+}
+
+/** The secrets file deploy.sh gave wrangler: a JSON object of strings. */
+function secretsIn(text: string): Record<string, string> {
+  const parsed: unknown = JSON.parse(text);
+  assert.ok(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed));
+  const secrets: Record<string, string> = {};
+  for (const [name, value] of Object.entries(parsed)) {
+    assert.equal(typeof value, "string", `${name} is a string`);
+    secrets[name] = String(value);
+  }
+  return secrets;
 }
 
 const listing = (names: string[]) =>
   JSON.stringify(names.map((name) => ({ name, type: "secret_text" })));
 
-describe("deploy.sh", () => {
-  it("deploys a Worker that has every secret without sending or making any", () => {
+await describe("deploy.sh", async () => {
+  before(() => {
+    directory = mkdtempSync(
+      join(existsSync("/private/tmp") ? "/private/tmp" : tmpdir(), "mai-deploy-test."),
+    );
+    copy = join(directory, "Server");
+    mkdirSync(join(copy, "node_modules", ".bin"), { recursive: true });
+    mkdirSync(join(directory, "bin"));
+    for (const name of ["scripts", "src", "wrangler.jsonc", "package.json"]) {
+      cpSync(join(server, name), join(copy, name), { recursive: true });
+    }
+    symlinkSync(join(server, "node_modules", "wrangler"), join(copy, "node_modules", "wrangler"));
+    writeFileSync(join(copy, "node_modules", ".bin", "wrangler"), wrangler);
+    chmodSync(join(copy, "node_modules", ".bin", "wrangler"), 0o755);
+    writeFileSync(join(directory, "bin", "turso"), turso);
+    chmodSync(join(directory, "bin", "turso"), 0o755);
+    writeFileSync(
+      join(directory, "key.p8"),
+      "-----BEGIN PRIVATE KEY-----\nAAAA\nBBBB\n-----END PRIVATE KEY-----\n",
+    );
+  });
+
+  after(() => rmSync(directory, { recursive: true, force: true }));
+
+  await it("deploys a Worker that has every secret without sending or making any", () => {
     const run = deploy("prod", listing(required));
     assert.equal(run.status, 0);
     assert.deepEqual(run.calls, ["wrangler secret list --env ", "wrangler deploy --env "]);
     assert.equal(run.sent, undefined);
   });
 
-  it("sends only the secrets the Worker lacks", () => {
+  await it("sends only the secrets the Worker lacks", () => {
     const run = deploy(
       "dev",
       listing(required.filter((name) => name !== "TURSO_TOKEN" && name !== "CHALLENGE_KEY")),
@@ -137,7 +150,7 @@ describe("deploy.sh", () => {
     assert.match(run.calls.at(-1) ?? "", /^wrangler deploy --env dev --secrets-file /);
   });
 
-  it("makes every secret for a Worker not deployed yet", () => {
+  await it("makes every secret for a Worker not deployed yet", () => {
     const run = deploy("dev", "missing", apple());
     assert.equal(run.status, 0, run.stderr);
     assert.deepEqual(run.sent, {
@@ -153,21 +166,32 @@ describe("deploy.sh", () => {
     assert.notEqual(run.sent?.["CHALLENGE_KEY"], run.sent?.["REFRESH_TOKEN_KEY"]);
   });
 
-  it("names the shell variables it needs and deploys nothing without them", () => {
+  await it("names the shell variables it needs and deploys nothing without them", () => {
     const run = deploy("prod", "missing");
     assert.equal(run.status, 1);
     assert.match(run.stderr, /APPLE_TEAM_ID APPLE_SIGN_IN_KEY_ID APPLE_SIGN_IN_KEY_FILE/);
     assert.deepEqual(run.calls, ["wrangler secret list --env "]);
   });
 
-  it("stops at an answer from wrangler other than a Worker not found", () => {
+  await it("takes a key file holding no key as missing", async () => {
+    writeFileSync(join(directory, "empty.p8"), "");
+    const run = deploy("dev", "missing", {
+      ...apple(),
+      APPLE_SIGN_IN_KEY_FILE: join(directory, "empty.p8"),
+    });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /APPLE_SIGN_IN_KEY_FILE/);
+    assert.deepEqual(run.calls, ["wrangler secret list --env dev"]);
+  });
+
+  await it("stops at an answer from wrangler other than a Worker not found", () => {
     const run = deploy("dev", "logged out", apple());
     assert.equal(run.status, 1);
     assert.match(run.stderr, /Not logged in/);
     assert.deepEqual(run.calls, ["wrangler secret list --env dev"]);
   });
 
-  it("takes no environment but dev and prod", () => {
+  await it("takes no environment but dev and prod", () => {
     const run = deploy("staging", listing(required));
     assert.equal(run.status, 1);
     assert.deepEqual(run.calls, []);

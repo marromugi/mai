@@ -9,8 +9,8 @@
     "types": "wrangler types --include-runtime=false --strict-vars=false",
     "types:check": "wrangler types --include-runtime=false --strict-vars=false --check",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "lint": "oxlint --type-aware --deny-warnings src test vitest.config.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
+    "lint": "oxlint --type-aware --deny-warnings src test scripts vitest.config.ts",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check"
   },

@@ -42,7 +42,8 @@ for name in "${missing[@]}"; do
       [[ -n "${!name:-}" ]] || unset_variables+=("$name")
       ;;
     APPLE_SIGN_IN_KEY)
-      [[ -f "${APPLE_SIGN_IN_KEY_FILE:-}" ]] || unset_variables+=("APPLE_SIGN_IN_KEY_FILE")
+      key="$(grep -v -- ----- "${APPLE_SIGN_IN_KEY_FILE:-}" 2>/dev/null | tr -d '\n')" || true
+      [[ -n "$key" ]] || unset_variables+=("APPLE_SIGN_IN_KEY_FILE")
       ;;
     TURSO_URL | TURSO_TOKEN | CHALLENGE_KEY | REFRESH_TOKEN_KEY | APPLE_CLIENT_ID) ;;
     *)
@@ -54,6 +55,7 @@ for name in "${missing[@]}"; do
 done
 if [[ ${#unset_variables[@]} -gt 0 ]]; then
   echo "$worker lacks secrets made from ${unset_variables[*]}; set them in the shell and run again" >&2
+  echo "(APPLE_SIGN_IN_KEY_FILE is the path of a .p8 file holding the key)" >&2
   exit 1
 fi
 
@@ -65,7 +67,7 @@ for name in "${missing[@]}"; do
     CHALLENGE_KEY | REFRESH_TOKEN_KEY) value="$(openssl rand -base64 32)" ;;
     APPLE_CLIENT_ID) value="com.marromugi.mai" ;;
     APPLE_TEAM_ID | APPLE_SIGN_IN_KEY_ID) value="${!name}" ;;
-    APPLE_SIGN_IN_KEY) value="$(grep -v -- ----- "$APPLE_SIGN_IN_KEY_FILE" | tr -d '\n')" ;;
+    APPLE_SIGN_IN_KEY) value="$key" ;;
   esac
   jq --arg name "$name" --arg value "$value" '.[$name] = $value' "$directory/secrets.json" \
     >"$directory/next.json"

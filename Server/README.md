@@ -285,7 +285,7 @@ scripts/server-contract-test.sh
 | R2         | `mai-photos`・`mai-fonts`                                     | `mai-photos-dev`・`mai-fonts-dev`                                     |
 | デプロイ   | `pnpm deploy:prod`                                            | `pnpm deploy:dev`                                                     |
 
-アプリがどちらを向くかは、`project.yml` の構成ごとの `MAI_SERVER` で決まる。デバッグビルドは `MAI_SERVER_URL` で手元の `wrangler dev` にも向けられる(上の「手元で動かす」)。
+アプリがどちらを向くかは、`project.yml` の構成ごとの `MAI_SERVER` で決まる。デバッグビルドは `MAI_SERVER_URL` で手元の `wrangler dev` にも向けられる(上の「手元で動かす」)。Xcode から動かすデバッグビルドは、スキームの StoreKit Configuration(`StoreKit/Mai.storekit`)で買うので、その取引はどの Worker も受けない。開発の Worker に Sandbox の購入を通すときは、Edit Scheme の Run → Options で StoreKit Configuration を None にし、Sandbox のテスト用アカウントでサインインした実機で動かす。
 
 ### デプロイする
 
@@ -343,4 +343,4 @@ App Store Connect で:
   | Pro    | `com.marromugi.mai.pro.monthly`   | 1 か月 | ¥1,600     |
 
 - 請求のやり直しの猶予(Billing Grace Period)を入れるなら、その間も書き込める
-- App Store Server Notifications を Version 2 にし、Production の URL を `https://mai-server.marrromugi-dev.workers.dev/app-store/notifications` に、Sandbox の URL を開発の Worker の `https://mai-server-dev.marrromugi-dev.workers.dev/app-store/notifications` にする。Sandbox の URL は 1 つだけなので、本番の Worker は TestFlight と App Review の Sandbox の購読の通知を受けない。その購読は、アプリが起動のたびに送り直す取引で写る(上の「購読」の送り直し)
+- App Store Server Notifications を Version 2 にし、Production と Sandbox の URL をどちらも本番の `https://mai-server.marrromugi-dev.workers.dev/app-store/notifications` にする。Sandbox の本物の購入は TestFlight と App Review のもので、どちらも本番を向くリリースビルドから来る。Sandbox の URL は 1 つだけなので開発の Worker には通知が届かず、開発の購読はアプリが起動のたびに送り直す取引で写る(上の「購読」の送り直し)
