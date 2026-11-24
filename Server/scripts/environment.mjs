@@ -1,18 +1,18 @@
-// Prints, as JSON, what scripts/deploy.sh and scripts/upload-fonts.sh need of one environment of
-// wrangler.jsonc: the --env value that picks it, its Worker, its Turso database, its font bucket,
-// and the secrets its Worker requires.
-// Usage: node environment.mjs dev | prod
+// Prints, as JSON, what scripts/setup.sh and scripts/upload-fonts.sh need of one environment of
+// wrangler.jsonc: the --env value that picks it, its Worker, its Turso database, its buckets, its
+// font bucket, and the secrets its Worker requires.
+// Usage: node environment.mjs staging | prod
 import { fileURLToPath } from "node:url";
 import { unstable_readConfig } from "wrangler";
 
 const environments = {
   prod: { wranglerEnv: "", database: "mai" },
-  dev: { wranglerEnv: "dev", database: "mai-dev" },
+  staging: { wranglerEnv: "staging", database: "mai-staging" },
 };
 
 const name = process.argv[2] ?? "";
 if (!Object.hasOwn(environments, name)) {
-  console.error("usage: environment.mjs dev | prod");
+  console.error("usage: environment.mjs staging | prod");
   process.exit(1);
 }
 const { wranglerEnv, database } = environments[name];
@@ -30,6 +30,7 @@ console.log(
     wranglerEnv,
     worker: config.name,
     database,
+    buckets: config.r2_buckets.map((bucket) => bucket.bucket_name),
     fontsBucket: fonts.bucket_name,
     secrets: config.secrets?.required ?? [],
   }),

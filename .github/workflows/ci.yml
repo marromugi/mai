@@ -56,11 +56,11 @@ jobs:
       - run: pnpm lint
       - run: pnpm fmt:check
       - run: pnpm test
-      - name: Test that a deploy sets only the secrets a Worker lacks
-        run: node --test scripts/deploy.test.mts
+      - name: Test that setting up an environment makes only what it lacks
+        run: node --test scripts/setup.test.mts
       - name: Check each build of the app talks to the Worker wrangler.jsonc deploys for it
         run: |
-          for pair in Debug:dev Release:prod; do
+          for pair in Debug:staging Release:prod; do
             worker="$(node scripts/environment.mjs "${pair#*:}" | jq -r .worker)"
             grep -A1 "^        ${pair%%:*}:$" ../project.yml |
               grep -qx "          MAI_SERVER: https://$worker.marrromugi-dev.workers.dev"

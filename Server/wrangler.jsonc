@@ -1,7 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // The top level is production, Worker mai-server; env.dev is development, Worker mai-server-dev.
-  // scripts/deploy.sh deploys either (Server/README.md「デプロイ」).
+  // The top level is production, Worker mai-server; env.staging is staging, Worker mai-server-staging.
+  // scripts/setup.sh makes what each needs, and pnpm deploy:<environment> deploys it
+  // (Server/README.md「デプロイ」).
   "name": "mai-server",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
@@ -28,10 +29,10 @@
   },
   "env": {
     // An environment inherits none of r2_buckets, vars and secrets, so each names them all again.
-    "dev": {
+    "staging": {
       "r2_buckets": [
-        { "binding": "PHOTOS", "bucket_name": "mai-photos-dev" },
-        { "binding": "FONTS", "bucket_name": "mai-fonts-dev" },
+        { "binding": "PHOTOS", "bucket_name": "mai-photos-staging" },
+        { "binding": "FONTS", "bucket_name": "mai-fonts-staging" },
       ],
       "vars": { "APP_STORE_ENVIRONMENTS": "Sandbox" },
       "secrets": {

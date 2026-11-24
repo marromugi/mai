@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy:dev": "scripts/deploy.sh dev",
-    "deploy:prod": "scripts/deploy.sh prod",
+    "setup:staging": "scripts/setup.sh staging",
+    "setup:prod": "scripts/setup.sh prod",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:prod": "wrangler deploy --env ''",
     "types": "wrangler types --include-runtime=false --strict-vars=false",
     "types:check": "wrangler types --include-runtime=false --strict-vars=false --check",
     "test": "vitest run",
