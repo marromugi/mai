@@ -4,37 +4,52 @@ import SwiftUI
 
 @main
 struct MaiApp: App {
-  @State private var fonts: FontLibrary
-  @State private var account: AccountModel
+  @State private var services: Services
 
   init() {
-    let server = Self.server
-    let fonts = FontLibrary(server: server)
-    fonts.load()
-    _fonts = State(initialValue: fonts)
-    let account = Self.account(server: server)
-    _account = State(initialValue: account)
+    let services = Services(
+      address: ServerAddress(
+        info: Bundle.main.infoDictionary ?? [:], environment: ProcessInfo.processInfo.environment))
+    _services = State(initialValue: services)
     // From launch, as StoreKit asks, so no transaction is missed.
-    Task { await PlanTransactions.listen { await account.check() } }
+    Task { await PlanTransactions.listen { await services.account?.check() } }
   }
 
   var body: some Scene {
     WindowGroup {
-      RootView(fonts: fonts, account: account)
+      if let fonts = services.fonts, let account = services.account {
+        RootView(fonts: fonts, account: account)
+      } else {
+        // Only a Beta build waits here, while StoreKit says where it was installed from.
+        Color(.systemBackground).ignoresSafeArea()
+      }
+    }
+  }
+}
+
+/// The fonts and the account, made once the server is known: at once for a build that names one
+/// server, after StoreKit's answer for a Beta build.
+@MainActor @Observable
+final class Services {
+  private(set) var fonts: FontLibrary?
+  private(set) var account: AccountModel?
+
+  init(address: ServerAddress) {
+    if address.appStoreServer == nil {
+      make(server: address.server)
+    } else {
+      Task {
+        let installed = await ServerAddress.installedFromAppStore()
+        make(server: address.resolved(installedFromAppStore: installed))
+      }
     }
   }
 
-  /// The Worker in `Server/` this build configuration names (`MAI_SERVER` in `project.yml`), or,
-  /// in a debug build, the one `MAI_SERVER_URL` names, such as a local `wrangler dev`.
-  private static var server: URL {
-    var address = Bundle.main.object(forInfoDictionaryKey: "MaiServer") as? String
-    #if DEBUG
-      address = ProcessInfo.processInfo.environment["MAI_SERVER_URL"] ?? address
-    #endif
-    guard let address, let url = URL(string: address), url.host() != nil else {
-      preconditionFailure("The server, \(address ?? "none"), isn't a URL.")
-    }
-    return url
+  private func make(server: URL) {
+    let fonts = FontLibrary(server: server)
+    fonts.load()
+    self.fonts = fonts
+    account = Self.account(server: server)
   }
 
   /// Signs in with Apple, or, in a debug build given `MAI_STAND_IN_APPLE_USER`, as that user of

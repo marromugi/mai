@@ -60,11 +60,12 @@ jobs:
         run: node --test scripts/setup.test.mts
       - name: Check each build of the app talks to the Worker wrangler.jsonc deploys for it
         run: |
-          for pair in Debug:staging Release:prod; do
-            worker="$(node scripts/environment.mjs "${pair#*:}" | jq -r .worker)"
-            grep -A1 "^        ${pair%%:*}:$" ../project.yml |
-              grep -qx "          MAI_SERVER: https://$worker.marrromugi-dev.workers.dev"
-          done
+          url() { echo "https://$(node scripts/environment.mjs "$1" | jq -r .worker).marrromugi-dev.workers.dev"; }
+          settings() { sed -n "/^        $1:\$/,/^        [A-Z]/p" ../project.yml; }
+          settings Debug | grep -qx "          MAI_SERVER: $(url staging)"
+          settings Beta | grep -qx "          MAI_SERVER: $(url staging)"
+          settings Beta | grep -qx "          MAI_APP_STORE_SERVER: $(url prod)"
+          settings Release | grep -qx "          MAI_SERVER: $(url prod)"
 
   build:
     runs-on: macos-26
@@ -114,5 +115,5 @@ jobs:
         run: grep -q 'INFOPLIST_KEY_NSCameraUsageDescription = "[^"]' Mai.xcodeproj/project.pbxproj
       - name: Check the home screen names the app Cotoma
         run: grep -q 'INFOPLIST_KEY_CFBundleDisplayName = Cotoma;' Mai.xcodeproj/project.pbxproj
-      - name: Check both the Debug and Release builds name a server
-        run: test "$(grep -c 'MAI_SERVER = "https://' Mai.xcodeproj/project.pbxproj)" -eq 2
+      - name: Check the Debug, Beta and Release builds each name a server
+        run: test "$(grep -c 'MAI_SERVER = "https://' Mai.xcodeproj/project.pbxproj)" -eq 3

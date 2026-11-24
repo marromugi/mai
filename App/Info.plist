@@ -4,5 +4,7 @@
 <dict>
 	<key>MaiServer</key>
 	<string>$(MAI_SERVER)</string>
+	<key>MaiAppStoreServer</key>
+	<string>$(MAI_APP_STORE_SERVER)</string>
 </dict>
 </plist>
