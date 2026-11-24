@@ -9,7 +9,8 @@ import { serve, signInOf } from "../src/index";
 import { RefreshTokens } from "../src/refresh-tokens";
 import { newSessionToken } from "../src/sessions";
 import type { SignIn } from "../src/sign-in";
-import { accountTables } from "../src/store";
+import { accountTables, type Store } from "../src/store";
+import type { Photos } from "../src/photos";
 import { newAccount, photos } from "./accounts";
 import { jwks, makeSignInKey, signIdentityToken, type SignInKey } from "./apple-fakes";
 
@@ -70,17 +71,36 @@ async function signInWith(apple: FakeApple): Promise<SignIn> {
   );
 }
 
-/** Sends `body` to `POST /apple/sign-in-notifications` as Apple would, with Apple as `apple` has it. */
-async function notify(body: string, apple: FakeApple = { revoked: [] }): Promise<Response> {
+/**
+ * Sends `body` to `POST /apple/sign-in-notifications` as Apple would, with Apple as `apple` has
+ * it, and Turso and R2 as `server` has them.
+ */
+async function notify(
+  body: string,
+  apple: FakeApple = { revoked: [] },
+  server: { store?: (store: Store) => Store; photos?: Photos } = {},
+): Promise<Response> {
+  const signIn = await signInWith(apple);
   return serve(
     new Request("https://mai.test/apple/sign-in-notifications", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
     }),
-    await signInWith(apple),
-    photos,
+    { ...signIn, store: server.store?.(signIn.store) ?? signIn.store },
+    server.photos ?? photos,
   );
+}
+
+/** `target` with `name` replaced. */
+function replaced<T extends object, K extends keyof T>(target: T, name: K, value: T[K]): T {
+  return new Proxy(target, {
+    get(inner, key, receiver) {
+      if (key === name) return value;
+      const found: unknown = Reflect.get(inner, key, receiver);
+      return typeof found === "function" ? found.bind(inner) : found;
+    },
+  });
 }
 
 type Notification = {
@@ -253,21 +273,49 @@ describe("Sign in with Apple notifications", () => {
     // The cron trigger, kept to this account: other test files' accounts are due too.
     const apple: FakeApple = { revoked: [] };
     const signIn = await signInWith(apple);
-    const store = new Proxy(signIn.store, {
-      get(target, key, receiver) {
-        if (key === "dueForDeletion") {
-          return async (now: number) =>
-            (await target.dueForDeletion(now, 1000)).filter(
-              ({ account }) => account === one.account,
-            );
-        }
-        const value: unknown = Reflect.get(target, key, receiver);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
+    const store = replaced(signIn.store, "dueForDeletion", async (now: number) =>
+      (await signIn.store.dueForDeletion(now, 1000)).filter(
+        ({ account }) => account === one.account,
+      ),
+    );
     await deleteLapsedAccounts({ ...signIn, store }, photos, Date.now());
     expect(apple.revoked).toEqual([one.refreshToken]);
     expect(await accountKept(one.account)).toBe(false);
+    expect(await objectsOf(one.account)).toBe(0);
+  });
+
+  it("ends the sessions first, even when the deletion then fails", async () => {
+    const one = await accountWithSessions();
+    const failing = replaced(env.PHOTOS, "delete", () =>
+      Promise.reject(new Error("R2 is unavailable")),
+    );
+    await expect(
+      notify(await notification({ type: "account-deleted", sub: one.sub }), undefined, {
+        photos: { bucket: failing, keepAlive: () => undefined },
+      }),
+    ).rejects.toThrow(/R2 is unavailable/);
+    expect(await sessionsOf(one.account)).toBe(0);
+    expect(await accountKept(one.account)).toBe(true);
+  });
+
+  it("sweeps R2 again for a photo stored while the rows went", async () => {
+    const one = await accountWithSessions();
+    const late = `${one.account}/late/photo/upload`;
+    const kept: Promise<unknown>[] = [];
+    const answer = await notify(
+      await notification({ type: "account-deleted", sub: one.sub }),
+      undefined,
+      {
+        store: (store) =>
+          replaced(store, "deleteAccount", async (account) => {
+            await env.PHOTOS.put(late, "x");
+            return store.deleteAccount(account);
+          }),
+        photos: { bucket: env.PHOTOS, keepAlive: (work) => kept.push(work) },
+      },
+    );
+    await Promise.all(kept);
+    expect(answer.status).toBe(200);
     expect(await objectsOf(one.account)).toBe(0);
   });
 
