@@ -68,7 +68,8 @@ struct AccountRows: View {
   let signIn: () -> Void
   let signOut: () -> Void
   let restore: (String) async -> String?
-  var deleteAccount: () async -> Void = {}
+  /// Answers whether the device is signed out after it.
+  var deleteAccount: () async -> Bool = { false }
   /// Nil where nothing syncs.
   var syncStatus: WritingSync.Status?
   var syncNow: () -> Void = {}
@@ -201,6 +202,7 @@ struct AccountSection: View {
         } else {
           await account.deleteAccount()
         }
+        return account.phase == .signedOut
       },
       syncStatus: sync?.status,
       syncNow: { Task { await sync?.syncAsked() } }

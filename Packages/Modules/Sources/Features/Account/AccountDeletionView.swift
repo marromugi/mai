@@ -3,13 +3,15 @@ import SwiftUI
 
 /// The page that deletes the account (App Review Guidelines 5.1.1(v)): what goes from the server
 /// and what stays on the device, that the App Store subscription goes on, with 「購読を管理」, and
-/// 「アカウントを削除」, asked once more before `deleteAccount` runs. The page closes as the
-/// account's rows that lead to it go; what went wrong is said by the settings' alert.
+/// 「アカウントを削除」, asked once more before `deleteAccount` runs. The page closes once
+/// `deleteAccount` answers that the device is signed out; what went wrong is said by the settings'
+/// alert.
 struct AccountDeletionView: View {
-  let deleteAccount: () async -> Void
+  let deleteAccount: () async -> Bool
   @State private var confirming = false
   @State private var deleting = false
   @State private var managing = false
+  @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     Form {
@@ -56,8 +58,11 @@ struct AccountDeletionView: View {
           Button("削除", role: .destructive) {
             deleting = true
             Task {
-              await deleteAccount()
+              let signedOut = await deleteAccount()
               deleting = false
+              if signedOut {
+                dismiss()
+              }
             }
           }
         } message: {

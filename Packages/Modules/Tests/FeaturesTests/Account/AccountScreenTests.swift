@@ -184,15 +184,15 @@ struct AccountScreenTests {
 
   /// What goes from the server and what stays, the subscription that goes on, and the button.
   @Test func theAccountIsDeletedOnAPageOfItsOwn() {
-    assertPushed(AccountDeletionView(deleteAccount: {}), title: nil)
+    assertPushed(AccountDeletionView(deleteAccount: { false }), title: nil)
   }
 
   @Test func theAccountDeletionPageInDarkMode() {
-    assertPushed(AccountDeletionView(deleteAccount: {}), title: nil, colorScheme: .dark)
+    assertPushed(AccountDeletionView(deleteAccount: { false }), title: nil, colorScheme: .dark)
   }
 
   @Test func theAccountDeletionPageAtTheLargestSize() {
-    assertPushed(AccountDeletionView(deleteAccount: {}), title: nil, size: .accessibility5)
+    assertPushed(AccountDeletionView(deleteAccount: { false }), title: nil, size: .accessibility5)
   }
 
   private func planBought(_ phase: AccountPhase) -> PlanBought {
