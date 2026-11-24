@@ -33,9 +33,10 @@ export default async function setup(): Promise<() => Promise<void>> {
     await client.executeMultiple(await readFile(new URL("../schema.sql", import.meta.url), "utf8"));
     // Each is sold as a product of its own name.
     await client.execute(`INSERT INTO plans VALUES
-      ('test-daily', 'test-daily', 1000000, 1000, 4, 2, 2),
-      ('test-storage', 'test-storage', 300, 1000, 1000, 1000, 1000),
-      ('test-count', 'test-count', 1000000, 2, 1000, 1000, 1000)`);
+      ('test-daily', 'test-daily', 1000000, 1000, 4, 2, 2, 1000000, 2),
+      ('test-storage', 'test-storage', 300, 1000, 1000, 1000, 1000, 1000000, 1000),
+      ('test-count', 'test-count', 1000000, 2, 1000, 1000, 1000, 1000000, 1000),
+      ('test-photos', 'test-photos', 1000000, 1000, 1000, 1000, 1000, 300, 1000)`);
   } catch (error) {
     await stop();
     throw error;

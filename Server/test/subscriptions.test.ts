@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { serve, signInOf } from "../src/index";
 import type { SignIn } from "../src/sign-in";
 import { parseEnvironments } from "../src/subscriptions";
-import { newAccount, products, store } from "./accounts";
+import { newAccount, photos, products, store } from "./accounts";
 import { makeChain, signAppStore } from "./apple-fakes";
 import {
   appStoreRoot,
@@ -39,6 +39,7 @@ function call(path: string, body: unknown, token?: string): Promise<Response> {
       body: JSON.stringify(body),
     }),
     signIn,
+    photos,
   );
 }
 
@@ -1021,6 +1022,7 @@ describe("APP_STORE_ENVIRONMENTS", () => {
         }),
       }),
       sandbox,
+      photos,
     );
     expect(answer.status).toBe(200);
     const { rows } = await database.execute({

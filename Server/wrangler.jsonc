@@ -4,6 +4,12 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
   "triggers": { "crons": ["* * * * *"] },
+  "r2_buckets": [
+    // Sealed photos and thumbnails (src/photos.ts).
+    { "binding": "PHOTOS", "bucket_name": "mai-photos" },
+    // Font files for the app (src/fonts.ts), as scripts/upload-fonts.sh puts them.
+    { "binding": "FONTS", "bucket_name": "mai-fonts" },
+  ],
   // Whose purchases this Worker takes: Production, Sandbox, or both (Server/README.md).
   "vars": { "APP_STORE_ENVIRONMENTS": "Production" },
   "secrets": {

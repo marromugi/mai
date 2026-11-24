@@ -10,20 +10,25 @@ CREATE TABLE plans (
   writings_count INTEGER NOT NULL,
   requests_per_day INTEGER NOT NULL,
   lists_per_day INTEGER NOT NULL,
-  saves_per_day INTEGER NOT NULL
+  saves_per_day INTEGER NOT NULL,
+  photos_bytes INTEGER NOT NULL,
+  photos_per_day INTEGER NOT NULL
 ) STRICT;
 
 INSERT INTO plans VALUES
-  ('basic', 'com.marromugi.mai.basic.monthly', 100000000, 10000, 3000, 200, 500),
-  ('plus', 'com.marromugi.mai.plus.monthly', 500000000, 50000, 10000, 300, 2000),
-  ('pro', 'com.marromugi.mai.pro.monthly', 1000000000, 100000, 10000, 300, 2000);
+  ('basic', 'com.marromugi.mai.basic.monthly', 100000000, 10000, 3000, 200, 500, 5000000000, 100),
+  ('plus', 'com.marromugi.mai.plus.monthly', 500000000, 50000, 10000, 300, 2000, 50000000000, 300),
+  ('pro', 'com.marromugi.mai.pro.monthly', 1000000000, 100000, 10000, 300, 2000, 200000000000, 300);
 
 -- id is the UUID the app made, which is also its purchases' appAccountToken. apple_sub is the
 -- Sign in with Apple user. apple_refresh_token is Apple's refresh token sealed by
 -- src/refresh-tokens.ts; it is never kept unsealed. own_key_check is set once, by the first device
 -- to make the own key. tier and paid_until follow the account's subscriptions: tier is the plan of
 -- the one paid for longest, and paid_until the latest time any of them is paid until. Past
--- paid_until the account has lapsed: it is read but not written.
+-- paid_until the account has lapsed: it is read but not written, and 90 days past it the cron
+-- trigger deletes it (lapsedKept in src/store.ts). deleting is 1 once the cron trigger has revoked
+-- its Apple token and before it touches R2; from then on its subscriptions no longer change
+-- paid_until or tier, so a resubscription comes too late.
 CREATE TABLE accounts (
   id TEXT PRIMARY KEY,
   apple_sub TEXT NOT NULL UNIQUE,
@@ -33,8 +38,11 @@ CREATE TABLE accounts (
   paid_until INTEGER NOT NULL,
   writings_bytes INTEGER NOT NULL DEFAULT 0,
   writings_count INTEGER NOT NULL DEFAULT 0,
-  created INTEGER NOT NULL
+  photos_bytes INTEGER NOT NULL DEFAULT 0,
+  created INTEGER NOT NULL,
+  deleting INTEGER NOT NULL DEFAULT 0 CHECK (deleting IN (0, 1))
 ) STRICT;
+CREATE INDEX accounts_paid_until ON accounts (paid_until);
 
 -- An App Store subscription, by the originalTransactionId every renewal of it shares, as the
 -- latest data the App Store signed about it reads (signed_date), among data about its latest billing
@@ -79,6 +87,7 @@ CREATE TABLE usage (
   requests INTEGER NOT NULL DEFAULT 0,
   lists INTEGER NOT NULL DEFAULT 0,
   saves INTEGER NOT NULL DEFAULT 0,
+  photos INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, day)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX usage_day ON usage (day);
@@ -113,3 +122,79 @@ CREATE TRIGGER writings_resized AFTER UPDATE OF size ON writings BEGIN
   FROM accounts a JOIN plans p ON p.tier = a.tier
   WHERE a.id = NEW.account_id AND NEW.size > OLD.size AND a.writings_bytes > p.writings_bytes;
 END;
+
+-- Each part of a photo, sealed on the device, kept in R2 under the key src/photos.ts makes from
+-- account_id, id, part and upload. A part is 'reserved' before its bytes go to R2, so its size
+-- counts against the plan from then on, and 'stored' once R2 holds them. An upload that failed is
+-- 'releasing' until what R2 got of it is deleted; then its row goes. Only a 'reserved' row becomes
+-- either of the others. upload names the one request that reserved it; reserved is when.
+CREATE TABLE photos (
+  account_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  part TEXT NOT NULL CHECK (part IN ('photo', 'thumbnail')),
+  upload TEXT NOT NULL UNIQUE,
+  size INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'reserved' CHECK (state IN ('reserved', 'stored', 'releasing')),
+  reserved INTEGER NOT NULL,
+  PRIMARY KEY (account_id, id, part)
+) STRICT;
+CREATE INDEX photos_unstored ON photos (reserved) WHERE state != 'stored';
+
+-- accounts.photos_bytes follows every part, whatever its state, until its row is deleted. A
+-- reservation that grows an account past its plan aborts the whole batch with this message, which
+-- src/store.ts answers as 429.
+CREATE TRIGGER photos_added AFTER INSERT ON photos BEGIN
+  UPDATE accounts SET photos_bytes = photos_bytes + NEW.size WHERE id = NEW.account_id;
+  SELECT RAISE(ABORT, 'mai: over the plan''s photo storage')
+  FROM accounts a JOIN plans p ON p.tier = a.tier
+  WHERE a.id = NEW.account_id AND a.photos_bytes > p.photos_bytes;
+END;
+
+CREATE TRIGGER photos_removed AFTER DELETE ON photos BEGIN
+  UPDATE accounts SET photos_bytes = photos_bytes - OLD.size WHERE id = OLD.account_id;
+END;
+
+-- Read mode (#26). An agent is approved on a device: public_key and signature are what that
+-- device sent, for the other devices to check before they wrap a writing's key for it, and
+-- token_sha256 is the SHA-256 of its token's secret (src/agents.ts). A revoked agent's row stays,
+-- with revoked 1, so that devices learn it was revoked.
+CREATE TABLE agents (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  public_key BLOB NOT NULL,
+  signature BLOB NOT NULL,
+  token_sha256 BLOB NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0 CHECK (revoked IN (0, 1)),
+  created INTEGER NOT NULL
+) STRICT;
+CREATE INDEX agents_account ON agents (account_id);
+
+-- An account's read mode is on while the time is before until. One past until reads as off, and
+-- stays until the cron trigger sweeps it.
+CREATE TABLE read_modes (
+  account_id TEXT PRIMARY KEY,
+  until INTEGER NOT NULL
+) STRICT;
+CREATE INDEX read_modes_until ON read_modes (until);
+
+-- A writing kept from agents: the server takes no copy of it. Only this mark is kept here.
+CREATE TABLE exclusions (
+  account_id TEXT NOT NULL,
+  writing_id TEXT NOT NULL,
+  PRIMARY KEY (account_id, writing_id)
+) STRICT, WITHOUT ROWID;
+
+-- A writing's key wrapped by a device for an agent, for the revision it was wrapped for and the
+-- read mode it was wrapped in: expires is that mode's until. It is never served at or past
+-- expires, and the cron trigger sweeps it.
+CREATE TABLE copies (
+  account_id TEXT NOT NULL,
+  writing_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  wrapped BLOB NOT NULL,
+  expires INTEGER NOT NULL,
+  PRIMARY KEY (account_id, writing_id, agent_id)
+) STRICT;
+CREATE INDEX copies_expires ON copies (expires);
+CREATE INDEX copies_agent ON copies (agent_id);

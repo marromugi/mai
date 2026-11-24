@@ -3,7 +3,9 @@ internal import Typesetting
 
 /// The app's settings in a sheet, closed by the button at the top trailing corner.
 struct SettingsView: View {
+  let fonts: FontLibrary
   @AppStorage(StoredBodySetting.key) private var stored = StoredBodySetting.standard
+  @AppStorage(StoredFontStack.key) private var fontStack = StoredFontStack.standard
   @AppStorage(ColorTheme.key) private var theme = ColorTheme.system
   @Environment(\.dismiss) private var dismiss
 
@@ -11,8 +13,11 @@ struct SettingsView: View {
     NavigationStack {
       SettingsForm(
         defaultSetting: Binding(get: { stored.setting }, set: { stored = StoredBodySetting($0) }),
+        fontStack: Binding(get: { fontStack.stack }, set: { fontStack = StoredFontStack($0) }),
+        fonts: fonts,
         theme: $theme
       )
+      .environment(\.fontFamilies, fontStack.stack.families(from: fonts.available))
       .navigationTitle("設定")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -24,16 +29,26 @@ struct SettingsView: View {
   }
 }
 
-/// iOS's grouped list of settings. Its 「フォント」 section steps `defaultSetting`, the body setting
-/// a writing is set in until its own is adjusted, over a sample set in it; its 「カラーテーマ」
-/// section chooses `theme`; its 「同期」 section opens the plans.
+/// iOS's grouped list of settings. Its 「フォント」 section leads to `fontStack`, the families text
+/// is set in, and steps `defaultSetting`, the body setting a writing is set in until its own is
+/// adjusted, over a sample set in both; its 「カラーテーマ」 section chooses `theme`; its 「同期」
+/// section opens the plans.
 struct SettingsForm: View {
   @Binding var defaultSetting: BodySetting
+  @Binding var fontStack: FontStack
+  let fonts: FontLibrary
   @Binding var theme: ColorTheme
 
   var body: some View {
     Form {
       Section {
+        NavigationLink {
+          FontStackView(stack: $fontStack, fonts: fonts)
+        } label: {
+          LabeledContent(
+            "書体",
+            value: fontStack.families(from: fonts.available).map(\.title).joined(separator: " → "))
+        }
         SettingStepper("文字の大きさ", .base, setting: $defaultSetting) {
           "\(points(TypeScale(factor: 1, body: $0).size(.body))) pt"
         }
@@ -127,5 +142,5 @@ private struct SettingStepper: View {
 }
 
 #Preview {
-  SettingsView()
+  SettingsView(fonts: FontLibrary(server: nil))
 }

@@ -1,0 +1,5 @@
+id: and-to-left
+language: Swift
+rule:
+  pattern: $A && $B
+fix: $A
