@@ -134,6 +134,88 @@ struct SyncAccountTests {
     #expect(try ownKeys.load() == nil)
   }
 
+  @Test func signingInWithNoPurchaseAsksTheServerForASessionOnly() async throws {
+    let account = UUID()
+    let server = ScriptedServer([
+      "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
+      "POST /sessions": [
+        .status(200, json: #"{"account":"\#(account.uuidString.lowercased())","token":"s1.a.b"}"#)
+      ],
+    ])
+    let apple = ScriptedApple(bought: .failure(URLError(.notConnectedToInternet)))
+    let signedIn = try await self.account(server, apple: apple).signIn()
+    #expect(signedIn == Session(token: "s1.a.b", account: account, appleUser: ScriptedApple.user))
+    #expect(try sessions.load() == signedIn)
+    #expect(server.routes() == ["POST /challenges", "POST /sessions"])
+  }
+
+  @Test func signingInWithNoPurchaseToNoAccountKeepsNoSession() async throws {
+    let server = ScriptedServer([
+      "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
+      "POST /sessions": [.status(404)],
+    ])
+    await #expect {
+      try await account(server).signIn()
+    } throws: { error in
+      guard case .noAccount = error as? AccountError else { return false }
+      return true
+    }
+    #expect(try sessions.load() == nil)
+  }
+
+  @Test func startingOverSendsTheCheckReadAndReplacesTheKeyHeld() async throws {
+    let held = OwnKey.generate()
+    let ownKeys = MemoryOwnKeys(held)
+    let server = ScriptedServer([
+      "DELETE /account/own-key-check": [.status(204)],
+      "PUT /account/own-key-check": [.status(204)],
+    ])
+    let check = Data(repeating: 0xab, count: 32)
+    let outcome = try await account(server, ownKeys: ownKeys).startOver(session, dropping: check)
+    let made = try #require(try ownKeys.load())
+    #expect(made != held)
+    #expect(outcome == .made(RecoveryKey(made)))
+    #expect(
+      server.requests.first?.value(forHTTPHeaderField: "Mai-Own-Key-Check")
+        == String(repeating: "ab", count: 32))
+    #expect(server.requests.last?.httpBody == made.check)
+  }
+
+  @Test func startingOverWithNoKeyHeldKeepsTheNewOne() async throws {
+    let ownKeys = MemoryOwnKeys()
+    let server = ScriptedServer([
+      "DELETE /account/own-key-check": [.status(204)],
+      "PUT /account/own-key-check": [.status(204)],
+    ])
+    let outcome = try await account(server, ownKeys: ownKeys).startOver(
+      session, dropping: Data(count: 32))
+    #expect(outcome == .made(RecoveryKey(try #require(try ownKeys.load()))))
+  }
+
+  @Test func aCheckChangedSinceItWasReadStartsNothingOver() async throws {
+    let held = OwnKey.generate()
+    let ownKeys = MemoryOwnKeys(held)
+    let server = ScriptedServer(["DELETE /account/own-key-check": [.status(409)]])
+    await #expect {
+      try await account(server, ownKeys: ownKeys).startOver(session, dropping: Data(count: 32))
+    } throws: { error in
+      guard case .ownKeyChanged = error as? AccountError else { return false }
+      return true
+    }
+    #expect(try ownKeys.load() == held)
+    #expect(server.routes() == ["DELETE /account/own-key-check"])
+  }
+
+  /// Another device put its check between the start over and this device's put.
+  @Test func aCheckPutFirstByAnotherDeviceAfterStartingOverAsksForTheRecoveryKey() async throws {
+    let server = ScriptedServer([
+      "DELETE /account/own-key-check": [.status(204)],
+      "PUT /account/own-key-check": [.status(409)],
+    ])
+    let outcome = try await account(server).startOver(session, dropping: Data(count: 32))
+    #expect(outcome == .recoveryKeyNeeded)
+  }
+
   @Test func signingInWithNoPlanBoughtAsksNothingOfAppleOrTheServer() async throws {
     let server = ScriptedServer([:])
     let apple = ScriptedApple(bought: .success([]))
@@ -217,6 +299,15 @@ struct SyncAccountTests {
       "サインインが切れたため、アカウントを削除できませんでした。もう一度 Apple でサインインしてから削除してください。"
     ),
     (.notForgotten(.failed(-25308)), "アカウントは削除しましたが、この端末のサインインの情報を消せませんでした。"),
+    (
+      .purchaseIsAnotherAccounts,
+      "この端末の App Store で買ったプランは、別の Apple アカウントの同期のアカウントのものです。プランを買ったときの Apple アカウントでサインインするか、この端末の App Store を自分のアカウントにして、プランに入り直してください。"
+    ),
+    (
+      .noAccount,
+      "この Apple アカウントには、同期のアカウントがありません。ほかの端末でプランに入ったときと同じ Apple アカウントでサインインするか、プランに入ってください。"
+    ),
+    (.ownKeyChanged, "ほかの端末で自分の鍵が変わったため、サーバーの文書は消していません。"),
   ])
   func tellsAPersonWhatWentWrong(_ error: AccountError, _ message: String) {
     #expect(error.localizedDescription == message)

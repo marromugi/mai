@@ -170,6 +170,18 @@ public struct AccountServer: Sendable {
     return response.statusCode == 204
   }
 
+  /// Starts the account over without its own key, while `check` is still its own key check: the
+  /// server's writings, photos and read mode copies go, the account's other sessions end, and the
+  /// check is dropped. False when the account has another check or none, and nothing changed.
+  public func startOver(dropping check: Data, token: String) async throws(ServerError) -> Bool {
+    var request = authorized(URLRequest(url: url.appending(path: "account/own-key-check")), token)
+    request.httpMethod = "DELETE"
+    request.setValue(
+      check.map { String(format: "%02x", $0) }.joined(), forHTTPHeaderField: "Mai-Own-Key-Check")
+    let (_, response) = try await transport.answer(request, expecting: [204, 409])
+    return response.statusCode == 204
+  }
+
   /// Sends a subscription as StoreKit has it now (`PUT /account/subscription`).
   public func send(_ subscription: SignedSubscription, token: String) async throws(ServerError) {
     var request = authorized(
