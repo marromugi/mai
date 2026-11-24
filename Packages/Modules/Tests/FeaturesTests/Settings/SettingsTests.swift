@@ -20,6 +20,11 @@ struct SettingsTests {
     assertSettings(remembering: nil, theme: "dark")
   }
 
+  /// 「書体」 reads Inter → 源ノ角ゴシック, and the sample's Latin is set in Inter.
+  @Test func settingsShowTheRememberedFontStack() {
+    assertSettings(remembering: nil, fontStack: #"{"names":["Inter"]}"#)
+  }
+
   @Test func settingsInDarkMode() {
     assertSettings(remembering: nil, colorScheme: .dark)
   }
@@ -34,6 +39,7 @@ struct SettingsTests {
 private func assertSettings(
   remembering remembered: String?,
   theme: String? = nil,
+  fontStack: String? = nil,
   colorScheme: ColorScheme = .light,
   size: DynamicTypeSize = .large,
   testName: String = #function
@@ -49,8 +55,11 @@ private func assertSettings(
   if let theme {
     store.set(theme, forKey: ColorTheme.key)
   }
+  if let fontStack {
+    store.set(fontStack, forKey: StoredFontStack.key)
+  }
   let page = HostedPage(
-    SettingsView()
+    SettingsView(fonts: FontLibrary(server: nil))
       .defaultAppStorage(store)
       .dynamicTypeSize(size)
       .environment(\.colorScheme, colorScheme))

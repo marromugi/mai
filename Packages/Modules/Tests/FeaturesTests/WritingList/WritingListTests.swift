@@ -185,6 +185,14 @@ struct WritingListTests {
       opening: [twoWritings[1].id])
   }
 
+  /// A remembered stack sets the list in it: Inter, then the bundled family. Zen Kaku Gothic New,
+  /// never fetched, is skipped.
+  @Test func rootSetsTheListInTheRememberedStack() {
+    assertRoot(
+      remembering: [StoredFontStack.key: #"{"names":["Zen Kaku Gothic New","Inter"]}"#],
+      writings: [Writing(title: "Morning Pages と朝の光", body: Writing.mixedBody, updated: .now)])
+  }
+
   /// The rows are the stored writings, not the samples.
   @Test func rootShowsTheStoredWritings() {
     assertRoot(

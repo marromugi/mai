@@ -1,6 +1,7 @@
 import { deleteAccount, deleteLapsedAccounts } from "./account-deletion";
 import { AppleSignInKeys } from "./apple-sign-in";
 import { AppleTokens } from "./apple-tokens";
+import { serveFont } from "./fonts";
 import { Challenges } from "./challenges";
 import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
 import { hex } from "./hex";
@@ -23,14 +24,18 @@ import { parsePhotoId } from "./photo-id";
 import { getPhoto, putPhoto, sizeOf, sweepUploads, type Photos } from "./photos";
 
 /**
- * The server keeps only sealed writings and photos. It knows of each writing only its ID, updated
+ * Of writings and photos, the server keeps only sealed ones. It knows of each writing only its ID, updated
  * time and size, and of each photo its ID and size; of each account, its Apple user, Apple's refresh
  * token (sealed), its own key check, and its App Store subscriptions (transaction ID, product,
  * expiry, environment).
- * Routes are listed in `Server/README.md`.
+ * Font files are served apart from accounts, from R2 (`src/fonts.ts`), so of a font fetched it
+ * knows only which file and the request's address. Routes are listed in `Server/README.md`.
  */
 export default {
   fetch(request, env, ctx): Promise<Response> {
+    if (new URL(request.url).pathname.startsWith("/fonts/")) {
+      return serveFont(request, env.FONTS);
+    }
     return serve(
       request,
       signInOf(env, (url, init) => fetch(url, init), caches.default),

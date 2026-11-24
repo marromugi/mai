@@ -1,6 +1,6 @@
 # サーバー
 
-暗号化した文書と写真だけを置き、端末どうしの同期に使う Cloudflare Worker(#25)。データは Turso の 1 つのデータベースに、写真は R2 に置き、アカウントのデータはどの表でもアカウント ID の列で分ける(#22 の設計、#43)。表は `schema.sql`、Turso に触るのは `src/store.ts` だけで、1 リクエストを 1 つの `batch()`(1 往復・1 トランザクション)にする(写真を送るときだけは、取り置きのあとに書き終わりを別に書く。下の「写真」)。サーバーが分かるのは、文書ごとの ID・更新時刻・大きさと、写真ごとの ID・大きさと、アカウントごとの Apple の利用者・Apple の refresh トークン(封じたもの)・自分の鍵の確かめの値と、App Store の購読(取引の ID・商品・期限・環境)と、読み取りモード(エージェントの公開鍵と端末の署名、モードの終わる時刻、除外した文書の ID、エージェントあてに包んだ文書の鍵)だけ。保存どうしを見分けるリビジョンは暗号化した文書の SHA-256 で、暗号文から誰でも出せるもの。
+暗号化した文書と写真を置き、端末どうしの同期に使う Cloudflare Worker(#25)。アプリが取る書体のファイルも R2 から配る(#48、下の「書体」)。データは Turso の 1 つのデータベースに、写真は R2 に置き、アカウントのデータはどの表でもアカウント ID の列で分ける(#22 の設計、#43)。表は `schema.sql`、Turso に触るのは `src/store.ts` だけで、1 リクエストを 1 つの `batch()`(1 往復・1 トランザクション)にする(写真を送るときだけは、取り置きのあとに書き終わりを別に書く。下の「写真」)。サーバーが分かるのは、文書ごとの ID・更新時刻・大きさと、写真ごとの ID・大きさと、アカウントごとの Apple の利用者・Apple の refresh トークン(封じたもの)・自分の鍵の確かめの値と、App Store の購読(取引の ID・商品・期限・環境)と、読み取りモード(エージェントの公開鍵と端末の署名、モードの終わる時刻、除外した文書の ID、エージェントあてに包んだ文書の鍵)だけ。保存どうしを見分けるリビジョンは暗号化した文書の SHA-256 で、暗号文から誰でも出せるもの。書体の取得では、アカウントと結びつかない形で、どのファイルを取ったかとリクエストの IP が分かる。
 
 ## 暗号化した文書の形
 
@@ -169,6 +169,23 @@ AI のエージェント(Mac の MCP サーバーなど)に、期間を決めて
 
 上限の値は #22 の設計の案で、プランと値段の答え(#22 の質問)で変わりうる。変えるときは `plans` の行を書き換える。
 
+### 書体
+
+| 経路                | 内容                                                                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /fonts/<file>` | R2 のバケット(binding `FONTS`)の `fonts/<file>` を返す。セッションは要らない。`Cache-Control: public, max-age=31536000, immutable`。無い名前は 404、GET 以外は 405 |
+
+アプリは和文の書体をここから取り、`FontFamily.known` の SHA-256 と合うものだけを端末に置く(#48)。置くファイルは `fonts.json` に、google/fonts のコミットと SHA-256 と一緒に並べてある。アプリの一覧と `fonts.json` が同じファイルを指すことは `ServerFontsTests` が確かめる。書体のライセンスはアプリが持っているので、バケットには置かない。
+
+`scripts/upload-fonts.sh` が google/fonts から取り、SHA-256 を確かめてからバケットに置く。手元では `wrangler dev` と同じ `--persist-to` を渡す。
+
+```sh
+scripts/upload-fonts.sh --local --persist-to /private/tmp/mai-wrangler
+pnpm exec wrangler dev --persist-to /private/tmp/mai-wrangler --var TURSO_URL:http://127.0.0.1:8080 --var TURSO_TOKEN:
+```
+
+デバッグビルドのアプリは `http://localhost:8787` から取る。ほかのポートは環境変数 `MAI_SERVER_URL` で渡す。リリースビルドはまだサーバーを持たず、和文の書体は一覧に出ない。
+
 ### 期限の掃除
 
 Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` と、期限から 1 時間たった `used_challenges` と、期限の来た写しと読み取りモードと、期限の切れたアカウントの写しと読み取りモードを消す(`Store.sweep`)。1 時間たっても書き終わらない写真の取り置きを、R2 のものと一緒に 1 回 1,000 件まで戻す(`sweepUploads`)。
@@ -227,6 +244,7 @@ scripts/server-contract-test.sh
 まだしていない。するときは、次のものが作られる。
 
 - Turso: データベース `mai` 1 つ(`schema.sql` の表とトリガー、`plans` の 3 行)と、それに書ける認証トークン 1 つ
+- Cloudflare: R2 のバケット `mai-fonts` 1 つと、そこに置く書体のファイル 6 つ(合わせて 28.8 MB)
 - Cloudflare: R2 のバケット `mai-photos` 1 つ(`wrangler r2 bucket create mai-photos`、Worker のバインディング `PHOTOS`)、Worker `mai-server` 1 つ(`workers.dev` の URL つき)、その毎分の Cron Trigger、変数 `APP_STORE_ENVIRONMENTS`(`Production`)、秘密 `TURSO_URL`・`TURSO_TOKEN`・`CHALLENGE_KEY`・`REFRESH_TOKEN_KEY`・`APPLE_CLIENT_ID`・`APPLE_TEAM_ID`・`APPLE_SIGN_IN_KEY_ID`・`APPLE_SIGN_IN_KEY`
 
 その前に開発者が Apple Developer でしておくこと:
@@ -267,6 +285,10 @@ printf 'TURSO_URL=%s\nTURSO_TOKEN=%s\n' "$(turso db show mai --url)" "$(turso db
 printf 'CHALLENGE_KEY=%s\nREFRESH_TOKEN_KEY=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -base64 32)" >> "$secrets"
 printf 'APPLE_CLIENT_ID=com.marromugi.mai\nAPPLE_TEAM_ID=%s\nAPPLE_SIGN_IN_KEY_ID=%s\nAPPLE_SIGN_IN_KEY=%s\n' \
   "$team_id" "$key_id" "$(grep -v -- ----- "$p8" | tr -d '\n')" >> "$secrets"
+pnpm exec wrangler r2 bucket create mai-fonts
+scripts/upload-fonts.sh --remote
 pnpm exec wrangler deploy --secrets-file "$secrets"
 rm "$secrets"
 ```
+
+デプロイしたら、アプリの `MaiApp.server` のリリースビルドの値を Worker の URL にする。

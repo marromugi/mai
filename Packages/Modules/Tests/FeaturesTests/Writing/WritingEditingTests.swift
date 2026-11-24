@@ -94,6 +94,20 @@ struct WritingEditingTests {
     #expect(font.pointSize == TypeScale(.large, body: setting).size(.body))
   }
 
+  /// A new stack while editing sets the body again in it.
+  @Test func aNewStackRestylesTheBody() throws {
+    let edits = Edits()
+    let page = HostedPage(
+      screen(editing: true, edits: edits).environment(\.fontFamilies, [.notoSansJP]))
+    let body = try #require(bodyEditor(in: page))
+    page.show(
+      screen(editing: true, edits: edits).environment(\.fontFamilies, [.inter, .notoSansJP]))
+    #expect(bodyEditor(in: page) === body)
+    let font = try #require(
+      body.attributedText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+    #expect(font.familyName == "Inter")
+  }
+
   /// Undo after a refused line break takes back what was typed before it, and only that.
   @Test(arguments: [0, 2])
   func undoAfterARefusedLineBreakTakesBackTheTyping(_ caret: Int) throws {
@@ -167,6 +181,20 @@ struct WritingEditingTests {
     let setting = try #require(setting)
     let read = try inkBands(drawn(editing: false, size, setting))
     let edited = try inkBands(drawn(editing: true, size, setting))
+    try #require(read.count == edited.count)
+    #expect(read.count > 3)
+    for (line, (readBand, editedBand)) in zip(read, edited).enumerated() {
+      #expect(abs(readBand.lowerBound - editedBand.lowerBound) <= 1, "line \(line)")
+      #expect(abs(readBand.upperBound - editedBand.upperBound) <= 1, "line \(line)")
+    }
+  }
+
+  /// With a Latin family first, the Latin sets the baseline and Japanese falls back: still no line
+  /// moves.
+  @Test func editingMovesNoLinePastAPixelWithALatinFamilyFirst() throws {
+    let families = [FontFamily.inter, .notoSansJP]
+    let read = try inkBands(drawn(editing: false, .large, writing: mixed, families: families))
+    let edited = try inkBands(drawn(editing: true, .large, writing: mixed, families: families))
     try #require(read.count == edited.count)
     #expect(read.count > 3)
     for (line, (readBand, editedBand)) in zip(read, edited).enumerated() {
@@ -551,6 +579,7 @@ struct WritingEditingTests {
 }
 
 private let sampled = Writing(title: "間合いの調整", body: Writing.sampleBody)
+private let mixed = Writing(title: "Morning Pages と朝の光", body: Writing.mixedBody)
 
 nonisolated private let bread = URL(string: "https://example.com/bread") ?? URL(filePath: "/")
 nonisolated private let flour = URL(string: "https://example.com/flour") ?? URL(filePath: "/")
@@ -624,20 +653,22 @@ private final class AskedForATitle {
   }
 }
 
-/// The sample page at the top of a 402 × 874 window, read or being edited.
+/// `writing`'s page at the top of a 402 × 874 window, read or being edited.
 @MainActor
-private func drawn(editing: Bool, _ size: DynamicTypeSize, _ setting: BodySetting = .standard)
-  -> UIImage
-{
+private func drawn(
+  editing: Bool, _ size: DynamicTypeSize, _ setting: BodySetting = .standard,
+  writing: Writing = sampled, families: [FontFamily] = FontStack.standard.families()
+) -> UIImage {
   HostedPage(
     ScrollView {
       WritingPage(
-        writing: sampled, editing: editing, photos: [], width: 402, back: {},
+        writing: writing, editing: editing, photos: [], width: 402, back: {},
         titleCutOff: { _ in })
     }
     .background(Color(.systemBackground))
     .dynamicTypeSize(size)
     .environment(\.bodySetting, setting)
+    .environment(\.fontFamilies, families)
     .environment(\.colorScheme, .light)
   ).image()
 }
