@@ -16,7 +16,8 @@ import {
   subscriptionKept,
 } from "./subscriptions";
 import { issueChallenge, makeAccount, startSession, type SignIn } from "./sign-in";
-import { Store, type Answer, type Refusal } from "./store";
+import { Store } from "./store";
+import { answered, refused } from "./answers";
 import { parsePhotoId } from "./photo-id";
 import { getPhoto, putPhoto, sizeOf, sweepUploads, type Photos } from "./photos";
 
@@ -237,27 +238,4 @@ export async function serve(request: Request, signIn: SignIn, photos: Photos): P
     default:
       return turnedDown(405, "a writing is read with GET and saved with PUT");
   }
-}
-
-function answered<T>(answer: Answer<T>, respond: (value: T) => Response): Response {
-  return answer.ok ? respond(answer.value) : refused(answer.refusal);
-}
-
-const refusals: Record<Refusal, { status: number; reason: string }> = {
-  session: { status: 401, reason: "the session token is unknown, or its session has ended" },
-  lapsed: {
-    status: 402,
-    reason: "the account's subscription has lapsed; it is read but not written",
-  },
-  requests: { status: 429, reason: "the plan's requests for today are used up" },
-  lists: { status: 429, reason: "the plan's listings for today are used up" },
-  saves: { status: 429, reason: "the plan's saves for today are used up" },
-  photos: { status: 429, reason: "the plan's photos for today are used up" },
-  storage: { status: 429, reason: "the plan's storage for writings is full" },
-  "photo-storage": { status: 429, reason: "the plan's storage for photos has no room for this" },
-};
-
-function refused(refusal: Refusal): Response {
-  const { status, reason } = refusals[refusal];
-  return problem(status, reason);
 }
