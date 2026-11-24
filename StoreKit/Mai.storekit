@@ -1,0 +1,121 @@
+{
+  "identifier" : "5B0C8E2D",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_locale" : "ja",
+    "_storefront" : "JPN",
+    "_storeKitErrors" : [
+
+    ],
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21000001",
+      "localizations" : [
+
+      ],
+      "name" : "Sync",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "150",
+          "familyShareable" : false,
+          "groupNumber" : 3,
+          "internalID" : "6700000001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "文書 100 MB、写真 5 GB",
+              "displayName" : "Basic",
+              "locale" : "ja"
+            }
+          ],
+          "productID" : "com.marromugi.mai.basic.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Basic",
+          "subscriptionGroupID" : "21000001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "700",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "6700000002",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "文書 500 MB、写真 50 GB",
+              "displayName" : "Plus",
+              "locale" : "ja"
+            }
+          ],
+          "productID" : "com.marromugi.mai.plus.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Plus",
+          "subscriptionGroupID" : "21000001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "1600",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6700000003",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "文書 1 GB、写真 200 GB",
+              "displayName" : "Pro",
+              "locale" : "ja"
+            }
+          ],
+          "productID" : "com.marromugi.mai.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Pro",
+          "subscriptionGroupID" : "21000001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

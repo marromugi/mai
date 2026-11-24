@@ -31,7 +31,8 @@ struct SettingsView: View {
 
 /// iOS's grouped list of settings. Its 「フォント」 section leads to `fontStack`, the families text
 /// is set in, and steps `defaultSetting`, the body setting a writing is set in until its own is
-/// adjusted, over a sample set in both; its 「カラーテーマ」 section chooses `theme`.
+/// adjusted, over a sample set in both; its 「カラーテーマ」 section chooses `theme`; its 「同期」
+/// section opens the plans.
 struct SettingsForm: View {
   @Binding var defaultSetting: BodySetting
   @Binding var fontStack: FontStack
@@ -74,6 +75,13 @@ struct SettingsForm: View {
         }
         .pickerStyle(.inline)
         .labelsHidden()
+      }
+      Section {
+        NavigationLink("同期のプラン") { PlansView() }
+      } header: {
+        Text("同期")
+      } footer: {
+        Text("文書はこの端末の中に置かれます。ほかの端末とそろえるには、プランに入ります。")
       }
     }
   }

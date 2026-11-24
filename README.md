@@ -12,6 +12,8 @@ xcodegen generate
 open Mai.xcodeproj
 ```
 
+Xcode から実行したアプリは、同期のプランを App Store ではなく `StoreKit/Mai.storekit` から読み、購入もそこで済ませる(`Mai` スキームの StoreKit Configuration)。
+
 コードは `Packages/Modules` のローカルパッケージに置き、`App/` はアプリの入り口だけを持つ。UIKit と SwiftUI を使わない文字組みの計算(文字の大きさ、行の高さ、余白、版面など)は `Packages/Typesetting` に置き、`Packages/Modules` がそれを使う。文書の暗号化と同期は `Packages/Sync` に、同期先のサーバー(Cloudflare Worker)は `Server/` に置く(`Server/README.md`)。
 
 ## テスト
@@ -28,7 +30,7 @@ swift test --package-path Packages/Typesetting
 swift test --package-path Packages/Sync --skip Contract
 ```
 
-キーチェーンのテストはアプリの中でしか走らないので、`Mai` スキームの `MaiTests`(`AppTests/`)に置く。
+キーチェーンのテストと、同期のプランを買うテスト(StoreKit の手元の試験。商品は `StoreKit/Mai.storekit`)はアプリの中でしか走らないので、`Mai` スキームの `MaiTests`(`AppTests/`)に置く。
 
 ```sh
 xcodebuild test -project Mai.xcodeproj -scheme Mai -only-testing:MaiTests \
