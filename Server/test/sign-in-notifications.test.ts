@@ -186,8 +186,24 @@ describe("Sign in with Apple notifications", () => {
     expect(await sessionsOf(one.account)).toBe(0);
   });
 
+  it("keeps a session started as the second after Apple issued it begins", async () => {
+    const one = await accountWithSessions();
+    const iat = Math.floor(Date.now() / 1000) - 5;
+    await database.execute({
+      sql: "UPDATE sessions SET created = ? WHERE account_id = ?",
+      args: [(iat + 1) * 1000, one.account],
+    });
+    expect((await notify(await notification({ sub: one.sub, iat }))).status).toBe(200);
+    expect(await sessionsOf(one.account)).toBe(2);
+  });
+
   it("ends every session up to now when it carries no iat", async () => {
     const one = await accountWithSessions();
+    // Within the last second, so that a cutoff short of now would leave it.
+    await database.execute({
+      sql: "UPDATE sessions SET created = ? WHERE account_id = ?",
+      args: [Date.now() - 500, one.account],
+    });
     expect(
       (await notify(await notification({ sub: one.sub, claims: { iat: undefined } }))).status,
     ).toBe(200);

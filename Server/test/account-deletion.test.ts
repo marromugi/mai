@@ -537,6 +537,16 @@ describe("a deletion that fails partway", () => {
     expect(await keysOf(one.account)).toEqual([]);
   });
 
+  it("deletes no row of an account nothing marked", async () => {
+    const one = await fullAccount();
+    const account = parseAccountId(one.account);
+    if (account === undefined) {
+      throw new Error(`${one.account} is an account ID`);
+    }
+    expect(await testStore.deleteAccount(account)).toBe(false);
+    expect(await rowsOf(one.account)).toEqual(everyRow);
+  });
+
   it("answers 204 when the cron trigger finishes it first, once it is marked", async () => {
     const one = await fullAccount();
     const answer = await deleteAccount(one.token, {
