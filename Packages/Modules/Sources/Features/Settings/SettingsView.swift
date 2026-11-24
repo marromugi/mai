@@ -59,6 +59,7 @@ struct SettingsForm: View {
   let fonts: FontLibrary
   @Binding var theme: ColorTheme
   @Environment(\.account) private var account
+  @Environment(\.writingSync) private var sync
 
   var body: some View {
     Form {
@@ -105,7 +106,7 @@ struct SettingsForm: View {
         Text("文書はこの端末の中に置かれます。ほかの端末とそろえるには、プランに入ります。")
       }
       if let account {
-        AccountSection(account: account)
+        AccountSection(account: account, sync: sync)
       }
     }
   }

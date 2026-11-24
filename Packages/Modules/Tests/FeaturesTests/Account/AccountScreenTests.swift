@@ -31,6 +31,29 @@ struct AccountScreenTests {
     assertSyncSection(.signedIn, canSignIn: false)
   }
 
+  /// Signed in, before the first sync: how it went, and 「今すぐ同期」.
+  @Test func syncSectionSignedInBeforeTheFirstSync() {
+    assertSyncSection(.signedIn, canSignIn: true, syncStatus: .notYet)
+  }
+
+  @Test func syncSectionWhileSyncing() {
+    assertSyncSection(.signedIn, canSignIn: true, syncStatus: .syncing)
+  }
+
+  /// The plan's limit, said plainly under the row.
+  @Test func syncSectionStoppedByThePlansLimit() {
+    assertSyncSection(
+      .signedIn, canSignIn: true,
+      syncStatus: .stopped(ServerError.refused(status: 429, reason: "").localizedDescription))
+  }
+
+  @Test func syncSectionStoppedByALapsedPlanInDarkMode() {
+    assertSyncSection(
+      .signedIn, canSignIn: true,
+      syncStatus: .stopped(ServerError.refused(status: 402, reason: "").localizedDescription),
+      colorScheme: .dark)
+  }
+
   @Test func syncSectionAsksForTheRecoveryKey() {
     assertSyncSection(.recoveryKeyNeeded, canSignIn: true)
   }
@@ -95,6 +118,7 @@ struct AccountScreenTests {
 private func assertSyncSection(
   _ phase: AccountPhase,
   canSignIn: Bool,
+  syncStatus: WritingSync.Status? = nil,
   colorScheme: ColorScheme = .light,
   size: DynamicTypeSize = .large,
   testName: String = #function
@@ -109,7 +133,8 @@ private func assertSyncSection(
         Text("文書はこの端末の中に置かれます。ほかの端末とそろえるには、プランに入ります。")
       }
       AccountRows(
-        phase: phase, canSignIn: canSignIn, signIn: {}, signOut: {}, restore: { _ in nil })
+        phase: phase, canSignIn: canSignIn, signIn: {}, signOut: {}, restore: { _ in nil },
+        syncStatus: syncStatus)
     },
     title: "設定", colorScheme: colorScheme, size: size, testName: testName)
 }

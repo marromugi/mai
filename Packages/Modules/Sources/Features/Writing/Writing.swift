@@ -40,7 +40,7 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
 }
 
 /// A saved link, or nil where it can't be read as one.
-private nonisolated struct ReadableLink: Decodable {
+nonisolated struct ReadableLink: Decodable {
   let link: BodyLink?
 
   init(from decoder: any Decoder) throws {
@@ -48,7 +48,7 @@ private nonisolated struct ReadableLink: Decodable {
   }
 }
 
-extension [Writing] {
+nonisolated extension [Writing] {
   /// Makes `change` to the writing with `id`, updated `now`, and returns it. Nil, and nothing
   /// changed, when none has `id` or the change leaves its title, body, and links as they were.
   mutating func edit(_ id: Writing.ID, at now: Date, _ change: (inout Writing) -> Void) -> Writing?

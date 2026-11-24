@@ -1,11 +1,12 @@
 import SwiftUI
 
 public struct RootView: View {
-  private let store: any WritingStore
   private let fonts: FontLibrary
   private let account: AccountModel?
-  /// Nil until the store has been read.
-  @State private var writings: Result<[Writing], any Error>?
+  @State private var library: WritingLibrary
+  /// Nil where there is no account to sync with.
+  @State private var sync: WritingSync?
+  @Environment(\.scenePhase) private var scenePhase
   @State private var path: [Writing.ID] = []
   @State private var settings = WritingBodySettings()
   @State private var photos = WritingPhotos()
@@ -18,7 +19,7 @@ public struct RootView: View {
   @AppStorage(StoredFontStack.key) private var fontStack = StoredFontStack.standard
 
   /// The writings kept on the device, set in the families of `fonts`, with the account a plan pays
-  /// for when there is a server to sign in to.
+  /// for when there is a server to sign in to, and synced with it while signed in.
   public init(fonts: FontLibrary, account: AccountModel?) {
     self.init(store: FileWritingStore.onDevice, fonts: fonts, account: account)
   }
@@ -28,16 +29,18 @@ public struct RootView: View {
     store: any WritingStore, fonts: FontLibrary = FontLibrary(server: nil),
     account: AccountModel? = nil, path: [Writing.ID] = []
   ) {
-    self.store = store
     self.fonts = fonts
     self.account = account
+    let library = WritingLibrary(store: store)
+    _library = State(initialValue: library)
+    _sync = State(initialValue: account.map { WritingSync(account: $0, library: library) })
     _path = State(initialValue: path)
   }
 
   public var body: some View {
     NavigationStack(path: $path) {
       Group {
-        switch writings {
+        switch library.writings {
         case nil:
           Color.clear
         case .failure(let error):
@@ -56,7 +59,7 @@ public struct RootView: View {
       }
       .toolbar(.hidden, for: .navigationBar)
       .navigationDestination(for: Writing.ID.self) { id in
-        if case .success(let writings) = writings,
+        if case .success(let writings) = library.writings,
           let writing = writings.first(where: { $0.id == id })
         {
           WritingView(
@@ -72,15 +75,21 @@ public struct RootView: View {
       }
     }
     .task {
-      writings = Result {
-        try store.all(seedingWhenEmpty: Writing.samples(now: opened, calendar: .current))
-      }
+      library.load(seedingWhenEmpty: Writing.samples(now: opened, calendar: .current))
     }
     .environment(\.fontFamilies, fontStack.stack.families(from: fonts.available))
-    .task { await account?.checkAtLaunch() }
+    .task {
+      await account?.checkAtLaunch()
+      await sync?.syncNow()
+    }
+    .onChange(of: scenePhase) { _, phase in
+      guard phase == .active else { return }
+      Task { await sync?.syncNow() }
+    }
     .sheet(isPresented: $showingSettings) {
       SettingsView(fonts: fonts)
         .environment(\.account, account)
+        .environment(\.writingSync, sync)
     }
     .alert(
       "保存できませんでした", isPresented: Binding(get: { unsaved != nil }, set: { _ in unsaved = nil }),
@@ -94,13 +103,12 @@ public struct RootView: View {
 
   /// Makes `change` to the writing with `id` and saves it.
   private func edit(_ id: Writing.ID, _ change: (inout Writing) -> Void) {
-    guard case .success(var all) = writings else { return }
     do {
-      try store.edit(id, in: &all, at: .now, change)
+      guard try library.edit(id, at: .now, change) else { return }
     } catch {
       unsaved = UnsavedWriting(reason: error)
     }
-    writings = .success(all)
+    sync?.edited()
   }
 }
 
