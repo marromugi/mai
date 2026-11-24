@@ -620,6 +620,25 @@ export class Store {
     return row === undefined ? undefined : toDelete(row);
   }
 
+  /** The Apple user's account and its sealed refresh token, for deleting it; undefined with none. */
+  async appleUserToDelete(appleSub: string): Promise<ToDelete | undefined> {
+    const { rows } = await this.#client.execute({
+      sql: "SELECT id, apple_refresh_token FROM accounts WHERE apple_sub = :sub",
+      args: { sub: appleSub },
+    });
+    const row = rows[0];
+    return row === undefined ? undefined : toDelete(row);
+  }
+
+  /** Marks `account` as being deleted, whatever it is paid until. False when it has gone. */
+  async markForDeletionNow(account: AccountId): Promise<boolean> {
+    const marked = await this.#client.execute({
+      sql: "UPDATE accounts SET deleting = 1 WHERE id = :account",
+      args: { account },
+    });
+    return marked.rowsAffected === 1;
+  }
+
   /** Which of `uploads` have a row in `photos`, in any state. */
   async heldUploads(uploads: readonly string[]): Promise<Set<string>> {
     if (uploads.length === 0) {

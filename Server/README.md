@@ -42,11 +42,13 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 - `payload` は ID トークンと同じ Apple の鍵の RS256 で署名を確かめ、`iss` が `https://appleid.apple.com`、`aud` が `APPLE_CLIENT_ID` であることを見る。`exp` と nonce はない。
 - 中身の `events` は `type` と `sub`(Apple の利用者)を持つ。Apple の文書の例はオブジェクトだが、JSON の文字列で送られるという報告もあるので、どちらも読む。
-- `consent-revoked`(その人が mai で Apple でサインインするのをやめた)と `account-deleted`(Apple アカウントを消した。文書が前に書いていた `account-delete` も同じに扱う。[開発者フォーラムの Apple の答え](https://developer.apple.com/forums/thread/808898))は、そのアカウントのセッションのうち、`iat` の秒の終わりまでに始まったものを全部消す。アカウントは消さない。もう一度サインインすれば(`POST /sessions`)同じアカウントに戻る。`iat` のない通知は、受けた時までに始まったものを消す。
+- `consent-revoked`(その人が mai で Apple でサインインするのをやめた)と `account-deleted`(Apple アカウントを消した。文書が前に書いていた `account-delete` も同じに扱う。[開発者フォーラムの Apple の答え](https://developer.apple.com/forums/thread/808898))は、そのアカウントのセッションのうち、`iat` の秒の終わりまでに始まったものを全部消す。`iat` のない通知は、受けた時までに始まったものを消す。
+  - `consent-revoked` ではアカウントは消さない。もう一度サインインすれば(`POST /sessions`)同じアカウントに戻る。
+  - `account-deleted` では、続けてアカウントも消す(#69 の答え)。その Apple の利用者ではもうどの端末もサインインできないため。消し方は下の「アカウントの削除」の 1〜5 と同じで(`deleteAccountOfAppleUser`、`src/account-deletion.ts`)、要求のセッションの代わりに `sub` でアカウントを見つけ、印はセッションなしで付ける。Apple の取り消しが答えなければ 502 で、セッションのほかは何も消さない。同じ通知がまた来れば、そこから消す。
 - `email-enabled`・`email-disabled`(メールの転送の変更)と、ほかの種類は、mai がメールを頼んでいないので何もしない。
-- 同じ通知が何度来ても、消すセッションは同じで、そのあとにサインインし直して始まったセッションは残る。アカウントのない `sub` も何もしない。
+- 同じ通知が何度来ても、消すセッションは同じで、そのあとにサインインし直して始まったセッションは残る。アカウントのない `sub`(`account-deleted` で消したあとの同じ通知も)は何もしない。
 
-答え方: 読めた通知は、何かしたかどうかによらず 200(本文なし)。`payload` がない、JWT でない、署名・`iss`・`aud` が通らない、`events` に `type` と `sub` がないものは 400 で、何もしない。Apple の鍵を取れなければ 502。Apple の文書は 200 の例を出すだけで、ほかの答えのときに送り直すかは書いていない。
+答え方: 読めた通知は、何かしたかどうかによらず 200(本文なし)。`payload` がない、JWT でない、署名・`iss`・`aud` が通らない、`events` に `type` と `sub` がないものは 400 で、何もしない。Apple の鍵を取れないか、`account-deleted` で Apple の取り消しが答えなければ 502。Apple の文書は 200 の例を出すだけで、ほかの答えのときに送り直すかは書いていない。
 
 `DELETE /account` が Apple のトークンを取り消すと、Apple はその利用者の `consent-revoked` を送ってくるものとして扱う([TN3194](https://developer.apple.com/documentation/technotes/tn3194-handling-account-deletions-and-revoking-tokens-for-sign-in-with-apple) は取り消しのあとにこの通知が来ると書く)。削除が終わっていればアカウントがないので何もせず、途中ならセッションは消えるが、削除は印を付けたあとなので止まらない(下の「アカウントの削除」)。
 

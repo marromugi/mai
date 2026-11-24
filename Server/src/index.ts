@@ -107,7 +107,7 @@ export async function serve(
     case "POST /app-store/notifications":
       return receiveNotification(request, signIn.appStore, signIn.store);
     case "POST /apple/sign-in-notifications":
-      return receiveSignInNotification(request, signIn, now);
+      return receiveSignInNotification(request, signIn, photos, now);
   }
   const path = new URL(request.url).pathname.split("/").slice(1);
   if (path[0] === "agent") {

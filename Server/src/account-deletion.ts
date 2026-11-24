@@ -45,6 +45,32 @@ export async function deleteAccount(
     : { ok: true, value: new Response(null, { status: 204 }) };
 }
 
+/**
+ * Deletes the Apple user's account as `deleteAccount` does, for Apple's `account-deleted`: no device
+ * can sign in to it again. `none`: the user has no account, as when it went already.
+ * `unrevoked`: Apple didn't answer, and nothing was deleted.
+ */
+export async function deleteAccountOfAppleUser(
+  appleSub: string,
+  signIn: SignIn,
+  photos: Photos,
+  now: number,
+): Promise<"deleted" | "unrevoked" | "none"> {
+  const found = await signIn.store.appleUserToDelete(appleSub);
+  if (found === undefined) {
+    return "none";
+  }
+  const deleted = await deleteFound(found, signIn, photos, now, {
+    mark: () => signIn.store.markForDeletionNow(found.account),
+    // Once marked, its rows go: here, or already by the cron trigger.
+    deleteRows: async () => {
+      await signIn.store.deleteAccount(found.account);
+      return true;
+    },
+  });
+  return deleted === "kept" ? "none" : deleted;
+}
+
 /** At most this many accounts are deleted each time the cron trigger runs. */
 export const lapsedDeletedAtOnce = 10;
 

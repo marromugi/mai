@@ -3,8 +3,11 @@ import { exports } from "cloudflare:workers";
 import { createClient } from "@libsql/client/web";
 import { beforeAll, describe, expect, it } from "vitest";
 import { appleIssuer, appleKeysUrl } from "../src/apple-sign-in";
+import { appleRevokeUrl } from "../src/apple-tokens";
 import { serve, signInOf } from "../src/index";
+import { RefreshTokens } from "../src/refresh-tokens";
 import { newSessionToken } from "../src/sessions";
+import { accountTables } from "../src/store";
 import { newAccount, photos } from "./accounts";
 import { jwks, makeSignInKey, signIdentityToken, type SignInKey } from "./apple-fakes";
 
@@ -12,21 +15,47 @@ const database = createClient({ url: env.TURSO_URL });
 
 /** The notifications' signer, standing in for Apple's JWKS. */
 let signer: SignInKey;
+/** The Worker's Sign in with Apple key, which signs `client_secret` for Apple's revoke endpoint. */
+let clientKeyPem: string;
 
 beforeAll(async () => {
   signer = await makeSignInKey("test-key");
+  const made = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ]);
+  if (!("privateKey" in made)) {
+    throw new Error("ECDSA makes a key pair");
+  }
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", made.privateKey);
+  if (!(pkcs8 instanceof ArrayBuffer)) {
+    throw new Error("a key exported as PKCS #8 is bytes");
+  }
+  clientKeyPem = `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...new Uint8Array(pkcs8)))}\n-----END PRIVATE KEY-----`;
 });
+
+type FakeApple = {
+  keysAnswer?: () => Response;
+  /** What the revoke endpoint answers; 200 when left out. */
+  revokeAnswer?: () => Response;
+  /** Each refresh token the revoke endpoint was sent. */
+  revoked: string[];
+};
 
 /**
  * Sends `body` to `POST /apple/sign-in-notifications` as Apple would, with Apple's JWKS answering
- * with `signer`'s key, or with `keysAnswer`.
+ * with `signer`'s key, and Apple's revoke endpoint, as `apple` has them.
  */
-async function notify(body: string, keysAnswer?: () => Response): Promise<Response> {
-  const send = async (url: string): Promise<Response> => {
-    if (url !== appleKeysUrl) {
-      throw new Error(`the Worker reached ${url}, which the fake Apple doesn't serve`);
+async function notify(body: string, apple: FakeApple = { revoked: [] }): Promise<Response> {
+  const send = async (url: string, init?: RequestInit): Promise<Response> => {
+    if (url === appleKeysUrl) {
+      return apple.keysAnswer?.() ?? new Response(await jwks([signer]));
     }
-    return keysAnswer?.() ?? new Response(await jwks([signer]));
+    if (url === appleRevokeUrl && init?.body instanceof URLSearchParams) {
+      apple.revoked.push(init.body.get("token") ?? "");
+      return apple.revokeAnswer?.() ?? new Response(null, { status: 200 });
+    }
+    throw new Error(`the Worker reached ${url}, which the fake Apple doesn't serve`);
   };
   return serve(
     new Request("https://mai.test/apple/sign-in-notifications", {
@@ -34,7 +63,11 @@ async function notify(body: string, keysAnswer?: () => Response): Promise<Respon
       headers: { "Content-Type": "application/json" },
       body,
     }),
-    signInOf(env, send, await caches.open(crypto.randomUUID())),
+    signInOf(
+      { ...env, APPLE_SIGN_IN_KEY: clientKeyPem },
+      send,
+      await caches.open(crypto.randomUUID()),
+    ),
     photos,
   );
 }
@@ -73,17 +106,46 @@ async function notification(options: Notification): Promise<string> {
   return JSON.stringify({ payload });
 }
 
-/** An account with two sessions, both started a minute ago, and its Apple user. */
+/**
+ * An account with two sessions, both started a minute ago, an object in R2, and its Apple user.
+ * Its Apple refresh token is sealed as `POST /account` seals it.
+ */
 async function accountWithSessions() {
   const started = Date.now() - 60 * 1000;
   const made = await newAccount(undefined, started);
   const second = await newSessionToken();
-  await database.execute({
-    sql: `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
-          VALUES (?, ?, ?, ?, ?)`,
-    args: [second.caller.session, made.account, second.caller.secretSha256, started, started],
+  const refreshToken = `refresh-${crypto.randomUUID()}`;
+  await database.batch(
+    [
+      {
+        sql: `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
+              VALUES (?, ?, ?, ?, ?)`,
+        args: [second.caller.session, made.account, second.caller.secretSha256, started, started],
+      },
+      {
+        sql: "UPDATE accounts SET apple_refresh_token = ? WHERE id = ?",
+        args: [
+          await new RefreshTokens(env.REFRESH_TOKEN_KEY).seal(refreshToken, made.account),
+          made.account,
+        ],
+      },
+    ],
+    "write",
+  );
+  await env.PHOTOS.put(`${made.account}/photo/photo/upload`, "x");
+  return { ...made, sub: `test.${made.account}`, secondToken: second.token, refreshToken };
+}
+
+async function accountKept(account: string): Promise<boolean> {
+  const { rows } = await database.execute({
+    sql: "SELECT count(*) AS count FROM accounts WHERE id = ?",
+    args: [account],
   });
-  return { ...made, sub: `test.${made.account}`, secondToken: second.token };
+  return Number(rows[0]?.["count"]) === 1;
+}
+
+async function objectsOf(account: string): Promise<number> {
+  return (await env.PHOTOS.list({ prefix: `${account}/` })).objects.length;
 }
 
 async function sessionsOf(account: string): Promise<number> {
@@ -119,16 +181,60 @@ describe("Sign in with Apple notifications", () => {
     });
   }
 
-  it("keeps the account itself on account-deleted", async () => {
-    const one = await accountWithSessions();
-    expect(
-      (await notify(await notification({ type: "account-deleted", sub: one.sub }))).status,
-    ).toBe(200);
-    const { rows } = await database.execute({
-      sql: "SELECT count(*) AS count FROM accounts WHERE id = ?",
-      args: [one.account],
+  for (const type of ["account-deleted", "account-delete"]) {
+    it(`deletes the account on ${type} as DELETE /account does, and no other account`, async () => {
+      const one = await accountWithSessions();
+      const other = await accountWithSessions();
+      const apple: FakeApple = { revoked: [] };
+      expect((await notify(await notification({ type, sub: one.sub }), apple)).status).toBe(200);
+      expect(apple.revoked).toEqual([one.refreshToken]);
+      expect(await accountKept(one.account)).toBe(false);
+      for (const table of accountTables) {
+        const { rows } = await database.execute({
+          sql: `SELECT count(*) AS count FROM ${table} WHERE account_id = ?`,
+          args: [one.account],
+        });
+        expect(Number(rows[0]?.["count"]), table).toBe(0);
+      }
+      expect(await objectsOf(one.account)).toBe(0);
+      expect(await accountKept(other.account)).toBe(true);
+      expect(await objectsOf(other.account)).toBe(1);
+      expect(await sessionWorks(other.token)).toBe(true);
     });
-    expect(Number(rows[0]?.["count"])).toBe(1);
+  }
+
+  it("keeps the account on consent-revoked", async () => {
+    const one = await accountWithSessions();
+    const apple: FakeApple = { revoked: [] };
+    expect((await notify(await notification({ sub: one.sub }), apple)).status).toBe(200);
+    expect(apple.revoked).toEqual([]);
+    expect(await accountKept(one.account)).toBe(true);
+    expect(await objectsOf(one.account)).toBe(1);
+  });
+
+  it("does no harm when account-deleted is sent again", async () => {
+    const one = await accountWithSessions();
+    const sent = await notification({ type: "account-deleted", sub: one.sub });
+    expect((await notify(sent)).status).toBe(200);
+    const apple: FakeApple = { revoked: [] };
+    expect((await notify(sent, apple)).status).toBe(200);
+    expect(apple.revoked).toEqual([]);
+  });
+
+  it("answers 502 and deletes nothing but sessions when Apple's revoke endpoint doesn't answer, then deletes when sent again", async () => {
+    const one = await accountWithSessions();
+    const sent = await notification({ type: "account-deleted", sub: one.sub });
+    const down: FakeApple = {
+      revoked: [],
+      revokeAnswer: () => new Response(null, { status: 503 }),
+    };
+    expect((await notify(sent, down)).status).toBe(502);
+    expect(await accountKept(one.account)).toBe(true);
+    expect(await objectsOf(one.account)).toBe(1);
+    expect(await sessionsOf(one.account)).toBe(0);
+
+    expect((await notify(sent)).status).toBe(200);
+    expect(await accountKept(one.account)).toBe(false);
   });
 
   for (const type of ["email-enabled", "email-disabled", "some-later-event"]) {
@@ -245,10 +351,10 @@ describe("a notification refused", () => {
 
   it("answers 502 when Apple's keys can't be fetched, and ends no session", async () => {
     const one = await accountWithSessions();
-    const answer = await notify(
-      await notification({ sub: one.sub }),
-      () => new Response(null, { status: 503 }),
-    );
+    const answer = await notify(await notification({ sub: one.sub }), {
+      revoked: [],
+      keysAnswer: () => new Response(null, { status: 503 }),
+    });
     expect(answer.status).toBe(502);
     expect(await sessionsOf(one.account)).toBe(2);
   });

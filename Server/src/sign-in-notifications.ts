@@ -1,6 +1,8 @@
+import { deleteAccountOfAppleUser } from "./account-deletion";
 import { appleIssuer, appleSigned, type SignatureFailure } from "./apple-sign-in";
 import { jsonBody, problem } from "./http";
 import { isJson, text, whole } from "./jws";
+import type { Photos } from "./photos";
 import type { SignIn } from "./sign-in";
 
 /**
@@ -10,19 +12,23 @@ import type { SignIn } from "./sign-in";
  */
 
 /**
- * The events that end every session of the user's account. `account-delete` is how Apple's
- * documentation once wrote `account-deleted`.
+ * The events that delete the user's account, since the Apple Account is gone (#69).
+ * `account-delete` is how Apple's documentation once wrote `account-deleted`.
  */
-const sessionEnding = new Set(["consent-revoked", "account-deleted", "account-delete"]);
+const accountDeleting = new Set(["account-deleted", "account-delete"]);
+
+/** The events that end every session of the user's account. */
+const sessionEnding = new Set(["consent-revoked", ...accountDeleting]);
 
 /**
  * `{"payload"}`: a JWT Apple signed with a Sign in with Apple key, for this app, whose `events`
  * claim names the event and the user. Answers 200 for every event it reads, acted on or not, and
- * for a user with no account.
+ * for a user with no account; 502 when Apple's revoke endpoint didn't answer while deleting one.
  */
 export async function receiveSignInNotification(
   request: Request,
   signIn: SignIn,
+  photos: Photos,
   now: number,
 ): Promise<Response> {
   const payload = text((await jsonBody(request))?.["payload"]);
@@ -53,6 +59,12 @@ export async function receiveSignInNotification(
       event.sub,
       iat === undefined ? now : (iat + 1) * 1000,
     );
+  }
+  if (
+    accountDeleting.has(event.type) &&
+    (await deleteAccountOfAppleUser(event.sub, signIn, photos, now)) === "unrevoked"
+  ) {
+    return problem(502, "Apple's revoke endpoint didn't answer; the account wasn't deleted");
   }
   return new Response(null, { status: 200 });
 }
