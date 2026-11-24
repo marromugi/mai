@@ -24,16 +24,31 @@
 
 アカウントは、有料の同期プランに入るときにアプリが作る(#22)。どれもセッションは要らず、JSON(`Content-Type: application/json`)を送る。
 
-| 経路                            | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /challenges`              | 201 と `{"challenge"}`。5 分使える。アプリはその SHA-256(小文字の 16 進)を Sign in with Apple の nonce にする                                                                                                                                                                                                                                                                                                                                                        |
-| `POST /account`                 | `{"account", "challenge", "identityToken", "authorizationCode", "transaction"}`。`account` はアプリが作った UUID で、購入の `appAccountToken` と同じもの。`transaction` はそのアカウントのために買った購読の StoreKit 2 の取引(`Transaction.jwsRepresentation`)。201 と `{"token"}`(セッションのトークン)。その Apple の利用者かその ID のアカウントがもうあれば 409 で、アカウントもセッションも作らない(サインインは `POST /sessions`)。取引の断り方は下の「購読」 |
-| `POST /sessions`                | `{"challenge", "identityToken"}`。200 と `{"account", "token"}`。その Apple の利用者のアカウントがなければ 404                                                                                                                                                                                                                                                                                                                                                       |
-| `POST /app-store/notifications` | Apple が送る App Store Server Notifications V2 の `{"signedPayload"}`。下の「購読」                                                                                                                                                                                                                                                                                                                                                                                  |
+| 経路                                | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /challenges`                  | 201 と `{"challenge"}`。5 分使える。アプリはその SHA-256(小文字の 16 進)を Sign in with Apple の nonce にする                                                                                                                                                                                                                                                                                                                                                        |
+| `POST /account`                     | `{"account", "challenge", "identityToken", "authorizationCode", "transaction"}`。`account` はアプリが作った UUID で、購入の `appAccountToken` と同じもの。`transaction` はそのアカウントのために買った購読の StoreKit 2 の取引(`Transaction.jwsRepresentation`)。201 と `{"token"}`(セッションのトークン)。その Apple の利用者かその ID のアカウントがもうあれば 409 で、アカウントもセッションも作らない(サインインは `POST /sessions`)。取引の断り方は下の「購読」 |
+| `POST /sessions`                    | `{"challenge", "identityToken"}`。200 と `{"account", "token"}`。その Apple の利用者のアカウントがなければ 404                                                                                                                                                                                                                                                                                                                                                       |
+| `POST /app-store/notifications`     | Apple が送る App Store Server Notifications V2 の `{"signedPayload"}`。下の「購読」                                                                                                                                                                                                                                                                                                                                                                                  |
+| `POST /apple/sign-in-notifications` | Apple が送る Sign in with Apple の通知の `{"payload"}`。下の「Sign in with Apple の通知」                                                                                                                                                                                                                                                                                                                                                                            |
 
 ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・`aud`(`APPLE_CLIENT_ID`)・`exp` と、nonce がチャレンジの SHA-256 であることを確かめる。チャレンジは `CHALLENGE_KEY` の HMAC で、サーバーは出すときには何も書かず、使ったものを期限の 1 時間あとまで `used_challenges` に置く。使ったもの、このサーバーが出していないもの、期限の切れたもの(Apple を待つ間に切れたものも)、ID トークンが別のチャレンジに作られたものは 401。チャレンジは通ればその場で使ったことになり、409 や 404 で終わっても使い直せない。
 
 `POST /account` は認可コードを Apple の `/auth/token` で refresh トークンに替え(`src/apple-tokens.ts`)、`REFRESH_TOKEN_KEY` の AES-256-GCM でアカウント ID を付けて封じて `accounts.apple_refresh_token` に置く(`src/refresh-tokens.ts`)。封じる前の値はどこにも置かない。Apple がコードを断るか(`invalid_grant`)、コードが別の利用者のものなら 401、Apple が答えなければ 502。Apple がそれ以外の 4xx を返したら Worker の要求か `APPLE_` の秘密の誤りなので 500。取引は Apple に引き換えを頼む前に確かめ、プランは取引の商品で決める。
+
+### Sign in with Apple の通知
+
+利用者が Apple の側でアカウントを変えると、Apple が `POST /apple/sign-in-notifications` に `{"payload": "<JWT>"}` を送る([Processing changes for Sign in with Apple accounts](https://developer.apple.com/documentation/signinwithapple/processing-changes-for-sign-in-with-apple-accounts))。セッションは要らない(`src/sign-in-notifications.ts`)。
+
+- `payload` は ID トークンと同じ Apple の鍵の RS256 で署名を確かめ、`iss` が `https://appleid.apple.com`、`aud` が `APPLE_CLIENT_ID` であることを見る。`exp` と nonce はない。
+- 中身の `events` は `type` と `sub`(Apple の利用者)を持つ。Apple の文書の例はオブジェクトだが、JSON の文字列で送られるという報告もあるので、どちらも読む。
+- `consent-revoked`(その人が mai で Apple でサインインするのをやめた)と `account-deleted`(Apple アカウントを消した。文書が前に書いていた `account-delete` も同じに扱う。[開発者フォーラムの Apple の答え](https://developer.apple.com/forums/thread/808898))は、そのアカウントのセッションのうち、`iat` の秒の終わりまでに始まったものを全部消す。アカウントは消さない。もう一度サインインすれば(`POST /sessions`)同じアカウントに戻る。`iat` のない通知は、受けた時までに始まったものを消す。
+- `email-enabled`・`email-disabled`(メールの転送の変更)と、ほかの種類は、mai がメールを頼んでいないので何もしない。
+- 同じ通知が何度来ても、消すセッションは同じで、そのあとにサインインし直して始まったセッションは残る。アカウントのない `sub` も何もしない。
+
+答え方: 読めた通知は、何かしたかどうかによらず 200(本文なし)。`payload` がない、JWT でない、署名・`iss`・`aud` が通らない、`events` に `type` と `sub` がないものは 400 で、何もしない。Apple の鍵を取れなければ 502。Apple の文書は 200 の例を出すだけで、ほかの答えのときに送り直すかは書いていない。
+
+`DELETE /account` が Apple のトークンを取り消すと、Apple はその利用者の `consent-revoked` を送ってくるものとして扱う([TN3194](https://developer.apple.com/documentation/technotes/tn3194-handling-account-deletions-and-revoking-tokens-for-sign-in-with-apple) は取り消しのあとにこの通知が来ると書く)。削除が終わっていればアカウントがないので何もせず、途中ならセッションは消えるが、削除は印を付けたあとなので止まらない(下の「アカウントの削除」)。
 
 ### セッションのある経路
 
@@ -67,7 +82,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 1. `accounts.apple_refresh_token` を開き、Apple の `/auth/revoke` で取り消す。Apple は前に取り消したトークンにも 200 を返す。Apple が答えなければ 502、それ以外の 4xx は Worker の要求か `APPLE_` の秘密の誤りなので 500。
 2. 要求のセッションが生きていれば `accounts.deleting` を 1 にする。生きていなければ 401 で、ここから先は何も消さない。
 3. R2 の `<アカウント ID>/` の下を全部消す。
-4. `deleting` が 1 なら、`account_id` を持つ表(`src/store.ts` の `accountTables`)と `accounts` のそのアカウントの行を 1 つの batch で消す。セッションも全部なくなり、どの端末のトークンも 401 になる。2 のあとにセッションが終わっても(1 の取り消しで Apple が送る `consent-revoked` の通知が、下の「Sign in with Apple の通知」で全セッションを消しても)、ここは止まらない。
+4. `deleting` が 1 なら、`account_id` を持つ表(`src/store.ts` の `accountTables`)と `accounts` のそのアカウントの行を 1 つの batch で消す。セッションも全部なくなり、どの端末のトークンも 401 になる。2 のあとにセッションが終わっても(1 の取り消しで Apple が送る `consent-revoked` の通知が、上の「Sign in with Apple の通知」で全セッションを消しても)、ここは止まらない。
 5. 3 と 4 の間に送り終えた写真のために、R2 の `<アカウント ID>/` の下で `photos` に行のないものをもう一度消す(要求のあとも続ける)。行のあるものは、同じ ID で作り直したアカウント(同じ購入の `appAccountToken`)の写真なので残す。4 のあとに R2 に書き終えた写真は、行がないので `stored` にならず、その要求が自分で消す。
 
 行を消すまではセッションが使えるので、途中で失敗したら同じ要求をやり直せばよい。1 か 2 で失敗すれば何も消えていない。3 で失敗すれば R2 の一部が消え、行は全部残る。4 で失敗すれば R2 は空で、行は全部残る。3 か 4 で失敗したあと、やり直すまでの間、そのアカウントの写真を読むと 500 になり、購読し直しても `paid_until` は変わらない。4 が通れば 204 で、やり直しは 401。
@@ -140,7 +155,7 @@ Cron(毎分)が、最後に使ってから 180 日たったセッションと、
 
 ID トークンは上のサインインの経路が、署名つき取引・更新の情報・通知は上の購読の経路(`src/subscriptions.ts`)が呼ぶ。どれも WebCrypto だけで確かめ、通れば読み出した値を、通らなければ理由を返す。
 
-- `src/apple-sign-in.ts`: Sign in with Apple の ID トークン。Apple の JWKS(RS256)で署名、`iss`、`aud`(バンドル ID)、`exp`、渡された `nonce`。JWKS は Cache に 1 日置き、知らない鍵 ID が来たら取り直す(前の取得から 5 分たっていれば、1 回だけ)。
+- `src/apple-sign-in.ts`: Sign in with Apple の ID トークン(通知の JWT の署名も、`appleSigned` で同じ鍵で確かめる)。Apple の JWKS(RS256)で署名、`iss`、`aud`(バンドル ID)、`exp`、渡された `nonce`。JWKS は Cache に 1 日置き、知らない鍵 ID が来たら取り直す(前の取得から 5 分たっていれば、1 回だけ)。
 - `src/app-store.ts`: StoreKit 2 の署名つき取引・更新の情報と、App Store Server Notifications V2 の `signedPayload`(中の取引と更新の情報も)。ES256 の署名と、`x5c` の葉・中間が `src/apple-root.ts` の Apple Root CA - G3 までつながること。ルートは引数で渡し、`x5c` の中のルートは使わない。バンドル ID は `APPLE_CLIENT_ID`。期限・取り消し・環境・`appAccountToken` は見ず、購入として受けるかは `src/subscriptions.ts` が決める。Xcode の StoreKit の試験で作った取引は Apple の鍵で署名されていないので、どれも通らない。
 
 テストは自分で作った認証局と鍵で作ったものを確かめる(購読の経路のテストは、その認証局を G3 の代わりに `signInOf` に渡す)。本物で確かめているのは、G3 と、それが署名した中間の WWDR G6 だけ。
@@ -183,6 +198,7 @@ scripts/server-contract-test.sh
 その前に開発者が Apple Developer でしておくこと:
 
 - App ID `com.marromugi.mai` で Sign in with Apple を有効にする
+- 同じ App ID の Sign in with Apple の Configure で、Server-to-Server Notification Endpoint を `https://<Worker の URL>/apple/sign-in-notifications` にする([Enabling server-to-server notifications](https://developer.apple.com/help/account/configure-app-capabilities/enabling-server-to-server-notifications)。主の App ID にだけ置ける)
 - Sign in with Apple の鍵(.p8)を 1 つ作り、その鍵 ID と、チーム ID を控える。.p8 は一度しか落とせない
 
 App Store Connect でしておくこと:

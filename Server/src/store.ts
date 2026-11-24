@@ -551,6 +551,18 @@ export class Store {
   }
 
   /**
+   * Ends every session started before `before` of the Apple user's account; none when the user has
+   * no account.
+   */
+  async endSessionsOfAppleUser(appleSub: string, before: number): Promise<void> {
+    await this.#client.execute({
+      sql: `DELETE FROM sessions
+            WHERE account_id = (SELECT id FROM accounts WHERE apple_sub = :sub) AND created < :before`,
+      args: { sub: appleSub, before },
+    });
+  }
+
+  /**
    * The caller's account and its sealed refresh token, for deleting it; undefined when the caller
    * has no live session. Neither counted nor limited, so a lapsed account or one past its day's
    * requests is deleted too.

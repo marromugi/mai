@@ -16,6 +16,7 @@ import {
   subscriptionKept,
 } from "./subscriptions";
 import { issueChallenge, makeAccount, startSession, type SignIn } from "./sign-in";
+import { receiveSignInNotification } from "./sign-in-notifications";
 import { Store, type Answer, type Refusal } from "./store";
 import { parsePhotoId } from "./photo-id";
 import { getPhoto, putPhoto, sizeOf, sweepUploads, type Photos } from "./photos";
@@ -91,6 +92,8 @@ export async function serve(request: Request, signIn: SignIn, photos: Photos): P
       return startSession(request, signIn, now);
     case "POST /app-store/notifications":
       return receiveNotification(request, signIn.appStore, signIn.store);
+    case "POST /apple/sign-in-notifications":
+      return receiveSignInNotification(request, signIn, now);
   }
 
   const caller = await callerOf(request.headers.get("Authorization"));
