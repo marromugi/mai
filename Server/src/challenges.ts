@@ -1,6 +1,6 @@
 import { base64urlBytes } from "./jws";
 import { hex } from "./hex";
-import { base64url } from "./sessions";
+import { base64url } from "./secrets";
 
 /**
  * A challenge is `<expires>.<random>.<mac>`: when it expires in milliseconds since 1970, 16 random

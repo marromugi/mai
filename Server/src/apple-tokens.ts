@@ -1,6 +1,6 @@
 import { appleIssuer } from "./apple-sign-in";
 import { isJson, readCompactJws, text, type Checked, type Json } from "./jws";
-import { base64url } from "./sessions";
+import { base64url } from "./secrets";
 
 /**
  * Sign in with Apple's token and revoke endpoints, as

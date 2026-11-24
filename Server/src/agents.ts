@@ -1,4 +1,4 @@
-import { base64url, sha256 } from "./sessions";
+import { base64url, sha256 } from "./secrets";
 import { lowercaseUuid } from "./uuid";
 
 /**
