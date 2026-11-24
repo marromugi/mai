@@ -127,6 +127,21 @@ struct AccountSyncContractTests {
     }
   }
 
+  /// The free app: a device with no session gives nothing to sync with, and its launch check
+  /// sends the Worker nothing.
+  @Test func aDeviceWithNoAccountSendsTheWorkerNothing() async throws {
+    let url = try #require(url, "MAI_SERVER_URL names the local Worker")
+    let sent = Recording()
+    let apple = StandInApple(url: url, user: "stand-in.\(UUID().uuidString)", transport: sent)
+    let account = SyncAccount(
+      server: AccountServer(url: url, transport: sent), apple: apple, purchases: apple,
+      sessions: MemorySessions(), ownKeys: MemoryOwnKeys(OwnKey.generate()))
+
+    #expect(try account.syncKeys() == nil)
+    #expect(try await account.check() == .signedOut)
+    #expect(sent.requests.isEmpty)
+  }
+
   /// #25: what is sent holds no plaintext, doesn't open with another key, and the same contents
   /// saved twice are sent as other bytes.
   @Test func whatTheWorkerIsSentIsCiphertextOnly() async throws {

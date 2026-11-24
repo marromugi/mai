@@ -12,6 +12,8 @@ public struct RootView: View {
   @State private var photos = WritingPhotos()
   @State private var opened = Date.now
   @State private var showingSettings = false
+  /// Whether the launch check is done, after which coming to the front syncs.
+  @State private var launchChecked = false
   /// The last save that failed, until it is shown and dismissed.
   @State private var unsaved: UnsavedWriting?
   @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting.standard
@@ -74,16 +76,15 @@ public struct RootView: View {
         }
       }
     }
-    .task {
-      library.load(seedingWhenEmpty: Writing.samples(now: opened, calendar: .current))
-    }
     .environment(\.fontFamilies, fontStack.stack.families(from: fonts.available))
     .task {
+      library.load(seedingWhenEmpty: Writing.samples(now: opened, calendar: .current))
       await account?.checkAtLaunch()
+      launchChecked = true
       await sync?.syncNow()
     }
     .onChange(of: scenePhase) { _, phase in
-      guard phase == .active else { return }
+      guard phase == .active, launchChecked else { return }
       Task { await sync?.syncNow() }
     }
     .sheet(isPresented: $showingSettings) {
