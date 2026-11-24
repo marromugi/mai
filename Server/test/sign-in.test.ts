@@ -1101,7 +1101,7 @@ describe("signing in", () => {
   it("revokes the newest grant when the account is deleted after the user revoked consent", async () => {
     const apple = fakeApple();
     const { sub, refreshToken } = await makeAccount(apple);
-    await store.signOutAppleUser(sub, Date.now() + 1);
+    await store.signOutAppleUser(sub, Date.now() + 1, Date.now());
     const again = await signInAs(apple, sub, "refresh-after-consent");
     const { token } = await again.json<{ token: string }>();
 

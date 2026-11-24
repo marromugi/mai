@@ -634,19 +634,19 @@ export class Store {
   /**
    * Signs the Apple user out, in one batch: ends every session of the user's account started
    * before `before`, and turns its read mode off and deletes its copies, so its agents read
-   * nothing. Read mode is left alone while the account has a session started at `before` or later,
-   * by signing in again since. None of it when the user has no account.
+   * nothing. Read mode is left alone while the account has a live session started at `before` or
+   * later, by signing in again since. None of it when the user has no account.
    */
-  async signOutAppleUser(appleSub: string, before: number): Promise<void> {
+  async signOutAppleUser(appleSub: string, before: number, now: number): Promise<void> {
     const ofUser = "account_id = (SELECT id FROM accounts WHERE apple_sub = :sub)";
     const noSignInSince = `NOT EXISTS (SELECT 1 FROM sessions
-      WHERE ${ofUser} AND created >= :before)`;
+      WHERE ${ofUser} AND created >= :before AND last_used > :alive)`;
     await this.#client.batch(
       [
         `DELETE FROM copies WHERE ${ofUser} AND ${noSignInSince}`,
         `DELETE FROM read_modes WHERE ${ofUser} AND ${noSignInSince}`,
         `DELETE FROM sessions WHERE ${ofUser} AND created < :before`,
-      ].map((sql) => bind(sql, { sub: appleSub, before })),
+      ].map((sql) => bind(sql, { sub: appleSub, before, alive: now - sessionLifetime })),
       "write",
     );
   }

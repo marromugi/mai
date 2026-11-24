@@ -56,7 +56,7 @@ export async function receiveSignInNotification(
     // same notification sent again.
     const iat = whole(claims["iat"]);
     const before = iat === undefined ? now : (iat + 1) * 1000;
-    await signIn.store.signOutAppleUser(event.sub, before);
+    await signIn.store.signOutAppleUser(event.sub, before, now);
   }
   if (accountDeleting.has(event.type)) {
     await deleteAccountOfAppleUser(event.sub, signIn, photos, now);
