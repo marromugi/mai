@@ -54,6 +54,13 @@ struct AccountScreenTests {
       colorScheme: .dark)
   }
 
+  /// The server ended the session: signed out, with why under the Apple button.
+  @Test func syncSectionAfterTheServerEndedTheSession() {
+    assertSyncSection(
+      .signedOut, canSignIn: true,
+      syncStatus: .sessionEnded(ServerError.refused(status: 401, reason: "").localizedDescription))
+  }
+
   @Test func syncSectionAsksForTheRecoveryKey() {
     assertSyncSection(.recoveryKeyNeeded, canSignIn: true)
   }
@@ -130,7 +137,7 @@ private func assertSyncSection(
       } header: {
         Text("同期")
       } footer: {
-        Text("文書はこの端末の中に置かれます。ほかの端末とそろえるには、プランに入ります。")
+        Text(SettingsForm.syncFooter(phase))
       }
       AccountRows(
         phase: phase, canSignIn: canSignIn, signIn: {}, signOut: {}, restore: { _ in nil },

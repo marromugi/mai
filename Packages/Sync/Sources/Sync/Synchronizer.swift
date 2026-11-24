@@ -186,13 +186,12 @@ public struct SyncFailures: LocalizedError {
 }
 
 extension ServerError {
-  /// Whether the failure is about one writing, so the others can still sync. An ended session, a
-  /// lapsed plan (402) and a plan's limit (429) are the account's, and stop the sync.
+  /// Whether the failure is about one writing, so the others can still sync. An ended session and
+  /// a plan's limit (429) are the account's, and stop the sync. A lapsed plan (402) refuses only
+  /// writes, so the sync goes on taking in the server's writings.
   fileprivate var concernsOneWriting: Bool {
     switch self {
-    case .unreachable, .refused(status: 401, _), .refused(status: 402, _),
-      .refused(status: 429, _):
-      false
+    case .unreachable, .refused(status: 401, _), .refused(status: 429, _): false
     case .refused, .unexpectedAnswer: true
     }
   }

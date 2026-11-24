@@ -285,7 +285,7 @@ struct WritingSyncTests {
 
     #expect(
       device.sync.status
-        == .failed(ServerError.refused(status: 401, reason: "").localizedDescription))
+        == .sessionEnded(ServerError.refused(status: 401, reason: "").localizedDescription))
     #expect(device.account.phase == .signedOut)
   }
 
@@ -323,8 +323,8 @@ nonisolated final class MemoryWritingStore: WritingStore {
 }
 
 /// Sends the writings routes to `writings` and the rest to `account`, keeping every request. With
-/// `refusing`, the writings routes answer that status instead, or fail as an unreachable server
-/// does when it is 0.
+/// `refusing`, the writings routes answer that status instead (402 only the saves, as for a lapsed
+/// plan), or fail as an unreachable server does when it is 0.
 nonisolated final class Requests: HTTPTransport {
   private let writings: FakeWritingServer
   private let account: ScriptedWorker
@@ -366,7 +366,9 @@ nonisolated final class Requests: HTTPTransport {
     guard request.url?.pathComponents.dropFirst().first == "writings" else {
       return try await account.send(request)
     }
-    guard let refusing else { return try await writings.send(request) }
+    guard let refusing, refusing != 402 || request.httpMethod == "PUT" else {
+      return try await writings.send(request)
+    }
     guard refusing != 0, let url = request.url,
       let response = HTTPURLResponse(
         url: url, statusCode: refusing, httpVersion: nil, headerFields: nil)

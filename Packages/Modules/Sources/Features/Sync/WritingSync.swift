@@ -17,8 +17,11 @@ internal import Sync
     /// What went wrong, written for a person.
     case failed(String)
     /// The plan's limit (429) or its lapse (402), written for a person. Edits don't start a sync
-    /// until the person asks for one or the app comes to the front again.
+    /// until the person asks for one or the app comes to the front again. A lapsed plan's sync
+    /// still takes in the server's writings.
     case stopped(String)
+    /// The server ended the session (401), written for a person: the device is signed out.
+    case sessionEnded(String)
   }
 
   private let account: AccountModel
@@ -76,12 +79,16 @@ internal import Sync
     {
       // The edit made during the sync set the next one.
       status = .synced(.now)
+    } catch let error as SyncFailures
+      where error.failures.values.contains(where: { $0.isLapsed })
+    {
+      status = .stopped(ServerError.refused(status: 402, reason: "").localizedDescription)
     } catch let error as ServerError {
       switch error {
-      case .refused(status: 402, _), .refused(status: 429, _):
+      case .refused(status: 429, _):
         status = .stopped(error.localizedDescription)
       case .refused(status: 401, _):
-        status = .failed(error.localizedDescription)
+        status = .sessionEnded(error.localizedDescription)
         // Drops the ended session, so the section offers signing in again.
         await account.check()
       default:
@@ -128,5 +135,13 @@ internal import Sync
     let made = account.synchronizer(for: writings, keys: keys)
     synchronizer = (keys, made)
     return made
+  }
+}
+
+extension Error {
+  /// Whether the server refused a save for the plan having lapsed.
+  fileprivate var isLapsed: Bool {
+    guard case .refused(status: 402, _) = self as? ServerError else { return false }
+    return true
   }
 }

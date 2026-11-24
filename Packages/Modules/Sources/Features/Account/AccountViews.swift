@@ -85,6 +85,11 @@ struct AccountRows: View {
       AppleSignInButton(action: signIn)
         .listRowInsets(EdgeInsets())
         .listRowBackground(Color.clear)
+      if case .sessionEnded(let message) = syncStatus {
+        Text(verbatim: message)
+          .font(.footnote)
+          .foregroundStyle(.red)
+      }
     case .working:
       HStack {
         Spacer()
@@ -138,12 +143,12 @@ private struct SyncRows: View {
         Text("同期しています…")
       case .synced(let date):
         Text("\(date, format: .dateTime.hour().minute()) に同期しました")
-      case .failed, .stopped:
+      case .failed, .stopped, .sessionEnded:
         Text("同期できませんでした")
       }
     }
     switch status {
-    case .failed(let message), .stopped(let message):
+    case .failed(let message), .stopped(let message), .sessionEnded(let message):
       Text(verbatim: message)
         .font(.footnote)
         .foregroundStyle(.red)

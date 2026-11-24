@@ -230,8 +230,36 @@ struct WritingServerTests {
     #expect(Set(try await server().list().map(\.id)) == [small.id, foreign.id])
   }
 
-  /// An ended session (401), a lapsed plan (402) and a plan's limit (429) are the account's.
-  @Test(arguments: [401, 402, 429])
+  /// A lapsed plan refuses the device's saves (402) but still lets it read: the sync takes in
+  /// the other device's writings, and says which saves were refused.
+  @Test func aLapsedPlansRefusedSaveLeavesTheSyncTakingIn() async throws {
+    let refused = UUID()
+    let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
+    let theirs = PlainWriting(
+      id: UUID(), updated: .init(timeIntervalSince1970: 2_000), contents: Data("他".utf8))
+    try devices.second.writings.save(theirs)
+    _ = try await devices.second.synchronizer.sync()
+    let lapsed = Synchronizer(
+      writings: devices.first.writings,
+      stateFile: FileManager.default.temporaryDirectory.appending(
+        path: "mai-sync-tests-\(UUID().uuidString)/state.json"),
+      server: server(transport: Refusing(fake, saveOf: refused, with: 402)), ownKey: ownKey)
+    try devices.first.writings.save(
+      PlainWriting(id: refused, updated: .init(timeIntervalSince1970: 1_000), contents: Data()))
+
+    await #expect {
+      try await lapsed.sync()
+    } throws: { error in
+      guard let error = error as? SyncFailures,
+        case .refused(status: 402, _) = error.failures[refused] as? ServerError
+      else { return false }
+      return error.failures.count == 1 && error.report.received == [theirs.id]
+    }
+    #expect(try devices.first.writings.all().contains(theirs))
+  }
+
+  /// An ended session (401) and a plan's limit (429) are the account's.
+  @Test(arguments: [401, 429])
   func aWritingRefusedForTheAccountStopsTheSync(status: Int) async throws {
     let refused = UUID()
     let device = try TwoDevices(

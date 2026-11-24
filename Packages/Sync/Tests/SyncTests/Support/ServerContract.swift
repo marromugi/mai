@@ -13,7 +13,7 @@ enum ServerContract: CaseIterable, Sendable {
   case aWritingNeverSavedIsNotThere
   case anotherTokenIsRefused
 
-  /// `server` lets in `ownKey`'s token; `stranger` holds another.
+  /// `server` lets in its session's token; `stranger` holds another. `ownKey` seals and opens.
   func check(server: WritingServer, stranger: WritingServer, ownKey: OwnKey) async throws {
     let first = PlainWriting(
       id: UUID(), updated: Date(timeIntervalSince1970: 1_790_000_000.123),
