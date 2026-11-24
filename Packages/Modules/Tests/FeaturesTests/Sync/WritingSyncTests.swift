@@ -80,7 +80,7 @@ struct WritingSyncTests {
     await device.sync.syncNow()
     try device.library.edit(written.id, at: .now) { $0.title = "夜" }
     device.sync.edited()
-    await device.sync.pending?.value
+    #expect(device.sync.pending == nil)
     await device.sync.syncNow()
 
     #expect(device.account.phase == .signedOut)
@@ -153,6 +153,14 @@ struct WritingSyncTests {
     )
     #expect(try library.forSync() == [written])
     #expect(try await synced.all().map(\.contents) == [try Writing.Contents(written).encoded()])
+
+    let outOfRange = PlainWriting(
+      id: UUID(), updated: written.updated,
+      contents: Data(
+        #"{"body":"短い","links":[{"range":[0,9],"url":"https://example.com/"}],"title":"題"}"#.utf8
+      ))
+    try await synced.save(outOfRange)
+    #expect(try library.forSync().first { $0.id == outOfRange.id }?.links == [])
 
     await #expect(throws: UnreadableContents.self) {
       try await synced.save(
@@ -289,6 +297,74 @@ struct WritingSyncTests {
     #expect(device.account.phase == .signedOut)
   }
 
+  /// An edit sets no sync sooner than `interval` after the last one started.
+  @Test func anEditSoonAfterASyncWaitsForTheInterval() async throws {
+    let device = try device([writing("朝", at: 1_000)], interval: .seconds(3_600))
+    await device.account.checkAtLaunch()
+    await device.sync.syncNow()
+
+    device.sync.edited()
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(device.sent.listings == 1)
+    device.sync.pending?.cancel()
+  }
+
+  /// A writing edited while the sync that brings another device's save of it runs keeps the
+  /// edit; the sync is shown as done, since the edit set the next one.
+  @Test func anEditDuringTheSyncIsKeptAndTheSyncShownDone() async throws {
+    let server = FakeWritingServer(accepting: token)
+    let written = writing("朝", at: 1_000)
+    let first = try device([written], server: server, pause: .seconds(3_600))
+    let second = try device([], server: server)
+    await first.account.checkAtLaunch()
+    await second.account.checkAtLaunch()
+    await first.sync.syncNow()
+    await second.sync.syncNow()
+    try second.library.edit(written.id, at: Date(timeIntervalSince1970: 2_000)) {
+      $0.body = "他の端末"
+    }
+    await second.sync.syncNow()
+
+    first.sent.holdNextListing()
+    let syncing = Task { await first.sync.syncNow() }
+    while first.sent.listings < 2 {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    try first.library.edit(written.id, at: Date(timeIntervalSince1970: 3_000)) {
+      $0.body = "書き足した"
+    }
+    first.sent.release()
+    await syncing.value
+
+    guard case .synced = first.sync.status else {
+      Issue.record("the sync is shown done: \(first.sync.status)")
+      return
+    }
+    #expect(try first.library.forSync().map(\.body) == ["書き足した"])
+  }
+
+  /// The device's edit is kept as a copy before the other device's save replaces it, so a save
+  /// that fails between them loses no edit.
+  @Test func theCopyIsSavedBeforeTheWritingItKeeps() async throws {
+    let written = writing("朝", at: 1_000)
+    let store = RefusingOne(id: written.id, [written])
+    let library = WritingLibrary(store: store)
+    library.load(seedingWhenEmpty: [])
+    let synced = SyncedWritings(library: library)
+    _ = try await synced.all()
+    store.refusing = true
+    let received = PlainWriting(
+      id: written.id, updated: Date(timeIntervalSince1970: 2_000),
+      contents: try Writing.Contents(writing("他の端末", at: 0)).encoded())
+    let copy = PlainWriting(
+      id: UUID(), updated: written.updated, contents: try Writing.Contents(written).encoded())
+
+    await #expect(throws: RefusingOne.Refused.self) {
+      try await synced.keepBoth(received, copy: copy)
+    }
+    #expect(try store.all().contains { $0.id == copy.id })
+  }
+
   /// Any other failure is shown, and an edit still sets the next sync.
   @Test func anUnreachableServerIsShownAndEditsStillSync() async throws {
     let written = writing("朝", at: 1_000)
@@ -302,6 +378,34 @@ struct WritingSyncTests {
     device.sync.edited()
     #expect(device.sync.pending != nil)
     device.sync.pending?.cancel()
+  }
+}
+
+/// Writings kept in memory, refusing to save the one with `id` while `refusing`.
+nonisolated final class RefusingOne: WritingStore {
+  struct Refused: Error {}
+
+  private let id: Writing.ID
+  private let kept: MemoryWritingStore
+  private let refuses = Mutex(false)
+
+  init(id: Writing.ID, _ writings: [Writing]) {
+    self.id = id
+    kept = MemoryWritingStore(writings)
+  }
+
+  var refusing: Bool {
+    get { refuses.withLock { $0 } }
+    set { refuses.withLock { $0 = newValue } }
+  }
+
+  func all() throws -> [Writing] {
+    try kept.all()
+  }
+
+  func save(_ writing: Writing) throws {
+    guard !(refusing && writing.id == id) else { throw Refused() }
+    try kept.save(writing)
   }
 }
 
@@ -350,6 +454,11 @@ nonisolated final class Requests: HTTPTransport {
 
   func release() {
     held.withLock { $0.gate?.resume() }
+  }
+
+  /// The next listing of the writings waits until `release()`.
+  func holdNextListing() {
+    held.withLock { $0.holding = true }
   }
 
   func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {

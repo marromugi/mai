@@ -29,13 +29,11 @@ internal import Sync
   private let pause: Duration
   private let interval: Duration
   private(set) var status = Status.notYet
-  /// One per session and own key, so its syncs run one after the other.
-  @ObservationIgnored private var synchronizer: (keys: SyncKeys, synchronizer: Synchronizer)?
   @ObservationIgnored private var lastStarted: ContinuousClock.Instant?
   /// The sync an edit set to run; nil once it has started.
   @ObservationIgnored private(set) var pending: Task<Void, Never>?
-  /// The last sync asked for. Each waits for the one before, even on another `Synchronizer`, since
-  /// they share the account's state file and the library's take-in.
+  /// The last sync asked for. Each waits for the one before, since they share the account's state
+  /// file and the library's take-in.
   @ObservationIgnored private var running: Task<Void, Never>?
 
   init(
@@ -72,7 +70,7 @@ internal import Sync
     lastStarted = .now
     status = .syncing
     do {
-      _ = try await synchronizer(for: keys).sync()
+      _ = try await account.synchronizer(for: writings, keys: keys).sync()
       status = .synced(.now)
     } catch let error as SyncFailures
       where error.failures.values.allSatisfy({ $0 is EditedDuringSync })
@@ -126,15 +124,6 @@ internal import Sync
     let settled = editedAt + pause
     guard let lastStarted else { return settled }
     return max(settled, lastStarted + interval)
-  }
-
-  private func synchronizer(for keys: SyncKeys) -> Synchronizer {
-    if let synchronizer, synchronizer.keys == keys {
-      return synchronizer.synchronizer
-    }
-    let made = account.synchronizer(for: writings, keys: keys)
-    synchronizer = (keys, made)
-    return made
   }
 }
 

@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Sync
 import SyncFakes
+import Synchronization
 import Testing
 
 struct WritingServerTests {
@@ -312,6 +313,33 @@ struct WritingServerTests {
     }
   }
 
+  /// A writing changed on both sides is kept in one step of the store, which the app's store
+  /// refuses whole when the writing changed meanwhile.
+  @Test func keepingBothIsOneStepOfTheStore() async throws {
+    let id = UUID()
+    let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
+    let recording = KeepBothRecorder()
+    let synchronizer = Synchronizer(
+      writings: recording,
+      stateFile: FileManager.default.temporaryDirectory.appending(
+        path: "mai-sync-tests-\(UUID().uuidString)/state.json"),
+      server: server(), ownKey: ownKey)
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 1_000), contents: Data("a".utf8)))
+    _ = try await devices.first.synchronizer.sync()
+    _ = try await synchronizer.sync()
+    try devices.first.writings.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 2_000), contents: Data("b".utf8)))
+    _ = try await devices.first.synchronizer.sync()
+    try recording.save(
+      PlainWriting(id: id, updated: .init(timeIntervalSince1970: 3_000), contents: Data("c".utf8)))
+
+    let report = try await synchronizer.sync()
+
+    let copy = try #require(report.keptBoth[id])
+    #expect(recording.keptBoth == [[id, copy]])
+  }
+
   /// A writing edited on both sides whose server save this device's store refuses each time.
   @Test func aWritingTheStoreRefusesKeepsTheDevicesEditOnceAndLeavesTheOthersToSync()
     async throws
@@ -468,6 +496,29 @@ private struct Refusing: HTTPTransport {
         url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])
     else { return try await next.send(request) }
     return (Data(#"{"error":"refused"}"#.utf8), response)
+  }
+}
+
+/// Keeps writings in memory, and each pair `keepBoth` was asked to keep: the writing's ID, then
+/// its copy's.
+private final class KeepBothRecorder: PlainWritingStore {
+  private let writings = MemoryWritingStore()
+  private let kept = Mutex<[[UUID]]>([])
+
+  var keptBoth: [[UUID]] { kept.withLock { $0 } }
+
+  func all() throws -> [PlainWriting] {
+    try writings.all()
+  }
+
+  func save(_ writing: PlainWriting) throws {
+    try writings.save(writing)
+  }
+
+  func keepBoth(_ received: PlainWriting, copy: PlainWriting) throws {
+    kept.withLock { $0.append([received.id, copy.id]) }
+    try writings.save(copy)
+    try writings.save(received)
   }
 }
 

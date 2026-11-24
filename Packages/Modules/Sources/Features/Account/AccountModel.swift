@@ -185,7 +185,6 @@ enum AccountPhase: Equatable {
       }
       try await account.restore(from: text, session)
       phase = .signedIn
-      ownKeySettled = true
       return nil
     } catch {
       accountLogger.error("Restoring the own key failed: \(error)")
@@ -221,7 +220,7 @@ enum AccountPhase: Equatable {
       }
       try await settle(session)
     }
-    guard phase == .signedIn, ownKeySettled else { return nil }
+    guard phase == .signedIn else { return nil }
     return try account.syncKeys()
   }
 

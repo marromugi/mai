@@ -61,8 +61,9 @@ struct AccountScreenTests {
       syncStatus: .sessionEnded(ServerError.refused(status: 401, reason: "").localizedDescription))
   }
 
+  /// While the own key isn't here, nothing syncs and no sync row shows.
   @Test func syncSectionAsksForTheRecoveryKey() {
-    assertSyncSection(.recoveryKeyNeeded, canSignIn: true)
+    assertSyncSection(.recoveryKeyNeeded, canSignIn: true, syncStatus: .notYet)
   }
 
   @Test func syncSectionOffersSignInInDarkMode() {

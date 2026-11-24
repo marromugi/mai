@@ -37,12 +37,6 @@ nonisolated final class SyncedWritings: PlainWritingStore {
     let kept = try copy.map(Self.writing)
     let seenThen = seen.withLock { $0[received.id] }
     try await library.takeIn(writing, keeping: kept, seen: seenThen)
-    seen.withLock { seen in
-      seen[received.id] = received.updated
-      if let copy {
-        seen[copy.id] = copy.updated
-      }
-    }
   }
 
   private static func writing(_ plain: PlainWriting) throws -> Writing {

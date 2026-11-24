@@ -216,6 +216,52 @@ struct AccountModelTests {
     #expect(paid.canSignIn)
   }
 
+  /// A key made on signing in is the account's: the sync runs with it without settling again.
+  @Test func aKeyMadeOnSigningInIsSyncedWith() async throws {
+    let model = try model(Self.newAccount)
+    await model.signIn()
+    let keys = try #require(try await model.syncKeys())
+    #expect(keys.session.token == "s1.a.b")
+  }
+
+  /// Signed in again after signing out, where settling the key failed: the sync settles it
+  /// first, rather than taking the last account's settling for this one's.
+  @Test func aSignInWhoseSettlingFailedIsSettledBeforeASync() async throws {
+    var answers = Self.newAccount
+    answers["DELETE /session"] = [.status(204)]
+    answers["POST /challenges"]?.append(.status(201, json: #"{"challenge":"d"}"#))
+    answers["POST /account"]?.append(.status(201, json: #"{"token":"s1.c.d"}"#))
+    let model = try model(answers)
+    await model.signIn()
+    _ = try await model.syncKeys()
+    await model.signOut()
+    await model.signIn()
+    #expect(model.phase == .signedIn)
+
+    await #expect(throws: AccountError.self) { try await model.syncKeys() }
+  }
+
+  /// A sync asked for while the own key is being settled waits for the next, and settles nothing.
+  @Test func aSyncWhileSettlingGetsNoKeys() async throws {
+    let key = OwnKey.generate()
+    let worker = ScriptedWorker(
+      [
+        "PUT /account/subscription": [.status(200)],
+        "GET /account": [ScriptedWorker.account(check: key.check)],
+      ], holding: "GET /account")
+    let model = try model([:], worker: worker, session: session, key: key)
+    await model.checkAtLaunch()
+    let settling = Task { await model.refresh() }
+    while !worker.isHolding {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(try await model.syncKeys() == nil)
+    worker.release()
+    await settling.value
+    #expect(worker.heldCount == 1)
+    #expect(try await model.syncKeys() != nil)
+  }
+
   @Test func signingOutGoesBackToSignIn() async throws {
     var answers = Self.newAccount
     answers["DELETE /session"] = [.status(204)]
