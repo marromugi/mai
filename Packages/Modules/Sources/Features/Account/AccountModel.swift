@@ -60,8 +60,9 @@ enum AccountPhase: Equatable {
     }
   #endif
 
-  /// Whether a plan was bought on this device, so signing in can make or find its account.
-  var canSignIn: Bool { kept.id != nil }
+  /// Whether the plan bought for the account kept is paid for, so signing in can make or find its
+  /// account; false while a purchase waits for approval. Read again by `check()` and `refresh()`.
+  private(set) var canSignIn = false
 
   /// At launch: reads the session, then checks it with Apple and sends the subscriptions again.
   public func checkAtLaunch() async {
@@ -74,17 +75,44 @@ enum AccountPhase: Equatable {
     await check()
   }
 
-  /// Checks the session with Apple and sends the subscriptions again (`SyncAccount.check()`).
+  /// Checks the session with Apple and sends the subscriptions again (`SyncAccount.check()`), as at
+  /// launch and when StoreKit tells of a transaction. Left to the next time while signing in or
+  /// out, which change the session themselves.
   public func check() async {
+    guard phase != .working else { return }
     do {
-      switch try await account.check() {
+      let checked = try await account.check()
+      switch checked {
       case .credentialRevoked, .sessionEnded, .signedOut:
-        phase = .signedOut
+        // Not when a sign-in started while the check ran.
+        if phase != .working {
+          phase = .signedOut
+        }
       case .subscriptionsSent:
         break
       }
     } catch {
       accountLogger.error("The account couldn't be checked: \(error)")
+    }
+    await readWhetherBought()
+  }
+
+  /// Reads again whether the plan is paid for, then settles the own key, as when the account's
+  /// settings are shown.
+  func refresh() async {
+    await readWhetherBought()
+    await settleOwnKey()
+  }
+
+  private func readWhetherBought() async {
+    guard let id = kept.id else {
+      canSignIn = false
+      return
+    }
+    do {
+      canSignIn = try await account.isBought(id)
+    } catch {
+      accountLogger.error("The purchases couldn't be read: \(error)")
     }
   }
 

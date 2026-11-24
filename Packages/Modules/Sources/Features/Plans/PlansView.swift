@@ -73,6 +73,7 @@ struct PlansView: View {
       {
       case .bought:
         bought = offer
+        await account?.refresh()
       case .waiting:
         notice = .waiting
       case .cancelled:

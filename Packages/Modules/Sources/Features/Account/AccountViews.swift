@@ -127,7 +127,7 @@ struct AccountSection: View {
       signOut: { Task { await account.signOut() } },
       restore: { await account.restore(from: $0) }
     )
-    .task { await account.settleOwnKey() }
+    .task { await account.refresh() }
   }
 }
 

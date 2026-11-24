@@ -9,8 +9,8 @@ let syncLogger = Logger(subsystem: "com.marromugi.mai", category: "sync")
 public enum OwnKeyOutcome: Sendable, Equatable {
   /// The device holds the account's own key.
   case ready
-  /// The account had no own key: one was made and its check put, and its recovery key is to be
-  /// shown.
+  /// The account had no own key: the device's key, made now or kept from a settling cut short
+  /// before its check was put, became the account's, and its recovery key is to be shown.
   case made(RecoveryKey)
   /// The account's own key isn't on this device; it comes back from the recovery key.
   case recoveryKeyNeeded
@@ -54,6 +54,12 @@ public struct SyncAccount: Sendable {
     } catch {
       throw .keychain(error)
     }
+  }
+
+  /// Whether a plan bought for `account` is current on this App Store account: false while a
+  /// purchase waits for approval.
+  public func isBought(_ account: UUID) async throws(AccountError) -> Bool {
+    try await !subscriptions(for: account).isEmpty
   }
 
   /// Signs in with Apple for `account`, which a plan was bought for, making the account on the
@@ -101,7 +107,7 @@ public struct SyncAccount: Sendable {
     case (nil, .some):
       return .recoveryKeyNeeded
     case (let key?, nil):
-      return try await putCheck(of: key, session) ? .ready : .recoveryKeyNeeded
+      return try await putCheck(of: key, session) ? .made(RecoveryKey(key)) : .recoveryKeyNeeded
     case (nil, nil):
       let key = OwnKey.generate()
       try keychain { () throws(KeychainError) in try ownKeys.save(key) }
