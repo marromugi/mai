@@ -15,6 +15,31 @@ extension URLSession: HTTPTransport {
   }
 }
 
+extension HTTPTransport {
+  /// Sends `request`, and gives back the answer when its status is one of `statuses`.
+  func answer(_ request: URLRequest, expecting statuses: Set<Int>) async throws(ServerError)
+    -> (Data, HTTPURLResponse)
+  {
+    let answer: (Data, HTTPURLResponse)
+    do {
+      answer = try await send(request)
+    } catch {
+      throw .unreachable(error)
+    }
+    let (data, response) = answer
+    guard statuses.contains(response.statusCode) else {
+      let reason = (try? JSONDecoder().decode(Problem.self, from: data))?.error
+      throw .refused(status: response.statusCode, reason: reason ?? "")
+    }
+    return answer
+  }
+}
+
+/// The body of the Worker's answer to a request it refused.
+private struct Problem: Decodable {
+  let error: String
+}
+
 /// Tells one save of a writing from another: the SHA-256 of what was saved, as the server gives it.
 public struct Revision: Sendable, Hashable, Codable {
   public let hex: String
@@ -63,7 +88,7 @@ public struct WritingServer: Sendable {
   }
 
   public func list() async throws(ServerError) -> [ServerEntry] {
-    let (data, _) = try await send(request(for: "writings"), expecting: [200])
+    let (data, _) = try await transport.answer(request(for: "writings"), expecting: [200])
     do {
       return try JSONDecoder().decode(Listing.self, from: data).writings
     } catch {
@@ -75,7 +100,8 @@ public struct WritingServer: Sendable {
   public func read(_ id: UUID) async throws(ServerError) -> (
     envelope: Envelope, revision: Revision
   )? {
-    let (data, response) = try await send(request(for: path(of: id)), expecting: [200, 404])
+    let (data, response) = try await transport.answer(
+      request(for: path(of: id)), expecting: [200, 404])
     guard response.statusCode == 200 else { return nil }
     guard let revision = response.value(forHTTPHeaderField: "Mai-Revision") else {
       throw .unexpectedAnswer("a writing came without its Mai-Revision")
@@ -95,7 +121,7 @@ public struct WritingServer: Sendable {
     request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
     request.setValue(base?.hex ?? "none", forHTTPHeaderField: "Mai-Base-Revision")
     request.httpBody = sealed.bytes
-    let (data, response) = try await send(request, expecting: [200, 409])
+    let (data, response) = try await transport.answer(request, expecting: [200, 409])
     let revision: Revision?
     do {
       revision = try JSONDecoder().decode(Revised.self, from: data).revision
@@ -122,23 +148,6 @@ public struct WritingServer: Sendable {
     return request
   }
 
-  private func send(_ request: URLRequest, expecting statuses: Set<Int>) async throws(ServerError)
-    -> (Data, HTTPURLResponse)
-  {
-    let answer: (Data, HTTPURLResponse)
-    do {
-      answer = try await transport.send(request)
-    } catch {
-      throw .unreachable(error)
-    }
-    let (data, response) = answer
-    guard statuses.contains(response.statusCode) else {
-      let reason = (try? JSONDecoder().decode(Problem.self, from: data))?.error
-      throw .refused(status: response.statusCode, reason: reason ?? "")
-    }
-    return answer
-  }
-
   private struct Listing: Decodable {
     let writings: [ServerEntry]
   }
@@ -147,9 +156,6 @@ public struct WritingServer: Sendable {
     let revision: Revision?
   }
 
-  private struct Problem: Decodable {
-    let error: String
-  }
 }
 
 public enum ServerError: LocalizedError {
