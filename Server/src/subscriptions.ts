@@ -126,6 +126,7 @@ function purchaseOf(
         transaction.revocationDate ??
         Math.max(transaction.expiresDate, renewalInfo?.gracePeriodExpiresDate ?? 0),
       revoked: transaction.revocationDate !== undefined,
+      purchased: transaction.transactionReason === "PURCHASE",
       environment: transaction.environment,
       signedDate,
     },

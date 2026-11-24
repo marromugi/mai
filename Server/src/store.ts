@@ -89,6 +89,12 @@ export type Purchase = {
   /** When that period ends, the end of its billing grace period if later, or when it was refunded or revoked. */
   readonly paidUntil: number;
   readonly revoked: boolean;
+  /**
+   * Whether the transaction is one the person bought (`transactionReason` `PURCHASE`): a first buy,
+   * a resubscription or an upgrade, whose `appAccountToken` is the account it was bought for. A
+   * renewal keeps the token of an earlier purchase.
+   */
+  readonly purchased: boolean;
   readonly environment: Environment;
   /**
    * When the App Store signed what this was read from. It replaces what is kept only when signed
@@ -99,7 +105,7 @@ export type Purchase = {
 
 /**
  * `taken`: the account's ID or its Apple user has an account already. `purchase-taken`: the
- * subscription is another account's. `no-plan`: no plan is sold as the subscription's product.
+ * subscription is another account's, and the purchase is no later one that moves it. `no-plan`: no plan is sold as the subscription's product.
  */
 export type Made = "made" | "challenge-used" | "taken" | "purchase-taken" | "no-plan";
 
@@ -447,8 +453,10 @@ export class Store {
   /**
    * Makes the account, its subscription and its first session, using up `challenge`. Nothing is
    * written when the challenge was used before or has expired, when the account's ID or Apple
-   * user already has an account, when the subscription is another account's, or when no plan is
-   * sold as its product; the challenge is used up all the same.
+   * user already has an account, when the subscription is another account's and the purchase is
+   * about no later billing period than what is kept for it, or when no plan is sold as its product;
+   * the challenge is used up all the same. A purchase about a later billing period moves the
+   * subscription to the new account.
    */
   async makeAccount(
     account: NewAccount,
@@ -461,13 +469,17 @@ export class Store {
       now,
       challenge,
       [
-        `SELECT ${plan} AS plan, EXISTS (SELECT 1 FROM subscriptions
-                   WHERE original_transaction_id = :original AND account_id != :id) AS taken`,
+        `SELECT ${plan} AS plan, ${keptByAnother(":id")} AS taken`,
         `INSERT INTO accounts (id, apple_sub, apple_refresh_token, tier, paid_until, created)
          SELECT :id, :sub, :refresh, tier, :paid, :now FROM plans
          WHERE product_id = :product AND ${claimed}
            AND NOT EXISTS (SELECT 1 FROM accounts WHERE id = :id OR apple_sub = :sub)
-           AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE original_transaction_id = :original)`,
+           AND NOT ${keptByAnother(":id")}`,
+        leaving(":id", `EXISTS (SELECT 1 FROM accounts WHERE ${madeHere})`, "true"),
+        `UPDATE subscriptions SET account_id = :id, product_id = :product, period_ends = :period,
+           paid_until = :paid, environment = :environment, signed_date = :signed
+         WHERE original_transaction_id = :original AND ${later}
+           AND EXISTS (SELECT 1 FROM accounts WHERE ${madeHere})`,
         `INSERT INTO subscriptions (original_transaction_id, account_id, product_id, period_ends,
            paid_until, environment, signed_date)
          SELECT :original, id, :product, :period, :paid, :environment, :signed FROM accounts
@@ -502,12 +514,15 @@ export class Store {
 
   /**
    * Keeps the caller's own subscription, as the app resends it, when it is newer than what is
-   * kept. Answers the account's plan and paid-until time after it.
+   * kept: one kept for the caller, whatever account it names, or one naming the caller that isn't
+   * another account's to keep. Answers the account's plan and paid-until time after it.
    */
   async keepPurchase(caller: Caller, purchase: Purchase, now: number): Promise<Answer<Kept>> {
     const answer = await this.#run(caller, now, "other", (account, allowed) => {
-      const mine = `coalesce(:account = ${account}, 0) AND NOT EXISTS (SELECT 1 FROM subscriptions
-        WHERE original_transaction_id = :original AND account_id != :account)`;
+      const kept = `EXISTS (SELECT 1 FROM subscriptions
+        WHERE original_transaction_id = :original AND account_id = ${account})`;
+      const mine = `(${kept} OR (coalesce(:account = ${account}, 0)
+        AND NOT ${keptByAnother(":account")}))`;
       return [
         `SELECT ${plan} AS plan, ${mine} AS mine`,
         ...keepStatements(`${mine} AND ${allowed}`),
@@ -1393,6 +1408,50 @@ function blob(row: Row, column: string): Uint8Array {
 /** Whether a plan is sold as the subscription's product, `:product`. */
 const plan = "EXISTS (SELECT 1 FROM plans WHERE product_id = :product)";
 
+/**
+ * Whether the transaction, signed at `:signed` about the billing period ending `:period`, is a
+ * purchase (`:purchased`) signed later and about a later period than the kept row of
+ * `subscriptions` it is compared in: a resubscription or an upgrade, which may be for another
+ * account than the row's.
+ */
+const later = ":purchased = 1 AND signed_date < :signed AND period_ends < :period";
+
+/**
+ * Whether the subscription `:original` is kept for an account other than `account` and stays that
+ * account's: the purchase is about no later billing period than what is kept.
+ */
+function keptByAnother(account: string): string {
+  return `EXISTS (SELECT 1 FROM subscriptions WHERE original_transaction_id = :original
+            AND account_id != ${account} AND NOT (${later}))`;
+}
+
+/**
+ * The plan of the account `accounts.id` from those of its subscriptions `which` holds for: the
+ * plan of the one paid for longest, on a tie the larger plan; the plan it has when it has none.
+ */
+function planOf(which: string): string {
+  return `coalesce((SELECT p.tier FROM subscriptions s JOIN plans p ON p.product_id = s.product_id
+                    WHERE s.account_id = accounts.id AND ${which}
+                    ORDER BY s.paid_until DESC, p.writings_bytes DESC LIMIT 1), tier)`;
+}
+
+/**
+ * Cuts the account the subscription `:original` is kept for to `:signed`, when the purchase moves
+ * the subscription from it to `account`, which `there` says can take it: that purchase ended what
+ * the subscription paid for there. The account's other subscriptions still count. Holds
+ * `condition` in its WHERE.
+ */
+function leaving(account: string, there: string, condition: string): string {
+  return `UPDATE accounts SET
+       paid_until = max(min(paid_until, :signed), coalesce((SELECT max(s.paid_until)
+         FROM subscriptions s
+         WHERE s.account_id = accounts.id AND s.original_transaction_id != :original), 0)),
+       tier = ${planOf("s.original_transaction_id != :original")}
+     WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original
+                   AND account_id != ${account} AND ${later} AND ${plan} AND ${there})
+       AND deleting = 0 AND ${condition}`;
+}
+
 function purchaseValues(purchase: Purchase): Record<string, InValue> {
   return {
     original: purchase.originalTransactionId,
@@ -1401,6 +1460,7 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
     paid: purchase.paidUntil,
     environment: purchase.environment,
     signed: purchase.signedDate,
+    purchased: purchase.purchased ? 1 : 0,
   };
 }
 
@@ -1408,14 +1468,26 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
  * Replaces the kept subscription `:original` with newer data about the same or a later billing
  * period, or keeps it for the account `:account` when it isn't kept yet; then sets its account's
  * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan),
- * unless it is marked for deletion. Each statement holds `condition` in its WHERE.
+ * unless it is marked for deletion. A purchase naming another account `:account` changes nothing
+ * unless it is about a later billing period and that account is there and not marked for deletion;
+ * then it moves the subscription to that account, and cuts the account it leaves as `leaving`
+ * says. A renewal stays with the account it is kept for, whatever account it names. Each
+ * statement holds `condition` in its WHERE.
  */
 function keepStatements(condition: string): string[] {
   return [
-    `UPDATE subscriptions SET product_id = :product, period_ends = :period, paid_until = :paid,
-       environment = :environment, signed_date = :signed
+    leaving(
+      ":account",
+      "EXISTS (SELECT 1 FROM accounts WHERE id = :account AND deleting = 0)",
+      condition,
+    ),
+    `UPDATE subscriptions SET account_id = CASE WHEN :purchased = 1 THEN coalesce(:account, account_id)
+       ELSE account_id END, product_id = :product,
+       period_ends = :period, paid_until = :paid, environment = :environment, signed_date = :signed
      WHERE original_transaction_id = :original AND signed_date < :signed
-       AND period_ends <= :period AND ${plan} AND ${condition}`,
+       AND period_ends <= :period AND ${plan} AND ${condition}
+       AND (:purchased = 0 OR :account IS NULL OR :account = account_id
+            OR (${later} AND EXISTS (SELECT 1 FROM accounts WHERE id = :account AND deleting = 0)))`,
     `INSERT INTO subscriptions (original_transaction_id, account_id, product_id, period_ends,
        paid_until, environment, signed_date)
      SELECT :original, id, :product, :period, :paid, :environment, :signed FROM accounts
@@ -1423,9 +1495,7 @@ function keepStatements(condition: string): string[] {
      ON CONFLICT (original_transaction_id) DO NOTHING`,
     `UPDATE accounts SET
        paid_until = (SELECT max(paid_until) FROM subscriptions WHERE account_id = accounts.id),
-       tier = coalesce((SELECT p.tier FROM subscriptions s JOIN plans p ON p.product_id = s.product_id
-                        WHERE s.account_id = accounts.id
-                        ORDER BY s.paid_until DESC, p.writings_bytes DESC LIMIT 1), tier)
+       tier = ${planOf("true")}
      WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original)
        AND deleting = 0 AND ${condition}`,
   ];

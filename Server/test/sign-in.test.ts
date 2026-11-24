@@ -661,17 +661,18 @@ describe("the purchase an account is made with", () => {
     expect(await rowsOf(account, sub)).toEqual({ sessions: 0, accounts: 0 });
   });
 
-  it("refuses a purchase another account was made with", async () => {
+  it("refuses a purchase another account was made with, about the same period", async () => {
     const apple = fakeApple();
     const first = crypto.randomUUID();
     const original = crypto.randomUUID();
+    const expiresDate = Date.now() + 30 * day;
     expect(
       (
         await makeAccount(
           apple,
           newSub(),
           first,
-          await signedTransaction(first, { originalTransactionId: original }),
+          await signedTransaction(first, { originalTransactionId: original, expiresDate }),
         )
       ).answer.status,
     ).toBe(201);
@@ -682,12 +683,105 @@ describe("the purchase an account is made with", () => {
       apple,
       sub,
       second,
-      await signedTransaction(second, { originalTransactionId: original }),
+      await signedTransaction(second, {
+        originalTransactionId: original,
+        expiresDate,
+        signedDate: Date.now() + 1000,
+      }),
     );
     expect(answer.status).toBe(409);
     expect(await answer.json()).toEqual({ error: "the purchase is another account's" });
     expect(await rowsOf(second, sub)).toEqual({ sessions: 0, accounts: 0 });
     expect(await paidFor(first)).toMatchObject({ subscriptions: original });
+  });
+});
+
+describe("an account made with a subscription bought again", () => {
+  it("takes the subscription when its purchase is about a later period", async () => {
+    const apple = fakeApple();
+    const first = crypto.randomUUID();
+    const original = crypto.randomUUID();
+    expect(
+      (
+        await makeAccount(
+          apple,
+          newSub(),
+          first,
+          await signedTransaction(first, {
+            originalTransactionId: original,
+            expiresDate: Date.now() + 30 * day,
+          }),
+        )
+      ).answer.status,
+    ).toBe(201);
+    const firstBefore = await paidFor(first);
+
+    const second = crypto.randomUUID();
+    const expires = Date.now() + 60 * day;
+    const moved = Date.now() + 2000;
+    const { answer } = await makeAccount(
+      apple,
+      newSub(),
+      second,
+      await signedTransaction(second, {
+        originalTransactionId: original,
+        expiresDate: expires,
+        signedDate: moved,
+      }),
+    );
+
+    expect(answer.status).toBe(201);
+    expect(await paidFor(second)).toMatchObject({ subscriptions: original, paid_until: expires });
+    // The purchase that moved it ended what it paid for on the first account.
+    expect(await paidFor(first)).toMatchObject({
+      tier: firstBefore?.["tier"],
+      paid_until: moved,
+      subscriptions: null,
+    });
+  });
+});
+
+describe("an account refused though made with a later purchase", () => {
+  it("moves nothing and cuts nothing", async () => {
+    const apple = fakeApple();
+    const first = crypto.randomUUID();
+    const original = crypto.randomUUID();
+    expect(
+      (
+        await makeAccount(
+          apple,
+          newSub(),
+          first,
+          await signedTransaction(first, {
+            originalTransactionId: original,
+            expiresDate: Date.now() + 30 * day,
+          }),
+        )
+      ).answer.status,
+    ).toBe(201);
+    const firstBefore = await paidFor(first);
+    const taken = await makeAccount(apple);
+
+    const second = crypto.randomUUID();
+    const { answer } = await makeAccount(
+      apple,
+      taken.sub,
+      second,
+      await signedTransaction(second, {
+        originalTransactionId: original,
+        expiresDate: Date.now() + 60 * day,
+        signedDate: Date.now() + 2000,
+      }),
+    );
+
+    expect(answer.status).toBe(409);
+    expect(await paidFor(first)).toEqual(firstBefore);
+    expect(await accountRow(second)).toBeUndefined();
+    const { rows } = await database.execute({
+      sql: "SELECT account_id FROM subscriptions WHERE original_transaction_id = ?",
+      args: [original],
+    });
+    expect(rows[0]?.["account_id"]).toBe(first);
   });
 });
 

@@ -103,6 +103,7 @@ const decodedTransaction = {
   purchaseDate: signedDate - 1000,
   expiresDate: signedDate + 30 * day,
   revocationDate: undefined,
+  transactionReason: "PURCHASE",
   environment: "Sandbox",
   signedDate,
 };
@@ -150,7 +151,12 @@ describe("a signed transaction", () => {
 
   it("is decoded with what it leaves out as undefined", async () => {
     const jws = await signAppStore(
-      transaction({ appAccountToken: undefined, expiresDate: undefined, type: "Non-Consumable" }),
+      transaction({
+        appAccountToken: undefined,
+        expiresDate: undefined,
+        transactionReason: undefined,
+        type: "Non-Consumable",
+      }),
       chain,
     );
     expect(await verifyTransaction(jws, expected)).toEqual({
@@ -159,6 +165,7 @@ describe("a signed transaction", () => {
         ...decodedTransaction,
         appAccountToken: undefined,
         expiresDate: undefined,
+        transactionReason: undefined,
         type: "Non-Consumable",
       },
     });
@@ -489,6 +496,7 @@ describe("a signed transaction's fields", () => {
     ["no purchaseDate", { purchaseDate: undefined }],
     ["a purchaseDate that isn't whole", { purchaseDate: 1.5 }],
     ["a revocationDate that isn't a number", { revocationDate: "yesterday" }],
+    ["a transactionReason that isn't text", { transactionReason: 1 }],
     ["an appAccountToken with text before it", { appAccountToken: `x${accountId}` }],
     ["an appAccountToken with text after it", { appAccountToken: `${accountId}x` }],
   ])("are turned down with %s", async (_, change) => {
