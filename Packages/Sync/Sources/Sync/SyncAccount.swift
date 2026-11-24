@@ -211,8 +211,7 @@ public struct SyncAccount: Sendable {
   ) -> Synchronizer {
     Synchronizer(
       writings: writings,
-      stateFile: stateDirectory.appending(
-        path: "\(keys.session.account.uuidString.lowercased()).json", directoryHint: .notDirectory),
+      stateFile: Self.syncStateFile(of: keys.session.account, in: stateDirectory),
       server: WritingServer(
         url: server.url, token: keys.session.token, transport: server.transport),
       ownKey: keys.ownKey)
@@ -230,6 +229,12 @@ public struct SyncAccount: Sendable {
       throw .server(error)
     }
     try keychain { () throws(KeychainError) in try sessions.remove() }
+  }
+
+  /// Where the sync of `account` keeps its state, in `stateDirectory`.
+  static func syncStateFile(of account: UUID, in stateDirectory: URL) -> URL {
+    stateDirectory.appending(
+      path: "\(account.uuidString.lowercased()).json", directoryHint: .notDirectory)
   }
 
   private func credential(for challenge: String) async throws(AccountError) -> AppleCredential {
