@@ -39,7 +39,7 @@ export async function newSessionToken(): Promise<{ token: string; caller: Caller
   };
 }
 
-async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
+export async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
 }
 

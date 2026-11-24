@@ -8,6 +8,7 @@ export function answered<T>(answer: Answer<T>, respond: (value: T) => Response):
 
 const refusals: Record<Refusal, { status: number; reason: string }> = {
   session: { status: 401, reason: "the session token is unknown, or its session has ended" },
+  agent: { status: 401, reason: "the agent token is unknown, or its agent was revoked" },
   lapsed: {
     status: 402,
     reason: "the account's subscription has lapsed; it is read but not written",

@@ -175,7 +175,8 @@ function storeWith<K extends keyof Store>(
 
 /**
  * An account with a row in every table that holds an account's rows, and photos in R2: a second
- * session, a writing, a photo and its thumbnail, the day's usage and its subscription. Its Apple
+ * session, a writing, a photo and its thumbnail, the day's usage, its subscription, an agent, its
+ * read mode, an exclusion, and a copy of the writing for the agent. Its Apple
  * refresh token is sealed as `POST /account` seals it.
  */
 async function fullAccount(product?: string) {
@@ -194,11 +195,34 @@ async function fullAccount(product?: string) {
           VALUES (?, ?, ?, ?, ?)`,
     args: [second.caller.session, made.account, second.caller.secretSha256, Date.now(), Date.now()],
   });
-  await database.execute({
-    sql: `INSERT INTO writings (account_id, id, revision, updated, size, envelope)
-          VALUES (?, ?, 'r', 0, 3, X'010203')`,
-    args: [made.account, crypto.randomUUID()],
-  });
+  const writing = crypto.randomUUID();
+  const agent = crypto.randomUUID();
+  await database.batch([
+    {
+      sql: `INSERT INTO writings (account_id, id, revision, updated, size, envelope)
+            VALUES (?, ?, 'r', 0, 3, X'010203')`,
+      args: [made.account, writing],
+    },
+    {
+      sql: `INSERT INTO agents (id, account_id, public_key, signature, token_sha256, created)
+            VALUES (?, ?, X'01', X'02', X'03', 0)`,
+      args: [agent, made.account],
+    },
+    {
+      // Far ahead, so that no test's sweep reaches it while the account is paid for.
+      sql: "INSERT INTO read_modes (account_id, until) VALUES (?, ?)",
+      args: [made.account, Date.now() + 10 * 365 * 24 * 60 * 60 * 1000],
+    },
+    {
+      sql: "INSERT INTO exclusions (account_id, writing_id) VALUES (?, ?)",
+      args: [made.account, crypto.randomUUID()],
+    },
+    {
+      sql: `INSERT INTO copies (account_id, writing_id, agent_id, revision, wrapped, expires)
+            SELECT account_id, ?, ?, 'r', X'04', until FROM read_modes WHERE account_id = ?`,
+      args: [writing, agent, made.account],
+    },
+  ]);
   const photo = crypto.randomUUID();
   const put = (path: string) =>
     serveWith(request("PUT", path, made.token, new Uint8Array(20).fill(7)));
@@ -227,9 +251,15 @@ const everyRow = {
   photos: 2,
   usage: 1,
   subscriptions: 1,
+  copies: 1,
+  read_modes: 1,
+  exclusions: 1,
+  agents: 1,
   sessions: 2,
 };
-const noRow = { accounts: 0, writings: 0, photos: 0, usage: 0, subscriptions: 0, sessions: 0 };
+/** A lapsed account's rows: its read mode and copies are swept once it lapses. */
+const lapsedRows = { ...everyRow, copies: 0, read_modes: 0 };
+const noRow = Object.fromEntries(Object.keys(everyRow).map((table) => [table, 0]));
 
 /** Every key R2 holds under `<account>/`, over as many pages as it lists them in. */
 async function keysOf(account: string): Promise<string[]> {
@@ -306,8 +336,10 @@ describe("deleting an account", () => {
     });
     expect((await deleteAccount(old.token)).status).toBe(401);
 
+    expect(await rowsOf(one.account)).toEqual(everyRow);
+    // Another test's sweep may have deleted the ended sessions.
+    expect(await rowsOf(old.account)).toEqual({ ...everyRow, sessions: expect.any(Number) });
     for (const account of [one, old]) {
-      expect(await rowsOf(account.account)).toEqual(everyRow);
       expect(await keysOf(account.account)).toHaveLength(2);
     }
   });
@@ -511,11 +543,16 @@ function nextLapse(): number {
   return lapse;
 }
 
-/** `fullAccount`, with its subscription, and so the account, paid until `at`. */
+/**
+ * `fullAccount`, with its subscription, and so the account, paid until `at`, and without the read
+ * mode and copies a sweep deletes once it lapses.
+ */
 async function lapsedAccount(at: number) {
   const made = await fullAccount();
   await database.batch(
     [
+      { sql: "DELETE FROM read_modes WHERE account_id = ?", args: [made.account] },
+      { sql: "DELETE FROM copies WHERE account_id = ?", args: [made.account] },
       {
         sql: `UPDATE subscriptions SET period_ends = ?, paid_until = ?, signed_date = ?
               WHERE account_id = ?`,
@@ -602,7 +639,7 @@ describe("the cron trigger, for lapsed accounts", () => {
     expect(apple.revoked).toEqual([old.refreshToken]);
     expect(await rowsOf(old.account)).toEqual(noRow);
     expect(await keysOf(old.account)).toEqual([]);
-    expect(await rowsOf(recent.account)).toEqual(everyRow);
+    expect(await rowsOf(recent.account)).toEqual(lapsedRows);
     expect(await keysOf(recent.account)).toHaveLength(2);
   });
 
@@ -616,7 +653,7 @@ describe("the cron trigger, for lapsed accounts", () => {
     const apple = fakeApple();
     await deleteLapsed(at + lapsedKept, { apple });
     expect(apple.revoked).toEqual([]);
-    expect(await rowsOf(one.account)).toEqual(everyRow);
+    expect(await rowsOf(one.account)).toEqual(lapsedRows);
     expect(await keysOf(one.account)).toHaveLength(2);
 
     await deleteLapsed(back + month + lapsedKept, { apple });
@@ -634,7 +671,7 @@ describe("the cron trigger, for lapsed accounts", () => {
           return reached.markForDeletion(account, now);
         }),
     });
-    expect(await rowsOf(one.account)).toEqual(everyRow);
+    expect(await rowsOf(one.account)).toEqual(lapsedRows);
     expect(await keysOf(one.account)).toHaveLength(2);
   });
 
@@ -704,7 +741,7 @@ describe("the cron trigger, for lapsed accounts", () => {
         }),
     });
     expect(await paidUntilOf(one.account)).toBe(at + day + month);
-    expect(await rowsOf(one.account)).toEqual(everyRow);
+    expect(await rowsOf(one.account)).toEqual(lapsedRows);
   });
 
   it("sweeps R2 again for a put that landed while the rows went, whatever rows the account had", async () => {
@@ -747,9 +784,9 @@ describe("the cron trigger, for lapsed accounts", () => {
 
     expect(await rowsOf(fine.account)).toEqual(noRow);
     expect(await keysOf(fine.account)).toEqual([]);
-    expect(await rowsOf(sealedWrong.account)).toEqual(everyRow);
+    expect(await rowsOf(sealedWrong.account)).toEqual(lapsedRows);
     expect(await keysOf(sealedWrong.account)).toHaveLength(2);
-    expect(await rowsOf(r2Fails.account)).toEqual(everyRow);
+    expect(await rowsOf(r2Fails.account)).toEqual(lapsedRows);
     expect(await keysOf(r2Fails.account)).toHaveLength(2);
     expect(logged.mock.calls.map(([message]) => String(message)).toSorted()).toEqual(
       [
@@ -784,13 +821,13 @@ describe("the cron trigger, for lapsed accounts", () => {
     await deleteLapsed(at + lapsedKept, {
       apple: fakeApple(() => new Response("unavailable", { status: 503 })),
     });
-    expect(await rowsOf(one.account)).toEqual(everyRow);
+    expect(await rowsOf(one.account)).toEqual(lapsedRows);
     expect(await keysOf(one.account)).toHaveLength(2);
     expect(warned).toHaveBeenCalledTimes(1);
 
     // Not marked, so a resubscription still keeps it.
     await testStore.keepNotified(renewal(one, at + lapsedKept));
     await deleteLapsed(at + lapsedKept);
-    expect(await rowsOf(one.account)).toEqual(everyRow);
+    expect(await rowsOf(one.account)).toEqual(lapsedRows);
   });
 });

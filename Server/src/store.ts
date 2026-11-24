@@ -12,6 +12,8 @@ import type { Challenge } from "./challenges";
 import { lastUsedResolution, sessionLifetime, type Caller } from "./sessions";
 import type { Environment } from "./app-store";
 import { parsePhotoId, parsePhotoPart, type PhotoId, type PhotoPart } from "./photo-id";
+import { parseAgentId, type AgentCaller, type AgentId } from "./agents";
+import { liveAgentsAtMost, type Approval, type Copies, type CopyRefusal } from "./read-mode";
 
 /**
  * The only file that speaks to Turso. Every request is one `batch()`, so one round trip and one
@@ -26,10 +28,10 @@ import { parsePhotoId, parsePhotoPart, type PhotoId, type PhotoPart } from "./ph
 export type Listed = { id: WritingId; revision: Revision; updated: number; size: number };
 
 /**
- * Why a caller was turned away: no live session, a write to an account whose subscription has
- * lapsed, or a limit of its plan reached.
+ * Why a caller was turned away: no live session, an agent token that is unknown or whose agent was
+ * revoked, a write to an account whose subscription has lapsed, or a limit of its plan reached.
  */
-export type Refusal = "session" | "lapsed" | Limit;
+export type Refusal = "session" | "agent" | "lapsed" | Limit;
 export type Limit = "requests" | "lists" | "saves" | "photos" | "storage" | "photo-storage";
 
 export type Answer<T> = { ok: true; value: T } | { ok: false; refusal: Refusal };
@@ -37,6 +39,28 @@ export type Answer<T> = { ok: true; value: T } | { ok: false; refusal: Refusal }
 export type Saved = { saved: boolean; revision: Revision | null };
 
 export type Read = { revision: Revision; bytes: ArrayBuffer } | undefined;
+
+/** An agent as devices see it, to check its key before they wrap a writing's key for it. */
+export type Agent = {
+  id: AgentId;
+  publicKey: Uint8Array;
+  signature: Uint8Array;
+  revoked: boolean;
+};
+
+/** Not approved: the account has `liveAgentsAtMost` agents that aren't revoked. */
+export type Approved = { approved: true; agent: AgentId } | { approved: false };
+
+/** What the server did with each copy sent, in the order sent: kept, or why not. */
+export type CopyKept = { writing: WritingId; agent: AgentId; refused: CopyRefusal | null };
+
+/** A writing an agent has a copy for, and when the copy expires. */
+export type AgentListed = Listed & { expires: number };
+
+/** A writing as an agent reads it: the sealed writing, and its key wrapped for the agent. */
+export type AgentRead =
+  | { revision: Revision; bytes: ArrayBuffer; wrapped: Uint8Array; expires: number }
+  | undefined;
 
 export type NewAccount = {
   readonly id: AccountId;
@@ -107,6 +131,9 @@ export type SignedIn =
  * not counted.
  */
 type Counted = "list" | "save" | "photo" | "write" | "other";
+
+/** Who a request comes from: a device, by its session, or an agent, by its token. */
+type Who = Caller | AgentCaller;
 
 /** One upload of a part of a photo, which reserved room for it in the account's plan. */
 export type Upload = {
@@ -243,6 +270,13 @@ export class Store {
               args: { ...writing, base },
             },
         {
+          sql: `DELETE FROM copies WHERE account_id = ${account} AND writing_id = :id
+                  AND revision IS NOT (SELECT revision FROM writings
+                                       WHERE account_id = ${account} AND id = :id)
+                  AND ${allowed}`,
+          args: { id: envelope.id },
+        },
+        {
           sql: `SELECT revision FROM writings WHERE account_id = ${account} AND id = :id`,
           args: { id: envelope.id },
         },
@@ -256,7 +290,7 @@ export class Store {
     if (!answer.ok) {
       return answer;
     }
-    const [written, current] = answer.value;
+    const [written, , current] = answer.value;
     const revision = current?.rows[0]?.["revision"];
     return {
       ok: true,
@@ -398,7 +432,7 @@ export class Store {
   }
 
   /** Checks the caller and counts the request, for a request that does nothing else. */
-  async admit(caller: Caller, now: number): Promise<Answer<undefined>> {
+  async admit(caller: Caller | AgentCaller, now: number): Promise<Answer<undefined>> {
     const answer = await this.#run(caller, now, "other", () => []);
     return answer.ok ? { ok: true, value: undefined } : answer;
   }
@@ -709,6 +743,310 @@ export class Store {
     };
   }
 
+  /**
+   * Keeps an agent the caller's device approved, under the ID and token secret of `token`, unless
+   * the account has `liveAgentsAtMost` agents that aren't revoked.
+   */
+  async approveAgent(
+    caller: Caller,
+    approval: Approval,
+    token: AgentCaller,
+    now: number,
+  ): Promise<Answer<Approved>> {
+    const answer = await this.#run(caller, now, "write", (account, allowed) => [
+      {
+        sql: `INSERT INTO agents (id, account_id, public_key, signature, token_sha256, created)
+              SELECT :agent_id, ${account}, :public_key, :signature, :token, :now
+              WHERE ${allowed}
+                AND (SELECT count(*) FROM agents WHERE account_id = ${account} AND revoked = 0)
+                  < :most`,
+        args: {
+          agent_id: token.agent,
+          public_key: approval.publicKey,
+          signature: approval.signature,
+          token: token.secretSha256,
+          most: liveAgentsAtMost,
+        },
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    return {
+      ok: true,
+      value:
+        answer.value[0]?.rowsAffected === 1
+          ? { approved: true, agent: token.agent }
+          : { approved: false },
+    };
+  }
+
+  /** The caller's agents, revoked ones included, oldest first. */
+  async agents(caller: Caller, now: number): Promise<Answer<Agent[]>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT id, public_key, signature, revoked FROM agents
+              WHERE account_id = ${account} AND ${allowed} ORDER BY created, rowid`,
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    return {
+      ok: true,
+      value: (answer.value[0]?.rows ?? []).map((row) => ({
+        id: stored(parseAgentId, row["id"]),
+        publicKey: blob(row, "public_key"),
+        signature: blob(row, "signature"),
+        revoked: Number(row["revoked"]) === 1,
+      })),
+    };
+  }
+
+  /**
+   * Revokes the caller's agent `agent` and deletes the copies wrapped for it. False when the
+   * account has no such agent. Revoking keeps an agent from reading, so a lapsed account may.
+   */
+  async revokeAgent(caller: Caller, agent: AgentId, now: number): Promise<Answer<boolean>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `UPDATE agents SET revoked = 1
+              WHERE account_id = ${account} AND id = :agent_id AND ${allowed}`,
+        args: { agent_id: agent },
+      },
+      {
+        sql: `DELETE FROM copies WHERE account_id = ${account} AND agent_id = :agent_id AND ${allowed}`,
+        args: { agent_id: agent },
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    return { ok: true, value: answer.value[0]?.rowsAffected === 1 };
+  }
+
+  /** When the caller's read mode ends, or null when it is off. */
+  async readMode(caller: Caller, now: number): Promise<Answer<number | null>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT until FROM read_modes
+              WHERE account_id = ${account} AND until > :now AND ${allowed}`,
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    const until = answer.value[0]?.rows[0]?.["until"];
+    return { ok: true, value: until === undefined ? null : Number(until) };
+  }
+
+  /**
+   * Turns the caller's read mode on until `until`, which is after `now`, and deletes the copies
+   * wrapped for any other period.
+   */
+  async turnOnReadMode(caller: Caller, until: number, now: number): Promise<Answer<undefined>> {
+    const answer = await this.#run(caller, now, "write", (account, allowed) => [
+      {
+        sql: `INSERT INTO read_modes (account_id, until) SELECT ${account}, :until WHERE ${allowed}
+              ON CONFLICT (account_id) DO UPDATE SET until = excluded.until`,
+        args: { until },
+      },
+      {
+        sql: `DELETE FROM copies WHERE account_id = ${account} AND expires != :until AND ${allowed}`,
+        args: { until },
+      },
+    ]);
+    return answer.ok ? { ok: true, value: undefined } : answer;
+  }
+
+  /**
+   * Turns the caller's read mode off and deletes every copy. A lapsed account may, as it keeps
+   * agents from reading.
+   */
+  async turnOffReadMode(caller: Caller, now: number): Promise<Answer<undefined>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      { sql: `DELETE FROM read_modes WHERE account_id = ${account} AND ${allowed}` },
+      { sql: `DELETE FROM copies WHERE account_id = ${account} AND ${allowed}` },
+    ]);
+    return answer.ok ? { ok: true, value: undefined } : answer;
+  }
+
+  /** The caller's excluded writings. */
+  async exclusions(caller: Caller, now: number): Promise<Answer<WritingId[]>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT writing_id FROM exclusions
+              WHERE account_id = ${account} AND ${allowed} ORDER BY writing_id`,
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    return {
+      ok: true,
+      value: (answer.value[0]?.rows ?? []).map((row) => stored(parseWritingId, row["writing_id"])),
+    };
+  }
+
+  /**
+   * Excludes the caller's writing `id` and deletes its copies. A lapsed account may, as it keeps
+   * agents from reading.
+   */
+  async exclude(caller: Caller, id: WritingId, now: number): Promise<Answer<undefined>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `INSERT INTO exclusions (account_id, writing_id) SELECT ${account}, :id WHERE ${allowed}
+              ON CONFLICT (account_id, writing_id) DO NOTHING`,
+        args: { id },
+      },
+      {
+        sql: `DELETE FROM copies WHERE account_id = ${account} AND writing_id = :id AND ${allowed}`,
+        args: { id },
+      },
+    ]);
+    return answer.ok ? { ok: true, value: undefined } : answer;
+  }
+
+  /** Takes the exclusion off the caller's writing `id`; its copies come with its next save. */
+  async include(caller: Caller, id: WritingId, now: number): Promise<Answer<undefined>> {
+    const answer = await this.#run(caller, now, "write", (account, allowed) => [
+      {
+        sql: `DELETE FROM exclusions WHERE account_id = ${account} AND writing_id = :id AND ${allowed}`,
+        args: { id },
+      },
+    ]);
+    return answer.ok ? { ok: true, value: undefined } : answer;
+  }
+
+  /**
+   * Keeps each copy only when, at `now`, the caller's read mode is on and ends at `copies.expires`,
+   * its writing isn't excluded, its agent is the account's and isn't revoked, and its revision is
+   * the writing's current one; then it replaces the agent's copy of that writing.
+   */
+  async keepCopies(caller: Caller, copies: Copies, now: number): Promise<Answer<CopyKept[]>> {
+    const sent = JSON.stringify(
+      copies.copies.map(({ writing, agent, revision }) => ({ writing, agent, revision })),
+    );
+    const answer = await this.#run(caller, now, "write", (account, allowed) => [
+      ...copies.copies.map((copy): Statement => ({
+        sql: `INSERT INTO copies (account_id, writing_id, agent_id, revision, wrapped, expires)
+                SELECT ${account}, :writing, :agent_id, :revision, :wrapped, :expires
+                WHERE ${allowed} AND EXISTS (${copyModeOn(account)})
+                  AND NOT EXISTS (${copyExcluded(account, ":writing")})
+                  AND EXISTS (${copyAgentLive(account, ":agent_id")})
+                  AND EXISTS (${copyRevisionCurrent(account, ":writing", ":revision")})
+                ON CONFLICT (account_id, writing_id, agent_id) DO UPDATE SET
+                  revision = excluded.revision, wrapped = excluded.wrapped,
+                  expires = excluded.expires`,
+        args: {
+          writing: copy.writing,
+          agent_id: copy.agent,
+          revision: copy.revision,
+          wrapped: copy.wrapped,
+          expires: copies.expires,
+        },
+      })),
+      {
+        sql: `SELECT CASE
+                WHEN NOT EXISTS (${copyModeOn(account)}) THEN 'read-mode'
+                WHEN EXISTS (${copyExcluded(account, "json_extract(j.value, '$.writing')")})
+                  THEN 'excluded'
+                WHEN NOT EXISTS (${copyAgentLive(account, "json_extract(j.value, '$.agent')")})
+                  THEN 'agent'
+                WHEN NOT EXISTS (${copyRevisionCurrent(
+                  account,
+                  "json_extract(j.value, '$.writing')",
+                  "json_extract(j.value, '$.revision')",
+                )}) THEN 'revision'
+              END AS refused
+              FROM json_each(:sent) j WHERE ${allowed} ORDER BY j.key`,
+        args: { sent, expires: copies.expires },
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    const reasons = answer.value[copies.copies.length]?.rows ?? [];
+    return {
+      ok: true,
+      value: copies.copies.map((copy, index) => ({
+        writing: copy.writing,
+        agent: copy.agent,
+        refused:
+          answer.value[index]?.rowsAffected === 1 ? null : copyRefusal(reasons[index]?.["refused"]),
+      })),
+    };
+  }
+
+  /**
+   * The writings the agent has a copy for that hasn't expired by `now`, while its account is paid
+   * for.
+   */
+  async agentWritings(agent: AgentCaller, now: number): Promise<Answer<AgentListed[]>> {
+    const answer = await this.#run(agent, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT w.id, w.revision, w.updated, w.size, c.expires
+              FROM copies c
+              JOIN writings w
+                ON w.account_id = c.account_id AND w.id = c.writing_id AND w.revision = c.revision
+              WHERE c.account_id = ${account} AND c.agent_id = :agent AND c.expires > :now
+                AND ${agentMayRead(account)} AND ${allowed}
+              ORDER BY w.id`,
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    return {
+      ok: true,
+      value: (answer.value[0]?.rows ?? []).map((row) => ({
+        id: stored(parseWritingId, row["id"]),
+        revision: stored(parseRevision, row["revision"]),
+        updated: Number(row["updated"]),
+        size: Number(row["size"]),
+        expires: Number(row["expires"]),
+      })),
+    };
+  }
+
+  /**
+   * The writing `id` and its key wrapped for the agent, when the agent has a copy of it that
+   * hasn't expired by `now` and its account is paid for; undefined otherwise.
+   */
+  async agentRead(agent: AgentCaller, id: WritingId, now: number): Promise<Answer<AgentRead>> {
+    const answer = await this.#run(agent, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT w.revision, w.envelope, c.wrapped, c.expires
+              FROM copies c
+              JOIN writings w
+                ON w.account_id = c.account_id AND w.id = c.writing_id AND w.revision = c.revision
+              WHERE c.account_id = ${account} AND c.agent_id = :agent AND c.writing_id = :id
+                AND c.expires > :now AND ${agentMayRead(account)} AND ${allowed}`,
+        args: { id },
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    const row = answer.value[0]?.rows[0];
+    if (row === undefined) {
+      return { ok: true, value: undefined };
+    }
+    const envelope = row["envelope"];
+    if (!(envelope instanceof ArrayBuffer)) {
+      throw new Error("writings.envelope is a BLOB, but came back as something else");
+    }
+    return {
+      ok: true,
+      value: {
+        revision: stored(parseRevision, row["revision"]),
+        bytes: envelope,
+        wrapped: blob(row, "wrapped"),
+        expires: Number(row["expires"]),
+      },
+    };
+  }
+
   /** Removes what has expired by `now`; run by the Worker's cron trigger. */
   async sweep(now: number): Promise<void> {
     await this.#client.batch(
@@ -721,6 +1059,17 @@ export class Store {
         {
           sql: "DELETE FROM used_challenges WHERE expires <= :swept",
           args: { swept: now - usedChallengeMargin },
+        },
+        // Read mode ends at its until, and when the account's subscription lapses.
+        {
+          sql: `DELETE FROM copies WHERE expires <= :now
+                  OR account_id IN (SELECT id FROM accounts WHERE paid_until <= :now)`,
+          args: { now },
+        },
+        {
+          sql: `DELETE FROM read_modes WHERE until <= :now
+                  OR account_id IN (SELECT id FROM accounts WHERE paid_until <= :now)`,
+          args: { now },
         },
       ],
       "write",
@@ -780,17 +1129,19 @@ export class Store {
   /**
    * Runs `work` for the caller in one batch: first what the caller may do, then `work`, whose
    * statements must hold `allowed` in their WHERE so they do nothing for a caller turned away,
-   * then the count against the plan. Answers the results of `work`'s statements.
+   * then the count against the plan. Answers the results of `work`'s statements. An agent's
+   * requests count against its account's plan as a device's do.
    */
   async #run(
-    caller: Caller,
+    who: Who,
     now: number,
     counted: Counted,
     work: (account: string, allowed: string) => Statement[],
   ): Promise<Answer<ResultSet[]>> {
+    const agent = "agent" in who;
     const args: Record<string, InValue> = {
-      session: caller.session,
-      hash: caller.secretSha256,
+      ...(agent ? { agent: who.agent } : { session: who.session }),
+      hash: who.secretSha256,
       now,
       alive: now - sessionLifetime,
       stale: now - lastUsedResolution,
@@ -800,11 +1151,17 @@ export class Store {
       photo: counted === "photo" ? 1 : 0,
       write: counted === "save" || counted === "photo" || counted === "write" ? 1 : 0,
     };
-    const callerRows = `FROM sessions s
-      JOIN accounts a ON a.id = s.account_id
-      JOIN plans p ON p.tier = a.tier
-      LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
-      WHERE s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive`;
+    const callerRows = agent
+      ? `FROM agents g
+        JOIN accounts a ON a.id = g.account_id
+        JOIN plans p ON p.tier = a.tier
+        LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
+        WHERE g.id = :agent AND g.token_sha256 = :hash AND g.revoked = 0`
+      : `FROM sessions s
+        JOIN accounts a ON a.id = s.account_id
+        JOIN plans p ON p.tier = a.tier
+        LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
+        WHERE s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive`;
     // An account writes only while its subscription is paid for.
     const paid = `(:write = 0 OR ${paidNow})`;
     const left = {
@@ -815,8 +1172,19 @@ export class Store {
     };
     const allowed = `EXISTS (SELECT 1 ${callerRows}
       AND ${paid} AND ${left.requests} AND ${left.lists} AND ${left.saves} AND ${left.photos})`;
-    const account = "(SELECT account_id FROM sessions WHERE id = :session)";
+    const account = agent
+      ? "(SELECT account_id FROM agents WHERE id = :agent)"
+      : "(SELECT account_id FROM sessions WHERE id = :session)";
     const statements = work(account, allowed);
+    const touchSession: Statement[] = agent
+      ? []
+      : [
+          {
+            sql: `UPDATE sessions SET last_used = :now
+                  WHERE id = :session AND token_sha256 = :hash
+                    AND last_used > :alive AND last_used <= :stale`,
+          },
+        ];
 
     const results = await this.#client.batch(
       [
@@ -832,18 +1200,14 @@ export class Store {
                   lists = lists + excluded.lists, saves = saves + excluded.saves,
                   photos = photos + excluded.photos`,
         },
-        {
-          sql: `UPDATE sessions SET last_used = :now
-                WHERE id = :session AND token_sha256 = :hash
-                  AND last_used > :alive AND last_used <= :stale`,
-        },
+        ...touchSession,
       ].map((statement: Statement) => bind(statement.sql, { ...args, ...statement.args })),
       "write",
     );
 
     const gate = results[0]?.rows[0];
     if (gate === undefined) {
-      return { ok: false, refusal: "session" };
+      return { ok: false, refusal: agent ? "agent" : "session" };
     }
     for (const limit of ["lapsed", "requests", "lists", "saves", "photos"] as const) {
       if (Number(gate[limit]) !== 1) {
@@ -859,7 +1223,17 @@ export class Store {
  * empties of it; `sessions` last, since `DELETE /account` checks the caller's session in each
  * delete.
  */
-export const accountTables = ["writings", "photos", "usage", "subscriptions", "sessions"] as const;
+export const accountTables = [
+  "writings",
+  "photos",
+  "usage",
+  "subscriptions",
+  "copies",
+  "read_modes",
+  "exclusions",
+  "agents",
+  "sessions",
+] as const;
 
 /** Whether the session `s` is the caller's, and live at `:now`, with `callerValues`. */
 const liveSession = "s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive";
@@ -870,6 +1244,49 @@ function callerValues(caller: Caller, now: number): Record<string, InValue> {
 
 /** Whether the account `a` is paid for at `:now`; once it isn't, the account has lapsed. */
 const paidNow = "a.paid_until > :now";
+
+/**
+ * Whether an agent of `account` may read: only while the account is paid for, since the cron
+ * trigger deletes a lapsed account's copies up to a minute after it lapses.
+ */
+function agentMayRead(account: string): string {
+  return `EXISTS (SELECT 1 FROM accounts a WHERE a.id = ${account} AND ${paidNow})`;
+}
+
+/** What `keepCopies` checks of each copy, `writing`, `agent` and `revision` being SQL for each. */
+function copyModeOn(account: string): string {
+  return `SELECT 1 FROM read_modes m
+          WHERE m.account_id = ${account} AND m.until > :now AND m.until = :expires`;
+}
+
+function copyExcluded(account: string, writing: string): string {
+  return `SELECT 1 FROM exclusions e WHERE e.account_id = ${account} AND e.writing_id = ${writing}`;
+}
+
+function copyAgentLive(account: string, agent: string): string {
+  return `SELECT 1 FROM agents g WHERE g.account_id = ${account} AND g.id = ${agent} AND g.revoked = 0`;
+}
+
+function copyRevisionCurrent(account: string, writing: string, revision: string): string {
+  return `SELECT 1 FROM writings w
+          WHERE w.account_id = ${account} AND w.id = ${writing} AND w.revision = ${revision}`;
+}
+
+function copyRefusal(value: unknown): CopyRefusal {
+  if (value === "read-mode" || value === "excluded" || value === "agent" || value === "revision") {
+    return value;
+  }
+  throw new Error(`a copy was refused for ${String(value)}, which keepCopies doesn't give`);
+}
+
+/** The BLOB in `column` of `row`, which only this file writes. */
+function blob(row: Row, column: string): Uint8Array {
+  const value = row[column];
+  if (!(value instanceof ArrayBuffer)) {
+    throw new Error(`${column} is a BLOB, but came back as something else`);
+  }
+  return new Uint8Array(value);
+}
 
 /** Whether a plan is sold as the subscription's product, `:product`. */
 const plan = "EXISTS (SELECT 1 FROM plans WHERE product_id = :product)";

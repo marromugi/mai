@@ -153,3 +153,48 @@ END;
 CREATE TRIGGER photos_removed AFTER DELETE ON photos BEGIN
   UPDATE accounts SET photos_bytes = photos_bytes - OLD.size WHERE id = OLD.account_id;
 END;
+
+-- Read mode (#26). An agent is approved on a device: public_key and signature are what that
+-- device sent, for the other devices to check before they wrap a writing's key for it, and
+-- token_sha256 is the SHA-256 of its token's secret (src/agents.ts). A revoked agent's row stays,
+-- with revoked 1, so that devices learn it was revoked.
+CREATE TABLE agents (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  public_key BLOB NOT NULL,
+  signature BLOB NOT NULL,
+  token_sha256 BLOB NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0 CHECK (revoked IN (0, 1)),
+  created INTEGER NOT NULL
+) STRICT;
+CREATE INDEX agents_account ON agents (account_id);
+
+-- An account's read mode is on while the time is before until. One past until reads as off, and
+-- stays until the cron trigger sweeps it.
+CREATE TABLE read_modes (
+  account_id TEXT PRIMARY KEY,
+  until INTEGER NOT NULL
+) STRICT;
+CREATE INDEX read_modes_until ON read_modes (until);
+
+-- A writing kept from agents: the server takes no copy of it. Only this mark is kept here.
+CREATE TABLE exclusions (
+  account_id TEXT NOT NULL,
+  writing_id TEXT NOT NULL,
+  PRIMARY KEY (account_id, writing_id)
+) STRICT, WITHOUT ROWID;
+
+-- A writing's key wrapped by a device for an agent, for the revision it was wrapped for and the
+-- read mode it was wrapped in: expires is that mode's until. It is never served at or past
+-- expires, and the cron trigger sweeps it.
+CREATE TABLE copies (
+  account_id TEXT NOT NULL,
+  writing_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  wrapped BLOB NOT NULL,
+  expires INTEGER NOT NULL,
+  PRIMARY KEY (account_id, writing_id, agent_id)
+) STRICT;
+CREATE INDEX copies_expires ON copies (expires);
+CREATE INDEX copies_agent ON copies (agent_id);
