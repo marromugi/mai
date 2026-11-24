@@ -10,16 +10,17 @@ export type Sent = {
 };
 
 /**
- * Sends `path` to the Worker with `token`, as of the time `now`, with Apple never reached. The time
- * is given, not faked, since test files running side by side share `Date`.
+ * Sends `path` to the Worker with `token`, or with `headers` when given, as of the time `now`, with
+ * Apple never reached. The time is given, not faked, since test files running side by side share
+ * `Date`.
  */
 export function callAt(
   now: number,
   path: string,
   token: string,
   { method = "GET", json, body, base }: Sent = {},
+  headers = new Headers({ Authorization: `Bearer ${token}` }),
 ): Promise<Response> {
-  const headers = new Headers({ Authorization: `Bearer ${token}` });
   if (json !== undefined) headers.set("Content-Type", "application/json");
   if (body !== undefined) headers.set("Content-Type", "application/octet-stream");
   if (base !== undefined) headers.set("Mai-Base-Revision", base);

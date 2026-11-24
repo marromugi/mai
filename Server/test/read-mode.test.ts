@@ -102,6 +102,20 @@ async function reading() {
   return { account, token, writing, revision, agent, until };
 }
 
+/** Every read-mode row of `account`, to show a request changed none. */
+async function readModeRowsOf(account: string): Promise<unknown[]> {
+  const results = await database.batch(
+    [
+      "SELECT id, hex(public_key) AS key, revoked FROM agents WHERE account_id = ? ORDER BY id",
+      "SELECT until FROM read_modes WHERE account_id = ?",
+      "SELECT writing_id FROM exclusions WHERE account_id = ? ORDER BY writing_id",
+      `SELECT writing_id, agent_id, revision, hex(wrapped) AS wrapped, expires FROM copies
+       WHERE account_id = ? ORDER BY writing_id, agent_id`,
+    ].map((sql) => ({ sql, args: [account] })),
+  );
+  return results.map((result) => result.rows);
+}
+
 async function copiesOf(account: string): Promise<number> {
   const { rows } = await database.execute({
     sql: "SELECT count(*) AS count FROM copies WHERE account_id = ?",
@@ -136,6 +150,36 @@ describe("an agent reading", () => {
     const other = crypto.randomUUID();
     await save(token, other);
     expect((await call(`/agent/writings/${other}`, { token: agent.token })).status).toBe(404);
+  });
+
+  it("is refused with its agent's ID and another secret, or without Bearer", async () => {
+    const { writing, agent } = await reading();
+    const [, id, secret = ""] = agent.token.split(".");
+    const other = `${secret.slice(0, -1)}${secret.endsWith("A") ? "B" : "A"}`;
+    for (const authorization of [`agent.${id}.${other}`, agent.token]) {
+      for (const path of ["/agent/writings", `/agent/writings/${writing}`, "/agent/nothing"]) {
+        const headers = new Headers({
+          Authorization: authorization === agent.token ? authorization : `Bearer ${authorization}`,
+        });
+        const answer = await callAt(now, path, "", {}, headers);
+        expect(answer.status).toBe(401);
+        expect(await answer.json()).toEqual({
+          error:
+            authorization === agent.token
+              ? "the Authorization header doesn't hold an agent token"
+              : "the agent token is unknown, or its agent was revoked",
+        });
+      }
+    }
+  });
+
+  it("counts a request turned down for its shape against the day's requests", async () => {
+    const { token } = await newAccount("test-daily");
+    const agent = await approve(token);
+    for (let used = 1; used < 4; used += 1) {
+      expect((await call("/agent/nothing", { token: agent.token })).status).toBe(404);
+    }
+    expect((await call("/agent/nothing", { token: agent.token })).status).toBe(429);
   });
 
   it("only reads", async () => {
@@ -238,11 +282,27 @@ describe("agents", () => {
     ["a key not in hex", { publicKey: "zz", signature: "bb" }],
     ["an empty key", { publicKey: "", signature: "bb" }],
     ["a key too long", { publicKey: "aa".repeat(1025), signature: "bb" }],
+    ["a signature too long", { publicKey: "aa", signature: "bb".repeat(1025) }],
+    ["a key in uppercase hex", { publicKey: "AA", signature: "bb" }],
+    ["a key that isn't text", { publicKey: 170, signature: "bb" }],
   ])("are refused with %s", async (_, body) => {
     const { token } = await newAccount();
     const answer = await call("/agents", { method: "POST", token, json: body ?? null });
     expect(answer.status).toBe(400);
     expect(await json(call("/agents", { token }))).toEqual({ agents: [] });
+  });
+
+  it("are approved with a key and a signature of 1,024 bytes", async () => {
+    const { token } = await newAccount();
+    const largest = { publicKey: "ab".repeat(1024), signature: "cd".repeat(1024) };
+    expect((await call("/agents", { method: "POST", token, json: largest })).status).toBe(201);
+  });
+
+  it("are revoked by an ID in any case", async () => {
+    const { token, writing, agent } = await reading();
+    const revoke = await call(`/agents/${agent.agent.toUpperCase()}`, { method: "DELETE", token });
+    expect(revoke.status).toBe(204);
+    expect((await call(`/agent/writings/${writing}`, { token: agent.token })).status).toBe(401);
   });
 
   it("are at most 10 not revoked", async () => {
@@ -252,7 +312,11 @@ describe("agents", () => {
       approved.push(await approve(token));
     }
     const eleventh = { publicKey: newKey(), signature: "bb" };
-    expect((await call("/agents", { method: "POST", token, json: eleventh })).status).toBe(409);
+    const refused = await call("/agents", { method: "POST", token, json: eleventh });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: "the account has 10 agents already; revoke one to approve another",
+    });
     const [first] = approved;
     await call(`/agents/${first?.agent}`, { method: "DELETE", token });
     expect((await call("/agents", { method: "POST", token, json: eleventh })).status).toBe(201);
@@ -279,7 +343,11 @@ describe("agents", () => {
   it("aren't approved twice with one key, nor again once it is revoked", async () => {
     const { token, agent } = await reading();
     const again = { publicKey: agent.publicKey, signature: "bb".repeat(64) };
-    expect((await call("/agents", { method: "POST", token, json: again })).status).toBe(409);
+    const twice = await call("/agents", { method: "POST", token, json: again });
+    expect(twice.status).toBe(409);
+    expect(await twice.json()).toEqual({
+      error: "the account has had an agent with this public key; an agent needs a new key",
+    });
     await call(`/agents/${agent.agent}`, { method: "DELETE", token });
     expect((await call("/agents", { method: "POST", token, json: again })).status).toBe(409);
     const other = await newAccount();
@@ -291,24 +359,78 @@ describe("agents", () => {
 
 describe("a lapsed account", () => {
   it("changes nothing of read mode, and its agents read nothing", async () => {
-    const { account, token, writing, agent } = await reading();
+    const { account, token, writing, revision, agent, until } = await reading();
+    const excluded = crypto.randomUUID();
+    await call(`/exclusions/${excluded}`, { method: "PUT", token });
     await database.execute({
       sql: "UPDATE accounts SET paid_until = ? WHERE id = ?",
       args: [now - 1, account],
     });
+    const before = await readModeRowsOf(account);
     for (const [path, method, body] of [
-      ["/agents", "POST", { publicKey: "aa", signature: "bb" }],
+      ["/agents", "POST", { publicKey: newKey(), signature: "bb" }],
       [`/agents/${agent.agent}`, "DELETE", undefined],
-      ["/read-mode", "PUT", { until: now + minute }],
+      ["/read-mode", "PUT", { until: now + 2 * minute }],
       ["/read-mode", "DELETE", undefined],
       [`/exclusions/${writing}`, "PUT", undefined],
-      [`/exclusions/${writing}`, "DELETE", undefined],
+      [`/exclusions/${excluded}`, "DELETE", undefined],
+      [
+        "/copies",
+        "POST",
+        { expires: until, copies: [{ writing, agent: agent.agent, revision, wrapped: "dd" }] },
+      ],
     ] as const) {
       expect((await call(path, { method, token, json: body })).status).toBe(402);
     }
+    const saved = await call(`/writings/${writing}`, {
+      method: "PUT",
+      token,
+      body: sealedWriting({ writing, updated: 1_790_000_000_009n }),
+      base: revision,
+    });
+    expect(saved.status).toBe(402);
+    expect(await readModeRowsOf(account)).toEqual(before);
     expect((await call("/agents", { token })).status).toBe(200);
     expect((await call("/agent/writings", { token: agent.token })).status).toBe(200);
     expect(await json(call("/agent/writings", { token: agent.token }))).toEqual({ writings: [] });
+  });
+});
+
+describe("paths and methods", () => {
+  it("answer 404 for a path that isn't a route, and 405 for a method a route doesn't take", async () => {
+    const { token, writing, agent } = await reading();
+    const routes: [string, string, number, string?][] = [
+      ["GET", "/read-mode/x", 404],
+      ["POST", "/copies/x", 404],
+      ["GET", `/agents/${agent.agent}/x`, 404],
+      ["DELETE", "/agents/x", 404],
+      ["PUT", "/exclusions/x", 404],
+      ["PUT", "/copies", 405],
+      ["GET", "/copies", 405],
+      ["PATCH", "/agents", 405],
+      ["PUT", `/agents/${agent.agent}`, 405],
+      ["POST", "/read-mode", 405],
+      ["POST", "/exclusions", 405],
+      ["POST", `/exclusions/${writing}`, 405],
+      ["GET", `/agent/writings/${writing}/x`, 404, agent.token],
+      ["GET", "/agent/writings/x", 404, agent.token],
+    ];
+    for (const [method, path, status, by = token] of routes) {
+      expect([method, path, (await call(path, { method, token: by })).status]).toEqual([
+        method,
+        path,
+        status,
+      ]);
+    }
+  });
+
+  it("count a request turned down for its shape against the day's requests", async () => {
+    const { token } = await newAccount("test-daily");
+    const id = crypto.randomUUID();
+    for (let used = 0; used < 4; used += 1) {
+      expect((await call(`/exclusions/${id}`, { method: "POST", token })).status).toBe(405);
+    }
+    expect((await call(`/exclusions/${id}`, { method: "POST", token })).status).toBe(429);
   });
 });
 
@@ -358,6 +480,7 @@ describe("read mode", () => {
 
   it.each([
     ["an end that has passed", () => ({ until: now - 1 })],
+    ["an end that is now", () => ({ until: now })],
     ["no end", () => ({})],
     ["an end that isn't a whole number", () => ({ until: now + 0.5 })],
   ])("isn't turned on with %s", async (_, body) => {
@@ -422,6 +545,27 @@ describe("copies", () => {
     );
   });
 
+  it("are taken 100 at once, with a wrapped key of up to 1,024 bytes", async () => {
+    const { token, writing, revision, agent, until } = await reading();
+    const others = Array.from({ length: 99 }, () => ({
+      writing: crypto.randomUUID(),
+      agent: agent.agent,
+      revision,
+      wrapped: "01",
+    }));
+    const sent = await call("/copies", {
+      method: "POST",
+      token,
+      json: {
+        expires: until,
+        copies: [{ writing, agent: agent.agent, revision, wrapped: "ef".repeat(1024) }, ...others],
+      },
+    });
+    expect(sent.status).toBe(200);
+    const { copies } = await json<{ copies: Kept[] }>(sent);
+    expect(copies.map((copy) => copy.refused)).toEqual([null, ...others.map(() => "revision")]);
+  });
+
   it("are kept one by one, each answered in the order sent", async () => {
     const { token, writing, revision, agent, until } = await reading();
     const excluded = crypto.randomUUID();
@@ -452,7 +596,14 @@ describe("copies", () => {
     ["no copies", (copy: object) => ({ expires: 1, copies: [copy].slice(1) })],
     [
       "101 copies",
-      (copy: object) => ({ expires: 1, copies: Array.from({ length: 101 }, () => copy) }),
+      (copy: object) => ({
+        expires: 1,
+        copies: Array.from({ length: 101 }, () => ({ ...copy, writing: crypto.randomUUID() })),
+      }),
+    ],
+    [
+      "a wrapped key that isn't text",
+      (copy: object) => ({ expires: 1, copies: [{ ...copy, wrapped: 1234 }] }),
     ],
     ["the same writing and agent twice", (copy: object) => ({ expires: 1, copies: [copy, copy] })],
     ["no expiry", (copy: object) => ({ copies: [copy] })],
