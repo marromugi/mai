@@ -152,8 +152,8 @@ export type Upload = {
   readonly size: number;
 };
 
-/** What deleting an account needs before its rows go: its ID, and Apple's refresh token sealed. */
-export type ToDelete = { readonly account: AccountId; readonly sealedRefreshToken: Uint8Array };
+/** An account and Apple's refresh token as `RefreshTokens.seal` sealed it for that account. */
+export type Sealed = { readonly account: AccountId; readonly sealedRefreshToken: Uint8Array };
 
 /** Not reserved: the account has that part of the photo already, or is taking it now. */
 export type Reserved = { reserved: true; upload: Upload } | { reserved: false };
@@ -551,27 +551,52 @@ export class Store {
     );
   }
 
-  /** Starts a session on the Apple user's account, using up `challenge`. */
+  /** The Apple user's account; undefined when the user has none, or it is marked for deletion. */
+  async accountOfAppleUser(appleSub: string): Promise<AccountId | undefined> {
+    const { rows } = await this.#client.execute({
+      sql: "SELECT id FROM accounts WHERE apple_sub = :sub AND deleting = 0",
+      args: { sub: appleSub },
+    });
+    const row = rows[0];
+    return row === undefined ? undefined : stored(parseAccountId, row["id"]);
+  }
+
+  /**
+   * Starts a session on the Apple user's account, using up `challenge`; an account marked for
+   * deletion is not there. With `refreshToken`, its account, when it is still the Apple user's,
+   * keeps that token in place of the one it had.
+   */
   async signIn(
     appleSub: string,
     challenge: Challenge,
     session: Caller,
     now: number,
+    refreshToken?: Sealed,
   ): Promise<SignedIn> {
     const results = await this.#claiming(
       now,
       challenge,
       [
+        `UPDATE accounts SET apple_refresh_token = :refresh
+         WHERE id = :account AND apple_sub = :sub AND ${claimed}`,
         `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
-         SELECT :session, id, :hash, :now, :now FROM accounts WHERE apple_sub = :sub AND ${claimed}`,
-        `SELECT id FROM accounts WHERE apple_sub = :sub AND ${claimed}`,
+         SELECT :session, id, :hash, :now, :now FROM accounts
+         WHERE apple_sub = :sub AND deleting = 0 AND ${claimed}`,
+        `SELECT id FROM accounts WHERE apple_sub = :sub AND deleting = 0 AND ${claimed}`,
       ],
-      { sub: appleSub, session: session.session, hash: session.secretSha256, now },
+      {
+        sub: appleSub,
+        session: session.session,
+        hash: session.secretSha256,
+        now,
+        account: refreshToken?.account ?? null,
+        refresh: refreshToken?.sealedRefreshToken ?? null,
+      },
     );
     if (results === undefined) {
       return { signedIn: false, reason: "challenge-used" };
     }
-    const [started, account] = results;
+    const [, started, account] = results;
     const row = account?.rows[0];
     if (started?.rowsAffected !== 1 || row === undefined) {
       return { signedIn: false, reason: "no-account" };
@@ -608,7 +633,7 @@ export class Store {
    * has no live session. Neither counted nor limited, so a lapsed account or one past its day's
    * requests is deleted too.
    */
-  async accountToDelete(caller: Caller, now: number): Promise<ToDelete | undefined> {
+  async accountToDelete(caller: Caller, now: number): Promise<Sealed | undefined> {
     const { rows } = await this.#client.execute(
       bind(
         `SELECT a.id, a.apple_refresh_token FROM sessions s JOIN accounts a ON a.id = s.account_id
@@ -617,17 +642,27 @@ export class Store {
       ),
     );
     const row = rows[0];
-    return row === undefined ? undefined : toDelete(row);
+    return row === undefined ? undefined : sealedOf(row);
   }
 
   /** The Apple user's account and its sealed refresh token, for deleting it; undefined with none. */
-  async appleUserToDelete(appleSub: string): Promise<ToDelete | undefined> {
+  async appleUserToDelete(appleSub: string): Promise<Sealed | undefined> {
     const { rows } = await this.#client.execute({
       sql: "SELECT id, apple_refresh_token FROM accounts WHERE apple_sub = :sub",
       args: { sub: appleSub },
     });
     const row = rows[0];
-    return row === undefined ? undefined : toDelete(row);
+    return row === undefined ? undefined : sealedOf(row);
+  }
+
+  /** The account's sealed refresh token as it is now; undefined when the account has gone. */
+  async refreshTokenOf(account: AccountId): Promise<Sealed | undefined> {
+    const { rows } = await this.#client.execute({
+      sql: "SELECT id, apple_refresh_token FROM accounts WHERE id = :account",
+      args: { account },
+    });
+    const row = rows[0];
+    return row === undefined ? undefined : sealedOf(row);
   }
 
   /** Marks `account` as being deleted, whatever it is paid until. False when it has gone. */
@@ -671,13 +706,13 @@ export class Store {
    * at random, with their sealed refresh tokens, for the cron trigger to delete. At random, so that
    * accounts that fail every time can't take every place in every run.
    */
-  async dueForDeletion(now: number, count: number): Promise<ToDelete[]> {
+  async dueForDeletion(now: number, count: number): Promise<Sealed[]> {
     const { rows } = await this.#client.execute({
       sql: `SELECT id, apple_refresh_token FROM accounts WHERE paid_until <= :due OR deleting = 1
             ORDER BY random() LIMIT :count`,
       args: { due: now - lapsedKept, count },
     });
-    return rows.map(toDelete);
+    return rows.map(sealedOf);
   }
 
   /**
@@ -1408,7 +1443,7 @@ function uploadOf(row: Row): Upload {
 }
 
 /** An account and its sealed refresh token, as a row of `accounts` holds them. */
-function toDelete(row: Row): ToDelete {
+function sealedOf(row: Row): Sealed {
   const sealed = row["apple_refresh_token"];
   if (!(sealed instanceof ArrayBuffer)) {
     throw new Error("accounts.apple_refresh_token is a BLOB, but came back as something else");

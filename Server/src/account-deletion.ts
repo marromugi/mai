@@ -1,9 +1,10 @@
 import type { AccountId } from "./account-id";
+import { hex } from "./hex";
 import { problem } from "./http";
 import { uploadOfKey, type Photos } from "./photos";
 import type { Caller } from "./sessions";
 import type { SignIn } from "./sign-in";
-import type { Answer, Store, ToDelete } from "./store";
+import type { Answer, Store, Sealed } from "./store";
 
 /**
  * `DELETE /account`: Apple's refresh token is revoked, then the account is marked while the
@@ -127,10 +128,11 @@ type Held = { mark: () => Promise<boolean>; deleteRows: () => Promise<boolean> }
 
 /**
  * Revokes the account's Apple token, empties R2 of it, then deletes its rows, as `held` lets it;
- * once the rows went, R2 is swept again, kept alive past the return.
+ * once the rows went, R2 is swept again, kept alive past the return. A sign-in can replace the
+ * token until the account is marked, so the token kept once it is marked is revoked too.
  */
 async function deleteFound(
-  found: ToDelete,
+  found: Sealed,
   signIn: SignIn,
   photos: Photos,
   now: number,
@@ -144,6 +146,13 @@ async function deleteFound(
   }
   if (!(await held.mark())) {
     return "kept";
+  }
+  const marked = await signIn.store.refreshTokenOf(account);
+  if (marked !== undefined && hex(marked.sealedRefreshToken) !== hex(sealedRefreshToken)) {
+    const replaced = await signIn.refreshTokens.open(marked.sealedRefreshToken, account);
+    if (!(await signIn.tokens.revoke(replaced, now)).ok) {
+      return "unrevoked";
+    }
   }
   await deletePhotosOf(account, photos.bucket);
   if (!(await held.deleteRows())) {
