@@ -617,30 +617,21 @@ export class Store {
   }
 
   /**
-   * Ends every session started before `before` of the Apple user's account; none when the user has
-   * no account.
+   * Signs the Apple user out, in one batch: ends every session of the user's account started
+   * before `before`, and turns its read mode off and deletes its copies, so its agents read
+   * nothing. Read mode is left alone while the account has a session started at `before` or later,
+   * by signing in again since. None of it when the user has no account.
    */
-  async endSessionsOfAppleUser(appleSub: string, before: number): Promise<void> {
-    await this.#client.execute({
-      sql: `DELETE FROM sessions
-            WHERE account_id = (SELECT id FROM accounts WHERE apple_sub = :sub) AND created < :before`,
-      args: { sub: appleSub, before },
-    });
-  }
-
-  /**
-   * Turns off the read mode of the Apple user's account and deletes its copies, so its agents read
-   * nothing; none when the user has no account, or has started a session at `before` or later by
-   * signing in again since.
-   */
-  async endReadModeOfAppleUser(appleSub: string, before: number): Promise<void> {
-    const ofUser = `account_id = (SELECT id FROM accounts WHERE apple_sub = :sub)
-      AND NOT EXISTS (SELECT 1 FROM sessions s JOIN accounts a ON a.id = s.account_id
-                      WHERE a.apple_sub = :sub AND s.created >= :before)`;
+  async signOutAppleUser(appleSub: string, before: number): Promise<void> {
+    const ofUser = "account_id = (SELECT id FROM accounts WHERE apple_sub = :sub)";
+    const noSignInSince = `NOT EXISTS (SELECT 1 FROM sessions
+      WHERE ${ofUser} AND created >= :before)`;
     await this.#client.batch(
-      [`DELETE FROM copies WHERE ${ofUser}`, `DELETE FROM read_modes WHERE ${ofUser}`].map((sql) =>
-        bind(sql, { sub: appleSub, before }),
-      ),
+      [
+        `DELETE FROM copies WHERE ${ofUser} AND ${noSignInSince}`,
+        `DELETE FROM read_modes WHERE ${ofUser} AND ${noSignInSince}`,
+        `DELETE FROM sessions WHERE ${ofUser} AND created < :before`,
+      ].map((sql) => bind(sql, { sub: appleSub, before })),
       "write",
     );
   }
