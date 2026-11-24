@@ -1,4 +1,5 @@
 import { serve, signInOf } from "../src/index";
+import { serveFont } from "../src/fonts";
 import { appleIssuer, appleKeysUrl } from "../src/apple-sign-in";
 import { appleRevokeUrl, appleTokenUrl } from "../src/apple-tokens";
 import { jsonBody, problem } from "../src/http";
@@ -68,6 +69,9 @@ const day = 24 * 60 * 60 * 1000;
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
+    if (new URL(request.url).pathname.startsWith("/fonts/")) {
+      return serveFont(request, env.FONTS);
+    }
     const apple = await standIn();
     switch (`${request.method} ${new URL(request.url).pathname}`) {
       case "POST /stand-in-apple/sign-in":

@@ -153,6 +153,61 @@ final class PlanPurchaseTests {
     #expect(try #require(await approved.value).appAccountToken == id)
   }
 
+  /// What `PUT /account/subscription` is sent: the transaction and renewal info StoreKit signed,
+  /// for the account the plan was bought for and no other.
+  @Test func theSubscriptionBoughtForAnAccountIsReadAsStoreKitSignedIt() async throws {
+    let id = UUID()
+    kept.keep(id)
+    _ = try await buyPlan(product(.plus), keptIn: kept, purchase: Self.purchase)
+    let purchases = StoreKitPurchases(productIDs: Set(SyncPlan.allCases.map(\.productID)))
+
+    let read = try await purchases.subscriptions(for: id)
+    let subscription = try #require(read.first)
+    #expect(read.count == 1)
+    let transaction = try payload(of: subscription.transaction)
+    let renewalInfo = try payload(of: subscription.renewalInfo)
+    #expect(transaction["appAccountToken"] as? String == id.uuidString.lowercased())
+    #expect(transaction["productId"] as? String == SyncPlan.plus.productID)
+    #expect(
+      renewalInfo["originalTransactionId"] as? String
+        == transaction["originalTransactionId"] as? String)
+    #expect(try await purchases.subscriptions(for: UUID()).isEmpty)
+  }
+
+  /// As on a device that keeps no account ID: a purchase approved through Ask to Buy reaches
+  /// `PlanTransactions`, which keeps its ID and tells the account.
+  @Test func anApprovedPurchaseKeepsItsIDWhereNoneIsKept() async throws {
+    session.askToBuyEnabled = true
+    _ = try await buyPlan(product(.basic), keptIn: kept, purchase: Self.purchase)
+    let id = try #require(kept.id)
+    let suite = "PlanPurchaseTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let listening = KeptAccountID(defaults: defaults)
+    var told = 0
+    let listener = Task { await PlanTransactions.listen(keptIn: listening, changed: { told += 1 }) }
+    defer { listener.cancel() }
+
+    let waiting = try #require(session.allTransactions().first)
+    try session.approveAskToBuyTransaction(identifier: waiting.identifier)
+    let deadline = Date.now.addingTimeInterval(20)
+    while told == 0, Date.now < deadline {
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    #expect(told >= 1)
+    #expect(listening.id == id)
+  }
+
+  /// The payload of a JWS, as JSON.
+  private func payload(of jws: String) throws -> [String: Any] {
+    let parts = jws.split(separator: ".")
+    try #require(parts.count == 3)
+    var base64 = parts[1].replacing("-", with: "+").replacing("_", with: "/")
+    base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+    let data = try #require(Data(base64Encoded: String(base64)))
+    return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+  }
+
   private static func purchase(
     _ product: Product, _ options: Set<Product.PurchaseOption>
   ) async throws -> Product.PurchaseResult {

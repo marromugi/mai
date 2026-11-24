@@ -1,5 +1,9 @@
 import CryptoKit
 import Foundation
+import os
+
+/// Where the account's steps log what went wrong but goes on.
+let syncLogger = Logger(subsystem: "com.marromugi.mai", category: "sync")
 
 /// Where the device's own key stands with the account, once signed in.
 public enum OwnKeyOutcome: Sendable, Equatable {
@@ -135,12 +139,24 @@ public struct SyncAccount: Sendable {
   /// again, catching what the server missed.
   public func check() async throws(AccountError) -> AccountCheck {
     guard let session = try session() else { return .signedOut }
-    // Unknown, such as offline, is taken as still signed in.
-    let state = try? await apple.credentialState(of: session.appleUser)
+    let state: AppleCredentialState
+    do {
+      state = try await apple.credentialState(of: session.appleUser)
+    } catch {
+      // Unknown, such as offline, is taken as still signed in.
+      syncLogger.error("Apple's credential state couldn't be read: \(error)")
+      state = .authorized
+    }
     if state == .revoked || state == .notFound {
-      // The server ends every session itself on Apple's notification, so a failure here leaves
-      // nothing behind for long.
-      try? await server.endSession(token: session.token)
+      do {
+        try await server.endSession(token: session.token)
+      } catch .refused(status: 401, _) {
+        // Ended already.
+      } catch {
+        // Dropped from the device all the same: Apple no longer lets this user in here. The
+        // server's session lapses after 180 days unused.
+        syncLogger.error("The session of a revoked Apple user couldn't be ended: \(error)")
+      }
       try keychain { () throws(KeychainError) in try sessions.remove() }
       return .credentialRevoked
     }

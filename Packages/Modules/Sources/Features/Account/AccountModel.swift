@@ -24,9 +24,10 @@ enum AccountPhase: Equatable {
   let kept: KeptAccountID
   private(set) var phase = AccountPhase.signedOut
   /// The recovery key of the own key just made, until the person says it is written down.
-  var recoveryKeyToShow: RecoveryKey?
+  private(set) var recoveryKeyToShow: RecoveryKey?
   /// What went wrong, written for a person, until it is dismissed.
   var problem: String?
+  private var settling = false
 
   init(account: SyncAccount, kept: KeptAccountID = .standard) {
     self.account = account
@@ -47,15 +48,17 @@ enum AccountPhase: Equatable {
   /// (`Server/test/stand-in-apple.ts`), keeping the session and the own key in the keychain. For
   /// local runs of a debug build, which can't reach Apple. `revoked` makes Apple say the user
   /// stopped signing in with Apple here.
-  public static func standIn(server: URL, user: String, revoked: Bool) -> AccountModel {
-    var answers = StandInApple.Answers()
-    answers.credentialState = revoked ? .revoked : .authorized
-    let apple = StandInApple(url: server, user: user, answers: answers)
-    return AccountModel(
-      account: SyncAccount(
-        server: AccountServer(url: server), apple: apple, purchases: apple,
-        sessions: SessionKeychain.standard, ownKeys: OwnKeyKeychain.standard))
-  }
+  #if DEBUG
+    public static func standIn(server: URL, user: String, revoked: Bool) -> AccountModel {
+      var answers = StandInApple.Answers()
+      answers.credentialState = revoked ? .revoked : .authorized
+      let apple = StandInApple(url: server, user: user, answers: answers)
+      return AccountModel(
+        account: SyncAccount(
+          server: AccountServer(url: server), apple: apple, purchases: apple,
+          sessions: SessionKeychain.standard, ownKeys: OwnKeyKeychain.standard))
+    }
+  #endif
 
   /// Whether a plan was bought on this device, so signing in can make or find its account.
   var canSignIn: Bool { kept.id != nil }
@@ -94,17 +97,24 @@ enum AccountPhase: Equatable {
       if session.account != id {
         kept.keep(session.account)
       }
-      phase = .signedIn
       try await settle(session)
     } catch {
-      phase = (try? account.session()) == nil ? .signedOut : .signedIn
       report(error, "Signing in")
+      do {
+        phase = try account.session() == nil ? .signedOut : .signedIn
+      } catch {
+        accountLogger.error("The session couldn't be read: \(error)")
+        phase = .signedOut
+      }
     }
   }
 
-  /// Settles the own key when signed in, as when the account's settings are shown.
+  /// Settles the own key when signed in, as when the account's settings are shown. Not while
+  /// signing in or settling already, which would each make a key.
   func settleOwnKey() async {
-    guard phase == .signedIn || phase == .recoveryKeyNeeded else { return }
+    guard phase == .signedIn || phase == .recoveryKeyNeeded, !settling else { return }
+    settling = true
+    defer { settling = false }
     do {
       guard let session = try account.session() else {
         phase = .signedOut
@@ -114,6 +124,11 @@ enum AccountPhase: Equatable {
     } catch {
       report(error, "Settling the own key")
     }
+  }
+
+  /// Called once the person says the recovery key shown is written down.
+  func recoveryKeyWrittenDown() {
+    recoveryKeyToShow = nil
   }
 
   /// Brings the own key back from the recovery key `text`. Answers what went wrong, written for a

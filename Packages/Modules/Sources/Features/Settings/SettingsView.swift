@@ -30,11 +30,11 @@ struct SettingsView: View {
     .sheet(
       isPresented: Binding(
         get: { account?.recoveryKeyToShow != nil },
-        set: { if !$0 { account?.recoveryKeyToShow = nil } })
+        set: { if !$0 { account?.recoveryKeyWrittenDown() } })
     ) {
       if let recoveryKey = account?.recoveryKeyToShow {
         NavigationStack {
-          RecoveryKeyView(recoveryKey: recoveryKey) { account?.recoveryKeyToShow = nil }
+          RecoveryKeyView(recoveryKey: recoveryKey) { account?.recoveryKeyWrittenDown() }
         }
       }
     }
