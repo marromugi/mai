@@ -157,19 +157,35 @@ enum AccountPhase: Equatable {
     }
   }
 
-  /// Signs in for the account kept, then settles the own key.
+  /// Signs in for the account kept, while a plan bought for it is on this App Store account;
+  /// otherwise, as on a device that didn't buy the plan, to the account the Apple user has. Then
+  /// settles the own key. A purchase refused as another account's forgets the account kept, so the
+  /// plan is bought again for a new one.
   func signIn() async {
-    guard let id = kept.id, phase == .signedOut else { return }
+    guard phase == .signedOut else { return }
     phase = .working
     do {
-      let session = try await account.signIn(for: id)
-      if session.account != id {
+      let session: Session
+      if let id = kept.id {
+        do {
+          session = try await account.signIn(for: id)
+        } catch .noPurchase {
+          session = try await account.signIn()
+        }
+      } else {
+        session = try await account.signIn()
+      }
+      if session.account != kept.id {
         kept.keep(session.account)
       }
       if try await !settle(session) {
         phaseFromSession()
       }
     } catch {
+      if case .purchaseIsAnotherAccounts = error {
+        kept.forget()
+        canSignIn = false
+      }
       report(error, "Signing in")
       phaseFromSession()
     }
@@ -221,6 +237,39 @@ enum AccountPhase: Equatable {
     } catch {
       accountLogger.error("Restoring the own key failed: \(error)")
       return error.localizedDescription
+    }
+  }
+
+  /// Starts the account over without its own key, once the person confirmed it, as when no
+  /// device holds the key and its recovery key is lost too: the server's writings go, and a new own
+  /// key is made, whose recovery key is shown. Only while the own key isn't here, and not while
+  /// settling or deleting the account; it counts as settling. When another device changed the
+  /// account's own key meanwhile, nothing goes, and the key is settled again.
+  func startOver() async {
+    guard phase == .recoveryKeyNeeded, !settling, !deleting, let check = state?.ownKeyCheck
+    else { return }
+    settling = true
+    var changed = false
+    do {
+      if let session = try account.session() {
+        let outcome = try await account.startOver(session, dropping: check)
+        if try account.session() == session {
+          apply(outcome)
+        } else {
+          phaseFromSession()
+        }
+      } else {
+        phase = .signedOut
+      }
+    } catch {
+      report(error, "Starting over")
+      if case .ownKeyChanged = error {
+        changed = true
+      }
+    }
+    settling = false
+    if changed {
+      await settleOwnKey()
     }
   }
 
@@ -323,6 +372,12 @@ enum AccountPhase: Equatable {
     guard try stillIn(session, keeping: read) else { return false }
     let outcome = try await account.settleOwnKey(session, against: read.state)
     guard try account.session() == session else { return false }
+    apply(outcome)
+    return true
+  }
+
+  /// Where the device stands once the own key is settled as `outcome` says.
+  private func apply(_ outcome: OwnKeyOutcome) {
     switch outcome {
     case .ready:
       phase = .signedIn
@@ -334,7 +389,6 @@ enum AccountPhase: Equatable {
     case .recoveryKeyNeeded:
       phase = .recoveryKeyNeeded
     }
-    return true
   }
 
   private func report(_ error: any Error, _ step: String) {

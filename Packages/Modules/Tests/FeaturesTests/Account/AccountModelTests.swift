@@ -361,6 +361,129 @@ struct AccountModelTests {
     #expect(model.phase == .recoveryKeyNeeded)
   }
 
+  /// A device that didn't buy the plan: the Apple user's account is signed in to, and its ID kept.
+  @Test func signingInWithNoAccountIDKeptAsksForASessionOnly() async throws {
+    let other = UUID()
+    let worker = ScriptedWorker([
+      "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
+      "POST /sessions": [
+        .status(200, json: #"{"account":"\#(other.uuidString.lowercased())","token":"s1.a.b"}"#)
+      ],
+      "GET /account": [ScriptedWorker.account(check: Data(repeating: 1, count: 32))],
+    ])
+    let model = try model([:], worker: worker, keeps: false)
+    await model.signIn()
+    #expect(worker.asked == ["POST /challenges", "POST /sessions", "GET /account"])
+    #expect(model.kept.id == other)
+    #expect(model.phase == .recoveryKeyNeeded)
+    #expect(model.problem == nil)
+  }
+
+  /// The account ID kept, with no plan bought for it on this App Store account.
+  @Test func signingInWithNoPurchaseOfTheAccountKeptAsksForASessionOnly() async throws {
+    let worker = ScriptedWorker([
+      "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
+      "POST /sessions": [
+        .status(200, json: #"{"account":"\#(bought.uuidString.lowercased())","token":"s1.a.b"}"#)
+      ],
+      "GET /account": [ScriptedWorker.account(check: nil)],
+      "PUT /account/own-key-check": [.status(204)],
+    ])
+    let model = try model([:], worker: worker, apple: ScriptedApple(bought: []))
+    await model.signIn()
+    #expect(!worker.asked.contains("POST /account"))
+    #expect(model.phase == .signedIn)
+    #expect(model.kept.id == bought)
+  }
+
+  @Test func anAppleUserWithNoAccountIsToldHowToGetOne() async throws {
+    let model = try model(
+      [
+        "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
+        "POST /sessions": [.status(404)],
+      ], keeps: false)
+    await model.signIn()
+    #expect(model.phase == .signedOut)
+    #expect(model.kept.id == nil)
+    #expect(model.problem == AccountError.noAccount.localizedDescription)
+  }
+
+  /// The purchase is another Apple user's account's: what happened and what to do is said, and the
+  /// account ID kept is forgotten, so a plan bought again is bought for a new account.
+  @Test func aPurchaseOfAnotherAccountSaysWhatToDoAndForgetsItsID() async throws {
+    let model = try model([
+      "POST /challenges": [
+        .status(201, json: #"{"challenge":"c"}"#), .status(201, json: #"{"challenge":"d"}"#),
+      ],
+      "POST /account": [.status(409)],
+      "POST /sessions": [.status(404)],
+    ])
+    await model.refresh()
+    #expect(model.canSignIn)
+    await model.signIn()
+    #expect(model.phase == .signedOut)
+    #expect(model.kept.id == nil)
+    #expect(!model.canSignIn)
+    #expect(model.problem == AccountError.purchaseIsAnotherAccounts.localizedDescription)
+  }
+
+  /// No device holds the own key and its recovery key is lost: the account starts over with the
+  /// check it was read with, and the new key's recovery key is shown.
+  @Test func startingOverMakesANewKeyAndShowsItsRecoveryKey() async throws {
+    let check = Data(repeating: 1, count: 32)
+    let worker = ScriptedWorker([
+      "PUT /account/subscription": [.status(200)],
+      "GET /account": [ScriptedWorker.account(check: check)],
+      "DELETE /account/own-key-check": [.status(204)],
+      "PUT /account/own-key-check": [.status(204)],
+    ])
+    let model = try model([:], worker: worker, session: session)
+    await model.checkAtLaunch()
+    await model.refresh()
+    #expect(model.phase == .recoveryKeyNeeded)
+    await model.startOver()
+    #expect(model.phase == .signedIn)
+    #expect(model.recoveryKeyToShow != nil)
+    #expect(model.problem == nil)
+    let keys = try #require(try await model.syncKeys())
+    #expect(model.recoveryKeyToShow == RecoveryKey(keys.ownKey))
+  }
+
+  /// Another device changed the own key since it was read: nothing goes, that is said, and the key
+  /// is settled again against the account as it is now.
+  @Test func startingOverAfterTheKeyChangedSettlesAgain() async throws {
+    let key = OwnKey.generate()
+    let worker = ScriptedWorker([
+      "PUT /account/subscription": [.status(200)],
+      "GET /account": [
+        ScriptedWorker.account(check: Data(repeating: 1, count: 32)),
+        ScriptedWorker.account(check: key.check),
+      ],
+      "DELETE /account/own-key-check": [.status(409)],
+    ])
+    let model = try model([:], worker: worker, session: session, key: key)
+    await model.checkAtLaunch()
+    await model.refresh()
+    await model.startOver()
+    #expect(model.problem == AccountError.ownKeyChanged.localizedDescription)
+    #expect(model.phase == .signedIn)
+    #expect(worker.asked.filter { $0 == "PUT /account/own-key-check" }.isEmpty)
+  }
+
+  @Test func startingOverWhileTheKeyIsHereSendsNothing() async throws {
+    let key = OwnKey.generate()
+    let worker = ScriptedWorker([
+      "PUT /account/subscription": [.status(200)],
+      "GET /account": [ScriptedWorker.account(check: key.check)],
+    ])
+    let model = try model([:], worker: worker, session: session, key: key)
+    await model.checkAtLaunch()
+    await model.refresh()
+    await model.startOver()
+    #expect(!worker.asked.contains("DELETE /account/own-key-check"))
+    #expect(model.phase == .signedIn)
+  }
+
   @Test func aCancelledSignInSaysNothing() async throws {
     let model = try model(Self.newAccount, apple: ScriptedApple(cancels: true))
     await model.signIn()

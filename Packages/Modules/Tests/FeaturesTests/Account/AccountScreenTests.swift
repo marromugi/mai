@@ -13,7 +13,7 @@ struct AccountScreenTests {
     assertSyncSection(.signedOut, canSignIn: true)
   }
 
-  /// With no plan bought, the section is as before: 「同期のプラン」 only.
+  /// With no plan bought on this device: the Apple button, for an account bought on another.
   @Test func syncSectionWithNoPlanBought() {
     assertSyncSection(.signedOut, canSignIn: false)
   }
@@ -131,7 +131,8 @@ struct AccountScreenTests {
       syncStatus: .sessionEnded(ServerError.refused(status: 401, reason: "").localizedDescription))
   }
 
-  /// While the own key isn't here, nothing syncs and no sync row shows.
+  /// While the own key isn't here, nothing syncs and no sync row shows; the recovery key is typed,
+  /// or, when it is lost too, the account starts over.
   @Test func syncSectionAsksForTheRecoveryKey() {
     assertSyncSection(.recoveryKeyNeeded, canSignIn: true, syncStatus: .notYet)
   }
@@ -193,6 +194,19 @@ struct AccountScreenTests {
 
   @Test func theAccountDeletionPageAtTheLargestSize() {
     assertPushed(AccountDeletionView(deleteAccount: { false }), title: nil, size: .accessibility5)
+  }
+
+  /// What goes from the server and what stays when the account starts over, and the button.
+  @Test func theAccountStartsOverOnAPageOfItsOwn() {
+    assertPushed(StartOverView(startOver: { true }), title: nil)
+  }
+
+  @Test func theStartOverPageInDarkMode() {
+    assertPushed(StartOverView(startOver: { true }), title: nil, colorScheme: .dark)
+  }
+
+  @Test func theStartOverPageAtTheLargestSize() {
+    assertPushed(StartOverView(startOver: { true }), title: nil, size: .accessibility5)
   }
 
   private func planBought(_ phase: AccountPhase) -> PlanBought {
