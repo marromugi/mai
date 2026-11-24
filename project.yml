@@ -50,7 +50,7 @@ targets:
       # The Worker each configuration talks to (Server/wrangler.jsonc).
       configs:
         Debug:
-          MAI_SERVER: https://mai-server-dev.marrromugi-dev.workers.dev
+          MAI_SERVER: https://mai-server-staging.marrromugi-dev.workers.dev
         Release:
           MAI_SERVER: https://mai-server.marrromugi-dev.workers.dev
     scheme:
