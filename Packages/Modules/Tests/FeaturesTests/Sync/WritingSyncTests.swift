@@ -27,7 +27,8 @@ struct WritingSyncTests {
 
   private func device(
     _ kept: [Writing] = [], signedIn: Bool = true, server: FakeWritingServer? = nil,
-    refusingWritings: Int? = nil, holdingFirstListing: Bool = false, pause: Duration = .zero,
+    deviceKey: OwnKey? = nil, refusingWritings: Int? = nil, holdingFirstListing: Bool = false,
+    pause: Duration = .zero,
     interval: Duration = .zero
   ) throws -> Device {
     let defaults = try #require(UserDefaults(suiteName: suite))
@@ -36,12 +37,17 @@ struct WritingSyncTests {
     let ownKeys = MemoryOwnKeys()
     if signedIn {
       try sessions.save(Session(token: token, account: accountID, appleUser: "user"))
-      try ownKeys.save(ownKey)
+    }
+    if signedIn || deviceKey != nil {
+      try ownKeys.save(deviceKey ?? ownKey)
     }
     let answers: [String: [ScriptedWorker.Answer]] = [
-      // The launch check's, then the one a sync refused with 401 asks for, which the Worker refuses too.
+      // The launch check's, then the one a sync refused with 401 asks for, which the Worker
+      // refuses too.
       "PUT /account/subscription": [.status(200), .status(401)],
-      "GET /account": [ScriptedWorker.account(check: ownKey.check)],
+      "GET /account": Array(repeating: ScriptedWorker.account(check: ownKey.check), count: 3),
+      "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
+      "POST /account": [.status(201, json: #"{"token":"\#(token)"}"#)],
     ]
     let sent = Requests(
       writings: server ?? FakeWritingServer(accepting: token), account: ScriptedWorker(answers),
@@ -51,7 +57,7 @@ struct WritingSyncTests {
         server: AccountServer(
           url: try #require(URL(string: "https://worker.test")), transport: sent),
         apple: ScriptedApple(), purchases: ScriptedApple(), sessions: sessions, ownKeys: ownKeys),
-      kept: KeptAccountID(defaults: defaults),
+      kept: bought(defaults),
       syncState: FileManager.default.temporaryDirectory.appending(
         path: "WritingSyncTests-\(UUID().uuidString)", directoryHint: .isDirectory))
     let library = WritingLibrary(store: MemoryWritingStore(kept))
@@ -60,6 +66,13 @@ struct WritingSyncTests {
       account: account, library: library,
       sync: WritingSync(account: account, library: library, pause: pause, interval: interval),
       sent: sent, ownKeys: ownKeys)
+  }
+
+  /// The account ID a plan was bought for, kept.
+  private func bought(_ defaults: UserDefaults) -> KeptAccountID {
+    let kept = KeptAccountID(defaults: defaults)
+    kept.keep(accountID)
+    return kept
   }
 
   private func writing(_ title: String, at seconds: Double) -> Writing {
@@ -363,6 +376,37 @@ struct WritingSyncTests {
       try await synced.keepBoth(received, copy: copy)
     }
     #expect(try store.all().contains { $0.id == copy.id })
+  }
+
+  /// Signing in, on a device that holds the account's key, syncs at once.
+  @Test func signingInSyncs() async throws {
+    let device = try device([writing("朝", at: 1_000)], signedIn: false, deviceKey: ownKey)
+    await device.account.checkAtLaunch()
+    #expect(device.account.phase == .signedOut)
+
+    await device.sync.signIn()
+
+    #expect(device.account.phase == .signedIn)
+    #expect(device.sent.listings == 1)
+  }
+
+  /// The device's key isn't the account's: nothing syncs until the recovery key brings the
+  /// account's back, which syncs at once.
+  @Test func bringingTheKeyBackSyncs() async throws {
+    let device = try device([writing("朝", at: 1_000)], deviceKey: OwnKey.generate())
+    await device.account.checkAtLaunch()
+    await device.sync.syncNow()
+    #expect(device.account.phase == .recoveryKeyNeeded)
+    #expect(device.sent.listings == 0)
+
+    #expect(await device.sync.restore(from: RecoveryKey(ownKey).text) == nil)
+
+    #expect(device.account.phase == .signedIn)
+    #expect(device.sent.listings == 1)
+    guard case .synced = device.sync.status else {
+      Issue.record("the sync ran: \(device.sync.status)")
+      return
+    }
   }
 
   /// Any other failure is shown, and an edit still sets the next sync.

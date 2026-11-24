@@ -168,9 +168,22 @@ struct AccountSection: View {
   var body: some View {
     AccountRows(
       phase: account.phase, canSignIn: account.canSignIn,
-      signIn: { Task { await account.signIn() } },
+      signIn: {
+        Task {
+          if let sync {
+            await sync.signIn()
+          } else {
+            await account.signIn()
+          }
+        }
+      },
       signOut: { Task { await account.signOut() } },
-      restore: { await account.restore(from: $0) },
+      restore: { text in
+        if let sync {
+          return await sync.restore(from: text)
+        }
+        return await account.restore(from: text)
+      },
       syncStatus: sync?.status,
       syncNow: { Task { await sync?.syncNow() } }
     )

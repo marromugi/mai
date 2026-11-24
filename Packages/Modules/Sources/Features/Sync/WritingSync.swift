@@ -97,6 +97,22 @@ internal import Sync
     }
   }
 
+  /// Signs in for the account a plan was bought for, then syncs.
+  func signIn() async {
+    await account.signIn()
+    await syncNow()
+  }
+
+  /// Brings the own key back from the recovery key `text`, then syncs. Answers what went wrong,
+  /// written for a person, or nil once the key is back.
+  func restore(from text: String) async -> String? {
+    if let problem = await account.restore(from: text) {
+      return problem
+    }
+    await syncNow()
+    return nil
+  }
+
   /// Called after each edit saved on the device: sets a sync to run once edits pause.
   func edited() {
     guard account.phase == .signedIn else { return }
