@@ -22,6 +22,7 @@
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.9.0",
     "@cloudflare/workers-types": "5.20261123.1",
+    "@types/node": "18.19.130",
     "fast-check": "4.10.2",
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",
