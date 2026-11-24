@@ -6,11 +6,13 @@ import type { SignIn } from "./sign-in";
 import type { Answer, Store, ToDelete } from "./store";
 
 /**
- * `DELETE /account`: Apple's refresh token is revoked, then R2 is emptied of the account, then its
- * rows are deleted. Until the rows go, the session still works, so a call that fails partway is
- * called again from the start: revoking and emptying R2 twice do no harm. Once they go, nothing on
- * the server names the account, so R2 is swept once more after them, for a photo put that stored
- * its bytes while this ran.
+ * `DELETE /account`: Apple's refresh token is revoked, then the account is marked while the
+ * caller's session is live, then R2 is emptied of it, then its rows are deleted. Once marked, its
+ * sessions ending (Apple's `consent-revoked` for this very revoke) no longer stops it. Until the
+ * rows go, the session still works, so a call that fails partway is called again from the start:
+ * revoking, marking and emptying R2 twice do no harm. Once they go, nothing on the server names the
+ * account, so R2 is swept once more after them, for a photo put that stored its bytes while this
+ * ran.
  */
 export async function deleteAccount(
   caller: Caller,
@@ -23,8 +25,8 @@ export async function deleteAccount(
     return { ok: false, refusal: "session" };
   }
   const deleted = await deleteFound(found, signIn, photos, now, {
-    mark: () => Promise.resolve(true),
-    deleteRows: () => signIn.store.deleteAccount(caller, found.account, now),
+    mark: () => signIn.store.markForDeletionByCaller(caller, found.account, now),
+    deleteRows: () => signIn.store.deleteAccount(found.account),
   });
   if (deleted === "unrevoked") {
     return {
@@ -58,7 +60,7 @@ export async function deleteLapsedAccounts(
       try {
         const deleted = await deleteFound(found, signIn, photos, now, {
           mark: () => signIn.store.markForDeletion(found.account, now),
-          deleteRows: () => signIn.store.deleteLapsedAccount(found.account),
+          deleteRows: () => signIn.store.deleteAccount(found.account),
         });
         if (deleted === "unrevoked") {
           console.warn(

@@ -483,19 +483,37 @@ describe("a deletion that fails partway", () => {
     expect(await rowsOf(one.account)).toEqual(noRow);
   });
 
-  it("deletes no row when the session ends before the rows go", async () => {
+  it("deletes no row when the session ends before the account is marked", async () => {
     const one = await fullAccount();
     const answer = await deleteAccount(one.token, {
       store: (store) =>
-        storeWith(store, "deleteAccount", async (caller, account, now) => {
+        storeWith(store, "markForDeletionByCaller", async (caller, account, now) => {
           await store.endSession(caller, now);
-          return store.deleteAccount(caller, account, now);
+          return store.markForDeletionByCaller(caller, account, now);
         }),
     });
     expect(answer.status).toBe(401);
     expect(await rowsOf(one.account)).toMatchObject({ ...everyRow, sessions: 1 });
+    expect(await keysOf(one.account)).toHaveLength(2);
     expect((await deleteAccount(one.secondToken)).status).toBe(204);
     expect(await rowsOf(one.account)).toEqual(noRow);
+  });
+
+  it("finishes when every session of the account ends once it is marked", async () => {
+    const one = await fullAccount();
+    const answer = await deleteAccount(one.token, {
+      store: (store) =>
+        storeWith(store, "deleteAccount", async (account) => {
+          await database.execute({
+            sql: "DELETE FROM sessions WHERE account_id = ?",
+            args: [account],
+          });
+          return store.deleteAccount(account);
+        }),
+    });
+    expect(answer.status).toBe(204);
+    expect(await rowsOf(one.account)).toEqual(noRow);
+    expect(await keysOf(one.account)).toEqual([]);
   });
 });
 
@@ -717,9 +735,9 @@ describe("the cron trigger, for lapsed accounts", () => {
     const late = `${one.account}/late/photo/upload`;
     await deleteLapsed(at + lapsedKept, {
       store: (reached) =>
-        storeWith(reached, "deleteLapsedAccount", async (account) => {
+        storeWith(reached, "deleteAccount", async (account) => {
           await env.PHOTOS.put(late, "x");
-          return reached.deleteLapsedAccount(account);
+          return reached.deleteAccount(account);
         }),
     });
     expect(await rowsOf(one.account)).toEqual(noRow);

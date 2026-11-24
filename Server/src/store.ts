@@ -580,16 +580,18 @@ export class Store {
   }
 
   /**
-   * Deletes every row of the caller's account `account`, its sessions last, in one batch, while
-   * the caller's session is live. False when it wasn't, and nothing was deleted.
+   * Marks the caller's account `account` as being deleted while the caller's session is live. False
+   * when it wasn't. Once marked, ending the account's sessions no longer stops its deletion.
    */
-  async deleteAccount(caller: Caller, account: AccountId, now: number): Promise<boolean> {
-    return this.#deleteRows(
-      account,
-      `:account = (SELECT s.account_id FROM sessions s WHERE ${liveSession})`,
-      callerValues(caller, now),
-      ["accounts", ...accountTables],
+  async markForDeletionByCaller(caller: Caller, account: AccountId, now: number): Promise<boolean> {
+    const marked = await this.#client.execute(
+      bind(
+        `UPDATE accounts SET deleting = 1
+         WHERE id = :account AND id = (SELECT s.account_id FROM sessions s WHERE ${liveSession})`,
+        { ...callerValues(caller, now), account },
+      ),
     );
+    return marked.rowsAffected === 1;
   }
 
   /**
@@ -620,9 +622,9 @@ export class Store {
 
   /**
    * Deletes every row of `account`, its `accounts` row last, in one batch, when `markForDeletion`
-   * marked it. False when it hadn't, and nothing was deleted.
+   * or `markForDeletionByCaller` marked it. False when it hadn't, and nothing was deleted.
    */
-  async deleteLapsedAccount(account: AccountId): Promise<boolean> {
+  async deleteAccount(account: AccountId): Promise<boolean> {
     return this.#deleteRows(
       account,
       "EXISTS (SELECT 1 FROM accounts WHERE id = :account AND deleting = 1)",
