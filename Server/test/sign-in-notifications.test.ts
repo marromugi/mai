@@ -202,6 +202,73 @@ async function sessionWorks(token: string): Promise<boolean> {
   return answer.status === 200;
 }
 
+/** A request to the Worker as deployed, as `token`'s device or agent. */
+function deployed(path: string, token: string, method = "GET", body?: unknown): Promise<Response> {
+  return exports.default.fetch(
+    new Request(`https://mai.test${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
+}
+
+/**
+ * Approves an agent for the account of the session `token`, turns read mode on for a minute, and
+ * sends the agent a copy of the account's writing; answers the agent's token.
+ */
+async function readingAgent(account: string, token: string): Promise<string> {
+  const key = Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  const approved = await deployed("/agents", token, "POST", { publicKey: key, signature: "00" });
+  expect(approved.status).toBe(201);
+  const agent = await approved.json<{ agent: string; token: string }>();
+  const until = Date.now() + 60 * 1000;
+  expect((await deployed("/read-mode", token, "PUT", { until })).status).toBe(200);
+  const revision = "a".repeat(64);
+  await database.execute({
+    sql: "UPDATE writings SET revision = ? WHERE account_id = ?",
+    args: [revision, account],
+  });
+  const { rows } = await database.execute({
+    sql: "SELECT id FROM writings WHERE account_id = ?",
+    args: [account],
+  });
+  const sent = await deployed("/copies", token, "POST", {
+    expires: until,
+    copies: [{ writing: rows[0]?.["id"], agent: agent.agent, revision, wrapped: "00" }],
+  });
+  expect(sent.status).toBe(200);
+  expect(await agentReads(agent.token)).toBe(1);
+  return agent.token;
+}
+
+/** How many writings the agent of `token` can read; 401 counts as none. */
+async function agentReads(token: string): Promise<number> {
+  const answer = await deployed("/agent/writings", token);
+  if (answer.status === 401) {
+    return 0;
+  }
+  expect(answer.status).toBe(200);
+  return (await answer.json<{ writings: unknown[] }>()).writings.length;
+}
+
+/** Whether the account's read mode is kept, with how many copies, and its agents unrevoked. */
+async function readModeOf(account: string) {
+  const { rows } = await database.execute({
+    sql: `SELECT (SELECT count(*) FROM read_modes WHERE account_id = :account) AS modes,
+            (SELECT count(*) FROM copies WHERE account_id = :account) AS copies,
+            (SELECT count(*) FROM agents WHERE account_id = :account AND revoked = 0) AS agents`,
+    args: { account },
+  });
+  return {
+    modes: Number(rows[0]?.["modes"]),
+    copies: Number(rows[0]?.["copies"]),
+    agents: Number(rows[0]?.["agents"]),
+  };
+}
+
 describe("Sign in with Apple notifications", () => {
   for (const type of ["consent-revoked", "account-deleted", "account-delete"]) {
     it(`ends every session of the account on ${type}, and no other account's`, async () => {
@@ -238,6 +305,45 @@ describe("Sign in with Apple notifications", () => {
       expect(await sessionWorks(other.token)).toBe(true);
     });
   }
+
+  it("turns read mode off on consent-revoked, so agents read nothing, and no other account's", async () => {
+    const one = await accountWithSessions();
+    const other = await accountWithSessions();
+    const agent = await readingAgent(one.account, one.token);
+    const otherAgent = await readingAgent(other.account, other.token);
+
+    expect((await notify(await notification({ sub: one.sub }))).status).toBe(200);
+
+    expect(await agentReads(agent)).toBe(0);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 1 });
+    expect(await agentReads(otherAgent)).toBe(1);
+    expect(await readModeOf(other.account)).toEqual({ modes: 1, copies: 1, agents: 1 });
+  });
+
+  it("keeps read mode turned on again after the user signed in again, when sent again", async () => {
+    const one = await accountWithSessions();
+    await readingAgent(one.account, one.token);
+    const sent = await notification({ sub: one.sub, iat: Math.floor(Date.now() / 1000) - 30 });
+    expect((await notify(sent)).status).toBe(200);
+    const again = await newSessionToken();
+    await database.execute({
+      sql: `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
+            VALUES (?, ?, ?, ?, ?)`,
+      args: [
+        again.caller.session,
+        one.account,
+        again.caller.secretSha256,
+        Date.now() - 10 * 1000,
+        Date.now(),
+      ],
+    });
+    const agent = await readingAgent(one.account, again.token);
+
+    expect((await notify(sent)).status).toBe(200);
+
+    expect(await agentReads(agent)).toBe(1);
+    expect((await readModeOf(one.account)).modes).toBe(1);
+  });
 
   it("keeps the account on consent-revoked", async () => {
     const one = await accountWithSessions();
@@ -450,5 +556,315 @@ describe("a notification refused", () => {
       }),
     );
     expect(answer.status).toBe(400);
+  });
+});
+
+/** Puts read mode and copies straight into the database, for states the routes don't make. */
+async function rawReadMode(
+  account: string,
+  until: number | undefined,
+  copies: { agent: string; expires: number }[],
+) {
+  const { rows } = await database.execute({
+    sql: "SELECT id FROM writings WHERE account_id = ?",
+    args: [account],
+  });
+  const writing = rows[0]?.["id"];
+  if (typeof writing !== "string") {
+    throw new Error("the account has a writing");
+  }
+  await database.batch(
+    [
+      ...(until === undefined
+        ? []
+        : [
+            {
+              sql: "INSERT INTO read_modes (account_id, until) VALUES (?, ?)",
+              args: [account, until],
+            },
+          ]),
+      ...copies.map((copy) => ({
+        sql: `INSERT INTO copies (account_id, writing_id, agent_id, revision, wrapped, expires)
+              VALUES (?, ?, ?, 'r', X'00', ?)`,
+        args: [account, writing, copy.agent, copy.expires],
+      })),
+    ],
+    "write",
+  );
+}
+
+async function sessionAt(account: string, created: number): Promise<string> {
+  const again = await newSessionToken();
+  await database.execute({
+    sql: `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
+          VALUES (?, ?, ?, ?, ?)`,
+    args: [again.caller.session, account, again.caller.secretSha256, created, Date.now()],
+  });
+  return again.token;
+}
+
+describe("read mode on a notification", () => {
+  it("read mode on, no copies: turned off", async () => {
+    const one = await accountWithSessions();
+    await rawReadMode(one.account, Date.now() + 60_000, []);
+    expect((await notify(await notification({ sub: one.sub }))).status).toBe(200);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 0 });
+  });
+
+  it("copies with read mode past its end: deleted", async () => {
+    const one = await accountWithSessions();
+    const past = Date.now() - 1000;
+    await rawReadMode(one.account, past, [{ agent: crypto.randomUUID(), expires: past }]);
+    expect((await notify(await notification({ sub: one.sub }))).status).toBe(200);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 0 });
+  });
+
+  it("copies with no read_modes row: deleted", async () => {
+    const one = await accountWithSessions();
+    await rawReadMode(one.account, undefined, [
+      { agent: crypto.randomUUID(), expires: Date.now() + 1000 },
+    ]);
+    expect((await notify(await notification({ sub: one.sub }))).status).toBe(200);
+    expect((await readModeOf(one.account)).copies).toBe(0);
+  });
+
+  it("several agents, one revoked, an exclusion: every copy gone, agents and exclusion as they were", async () => {
+    const one = await accountWithSessions();
+    const agents: { agent: string; token: string }[] = [];
+    for (let i = 0; i < 3; i++) {
+      const key = Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("");
+      const made = await deployed("/agents", one.token, "POST", {
+        publicKey: key,
+        signature: "00",
+      });
+      expect(made.status).toBe(201);
+      agents.push(await made.json());
+    }
+    const [agent0, agent1, agent2] = agents;
+    if (agent0 === undefined || agent1 === undefined || agent2 === undefined) {
+      throw new Error("three agents were approved");
+    }
+    expect((await deployed(`/agents/${agents[2]?.agent}`, one.token, "DELETE")).status).toBe(204);
+    const until = Date.now() + 60_000;
+    expect((await deployed("/read-mode", one.token, "PUT", { until })).status).toBe(200);
+    const revision = "b".repeat(64);
+    await database.execute({
+      sql: "UPDATE writings SET revision = ? WHERE account_id = ?",
+      args: [revision, one.account],
+    });
+    const excluded = crypto.randomUUID();
+    expect((await deployed(`/exclusions/${excluded}`, one.token, "PUT")).status).toBe(204);
+    const { rows } = await database.execute({
+      sql: "SELECT id FROM writings WHERE account_id = ?",
+      args: [one.account],
+    });
+    const sent = await deployed("/copies", one.token, "POST", {
+      expires: until,
+      copies: agents
+        .slice(0, 2)
+        .map(({ agent }) => ({ writing: rows[0]?.["id"], agent, revision, wrapped: "00" })),
+    });
+    expect(sent.status).toBe(200);
+    expect(await agentReads(agent0.token)).toBe(1);
+    expect(await agentReads(agent1.token)).toBe(1);
+
+    expect((await notify(await notification({ sub: one.sub }))).status).toBe(200);
+
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 2 });
+    expect(await agentReads(agent0.token)).toBe(0);
+    expect(await agentReads(agent1.token)).toBe(0);
+    const ex = await database.execute({
+      sql: "SELECT count(*) AS n FROM exclusions WHERE account_id = ?",
+      args: [one.account],
+    });
+    expect(Number(ex.rows[0]?.["n"])).toBe(1);
+    const revoked = await database.execute({
+      sql: "SELECT revoked FROM agents WHERE id = ?",
+      args: [agent2.agent],
+    });
+    expect(Number(revoked.rows[0]?.["revoked"])).toBe(1);
+  });
+
+  it("account-deleted whose deletion then fails: read mode already off", async () => {
+    const one = await accountWithSessions();
+    const agent = await readingAgent(one.account, one.token);
+    const failing = replaced(env.PHOTOS, "delete", () =>
+      Promise.reject(new Error("R2 is unavailable")),
+    );
+    await expect(
+      notify(await notification({ type: "account-deleted", sub: one.sub }), undefined, {
+        photos: { bucket: failing, keepAlive: () => undefined },
+      }),
+    ).rejects.toThrow(/R2 is unavailable/);
+    expect(await accountKept(one.account)).toBe(true);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 1 });
+    expect(await agentReads(agent)).toBe(0);
+  });
+
+  it("account-deleted after the user signed in again: account still deleted", async () => {
+    const one = await accountWithSessions();
+    const iat = Math.floor(Date.now() / 1000) - 30;
+    await sessionAt(one.account, Date.now() - 10_000);
+    await rawReadMode(one.account, Date.now() + 60_000, []);
+    expect(
+      (await notify(await notification({ type: "account-deleted", sub: one.sub, iat }))).status,
+    ).toBe(200);
+    expect(await accountKept(one.account)).toBe(false);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 0 });
+  });
+
+  it("no iat: read mode off, even with a session started within the last second", async () => {
+    const one = await accountWithSessions();
+    await database.execute({
+      sql: "UPDATE sessions SET created = ? WHERE account_id = ?",
+      args: [Date.now() - 500, one.account],
+    });
+    await readingAgent(one.account, one.token);
+    expect(
+      (await notify(await notification({ sub: one.sub, claims: { iat: undefined } }))).status,
+    ).toBe(200);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 1 });
+  });
+
+  it("iat an hour in the future: read mode off and every session ended", async () => {
+    const one = await accountWithSessions();
+    await sessionAt(one.account, Date.now() - 1000);
+    await readingAgent(one.account, one.token);
+    const iat = Math.floor(Date.now() / 1000) + 3600;
+    expect((await notify(await notification({ sub: one.sub, iat }))).status).toBe(200);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 1 });
+    expect(await sessionsOf(one.account)).toBe(0);
+  });
+
+  it("iat not a whole number: read mode off", async () => {
+    const one = await accountWithSessions();
+    await readingAgent(one.account, one.token);
+    expect(
+      (await notify(await notification({ sub: one.sub, claims: { iat: "soon" } }))).status,
+    ).toBe(200);
+    expect((await readModeOf(one.account)).modes).toBe(0);
+  });
+
+  it("a later session started within iat's second: read mode off", async () => {
+    const one = await accountWithSessions();
+    const iat = Math.floor(Date.now() / 1000) - 5;
+    await sessionAt(one.account, iat * 1000 + 999);
+    await rawReadMode(one.account, Date.now() + 60_000, [
+      { agent: crypto.randomUUID(), expires: Date.now() + 60_000 },
+    ]);
+    expect((await notify(await notification({ sub: one.sub, iat }))).status).toBe(200);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 0 });
+  });
+
+  it("a later session started as the next second begins: read mode and copies kept", async () => {
+    const one = await accountWithSessions();
+    const iat = Math.floor(Date.now() / 1000) - 5;
+    await sessionAt(one.account, (iat + 1) * 1000);
+    await rawReadMode(one.account, Date.now() + 60_000, [
+      { agent: crypto.randomUUID(), expires: Date.now() + 60_000 },
+    ]);
+    expect((await notify(await notification({ sub: one.sub, iat }))).status).toBe(200);
+    expect(await readModeOf(one.account)).toEqual({ modes: 1, copies: 1, agents: 0 });
+    expect(await sessionsOf(one.account)).toBe(1);
+  });
+
+  it("sent twice before a later sign-in: off both times, no error", async () => {
+    const one = await accountWithSessions();
+    await readingAgent(one.account, one.token);
+    const sent = await notification({ sub: one.sub });
+    expect((await notify(sent)).status).toBe(200);
+    expect((await notify(sent)).status).toBe(200);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 1 });
+  });
+
+  it("sent again after the later sign-in's session ended: read mode off again", async () => {
+    const one = await accountWithSessions();
+    const sent = await notification({ sub: one.sub, iat: Math.floor(Date.now() / 1000) - 30 });
+    expect((await notify(sent)).status).toBe(200);
+    const token = await sessionAt(one.account, Date.now() - 10_000);
+    const agent = await readingAgent(one.account, token);
+    expect((await deployed("/session", token, "DELETE")).status).toBeLessThan(500);
+    await database.execute({
+      sql: "DELETE FROM sessions WHERE account_id = ?",
+      args: [one.account],
+    });
+    expect((await notify(sent)).status).toBe(200);
+    expect(await agentReads(agent)).toBe(0);
+    expect((await readModeOf(one.account)).modes).toBe(0);
+  });
+
+  it("sent again after the later session went 180 days unused, before the cron sweep: read mode off again", async () => {
+    const one = await accountWithSessions();
+    const day = 24 * 60 * 60 * 1000;
+    const iat = Math.floor((Date.now() - 200 * day) / 1000);
+    const dead = Date.now() - 190 * day;
+    // The account's own sessions started before the notification was issued.
+    await database.execute({
+      sql: "UPDATE sessions SET created = ? WHERE account_id = ?",
+      args: [Date.now() - 210 * day, one.account],
+    });
+    const again = await newSessionToken();
+    await database.execute({
+      sql: `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
+            VALUES (?, ?, ?, ?, ?)`,
+      args: [again.caller.session, one.account, again.caller.secretSha256, dead, dead],
+    });
+    await rawReadMode(one.account, Date.now() + 60_000, []);
+    expect(await sessionWorks(again.token)).toBe(false);
+    expect((await notify(await notification({ sub: one.sub, iat }))).status).toBe(200);
+    expect((await readModeOf(one.account)).modes).toBe(0);
+  });
+
+  it("a sub with no account: no account's read mode touched", async () => {
+    const one = await accountWithSessions();
+    const agent = await readingAgent(one.account, one.token);
+    expect(
+      (await notify(await notification({ sub: `unknown.${crypto.randomUUID()}` }))).status,
+    ).toBe(200);
+    expect(await agentReads(agent)).toBe(1);
+    expect(await readModeOf(one.account)).toEqual({ modes: 1, copies: 1, agents: 1 });
+  });
+
+  it("PUT /read-mode and POST /copies from the old session racing the notification never leave read mode on", async () => {
+    for (let round = 0; round < 15; round++) {
+      const one = await accountWithSessions();
+      const agent = await readingAgent(one.account, one.token);
+      const until = Date.now() + 120_000;
+      const revision = "a".repeat(64);
+      const { rows } = await database.execute({
+        sql: "SELECT id FROM writings WHERE account_id = ?",
+        args: [one.account],
+      });
+      const agentId = (
+        await database.execute({
+          sql: "SELECT id FROM agents WHERE account_id = ?",
+          args: [one.account],
+        })
+      ).rows[0]?.["id"];
+      const body = await notification({ sub: one.sub });
+      const racing = [
+        deployed("/read-mode", one.token, "PUT", { until }),
+        deployed("/copies", one.secondToken, "POST", {
+          expires: until,
+          copies: [{ writing: rows[0]?.["id"], agent: agentId, revision, wrapped: "00" }],
+        }),
+      ];
+      const order = round % 3;
+      const all =
+        order === 0
+          ? [notify(body), ...racing]
+          : order === 1
+            ? [...racing, notify(body)]
+            : [...racing.slice(0, 1), notify(body), ...racing.slice(1)];
+      await Promise.all(all);
+      expect(await readModeOf(one.account), `round ${round}`).toEqual({
+        modes: 0,
+        copies: 0,
+        agents: 1,
+      });
+      expect(await agentReads(agent)).toBe(0);
+    }
   });
 });
