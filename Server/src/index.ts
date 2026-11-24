@@ -17,6 +17,7 @@ import {
   subscriptionKept,
 } from "./subscriptions";
 import { issueChallenge, makeAccount, startSession, type SignIn } from "./sign-in";
+import { receiveSignInNotification } from "./sign-in-notifications";
 import { Store } from "./store";
 import { answered, refused } from "./answers";
 import { serveAgent, serveReadMode } from "./read-mode-routes";
@@ -105,6 +106,8 @@ export async function serve(
       return startSession(request, signIn, now);
     case "POST /app-store/notifications":
       return receiveNotification(request, signIn.appStore, signIn.store);
+    case "POST /apple/sign-in-notifications":
+      return receiveSignInNotification(request, signIn, photos, now);
   }
   const path = new URL(request.url).pathname.split("/").slice(1);
   if (path[0] === "agent") {

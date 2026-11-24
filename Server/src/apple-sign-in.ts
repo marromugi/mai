@@ -1,4 +1,4 @@
-import { isJson, readCompactJws, text, whole, type Checked } from "./jws";
+import { isJson, readCompactJws, text, whole, type Checked, type Json } from "./jws";
 
 /**
  * Checks a Sign in with Apple ID token as
@@ -18,16 +18,15 @@ export const keysLifetime = 24 * 60 * 60 * 1000;
  */
 export const refetchGap = 5 * 60 * 1000;
 
-export type SignInFailure =
+/** Why a token isn't one Apple signed with a Sign in with Apple key. */
+export type SignatureFailure =
   | "malformed"
   | "algorithm"
   | "unknown-key"
   | "keys-unavailable"
-  | "signature"
-  | "issuer"
-  | "audience"
-  | "expired"
-  | "nonce";
+  | "signature";
+
+export type SignInFailure = SignatureFailure | "issuer" | "audience" | "expired" | "nonce";
 
 /** Who signed in: Apple's stable ID for the user within the developer's team. */
 export type AppleUser = { readonly sub: string };
@@ -45,6 +44,37 @@ export async function verifyIdentityToken(
   keys: AppleSignInKeys,
   now: number,
 ): Promise<Checked<AppleUser, SignInFailure>> {
+  const signed = await appleSigned(token, keys, now);
+  if (!signed.ok) {
+    return signed;
+  }
+  const claims = signed.value;
+  const sub = text(claims["sub"]);
+  const exp = whole(claims["exp"]);
+  if (sub === undefined || exp === undefined) {
+    return { ok: false, failure: "malformed" };
+  }
+  if (claims["iss"] !== appleIssuer) {
+    return { ok: false, failure: "issuer" };
+  }
+  if (claims["aud"] !== expected.bundleId) {
+    return { ok: false, failure: "audience" };
+  }
+  if (exp * 1000 <= now) {
+    return { ok: false, failure: "expired" };
+  }
+  if (claims["nonce"] !== expected.nonce) {
+    return { ok: false, failure: "nonce" };
+  }
+  return { ok: true, value: { sub } };
+}
+
+/** The claims of a JWT signed with one of Apple's Sign in with Apple keys, not yet checked. */
+export async function appleSigned(
+  token: string,
+  keys: AppleSignInKeys,
+  now: number,
+): Promise<Checked<Json, SignatureFailure>> {
   const jws = readCompactJws(token);
   if (jws === undefined) {
     return { ok: false, failure: "malformed" };
@@ -67,29 +97,7 @@ export async function verifyIdentityToken(
     jws.signature,
     jws.signingInput,
   );
-  if (!signed) {
-    return { ok: false, failure: "signature" };
-  }
-
-  const claims = jws.payload;
-  const sub = text(claims["sub"]);
-  const exp = whole(claims["exp"]);
-  if (sub === undefined || exp === undefined) {
-    return { ok: false, failure: "malformed" };
-  }
-  if (claims["iss"] !== appleIssuer) {
-    return { ok: false, failure: "issuer" };
-  }
-  if (claims["aud"] !== expected.bundleId) {
-    return { ok: false, failure: "audience" };
-  }
-  if (exp * 1000 <= now) {
-    return { ok: false, failure: "expired" };
-  }
-  if (claims["nonce"] !== expected.nonce) {
-    return { ok: false, failure: "nonce" };
-  }
-  return { ok: true, value: { sub } };
+  return signed ? { ok: true, value: jws.payload } : { ok: false, failure: "signature" };
 }
 
 type KeySet = {
@@ -112,7 +120,7 @@ export class AppleSignInKeys {
     private readonly cache: Cache,
   ) {}
 
-  async key(kid: string, now: number): Promise<Checked<CryptoKey, SignInFailure>> {
+  async key(kid: string, now: number): Promise<Checked<CryptoKey, SignatureFailure>> {
     let set = (await this.kept(now)) ?? (await this.fetched(now));
     if (set !== undefined && !set.keys.has(kid) && now - set.tried >= refetchGap) {
       // A failed fetch is kept as tried too, so it holds off the next one as a good one would.
