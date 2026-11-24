@@ -97,27 +97,35 @@ public struct SyncAccount: Sendable {
     return session
   }
 
-  /// Starts the account of `session` over without its own key, while `check` is still its own key
-  /// check, as when no device holds the key and its recovery key is lost too: the server's
-  /// writings go, and a new own key is made, kept in place of any key the device held, and its
-  /// check put.
-  public func startOver(_ session: Session, dropping check: Data) async throws(AccountError)
+  /// Starts the account of `session` over with the own key held, or one made and kept now, in
+  /// place of `check`, the account's own key check that key isn't, as when no device holds the
+  /// account's key and its recovery key is lost too: the server's writings go. The key is kept
+  /// before it is sent, so a start over sent again sends the same key, and the server answers that
+  /// it is done. `.ready` without asking the server when the key held is the account's.
+  public func startOver(_ session: Session, replacing check: Data) async throws(AccountError)
     -> OwnKeyOutcome
   {
+    let key: OwnKey
+    if let held = try keychain({ () throws(KeychainError) in try ownKeys.load() }) {
+      guard held.check != check else { return .ready }
+      key = held
+    } else {
+      key = OwnKey.generate()
+      try keychain { () throws(KeychainError) in try ownKeys.save(key) }
+    }
     guard
       try await serverCall({ () async throws(ServerError) in
-        try await server.startOver(dropping: check, token: session.token)
+        try await server.startOver(replacing: check, with: key.check, token: session.token)
       })
     else {
       throw .ownKeyChanged
     }
-    let key = OwnKey.generate()
-    if try keychain({ () throws(KeychainError) in try ownKeys.load() }) == nil {
-      try keychain { () throws(KeychainError) in try ownKeys.save(key) }
-    } else {
-      try keychain { () throws(KeychainError) in try ownKeys.replace(with: key) }
-    }
-    return try await putCheck(of: key, session) ? .made(RecoveryKey(key)) : .recoveryKeyNeeded
+    return .made(RecoveryKey(key))
+  }
+
+  /// The own key kept on the device, nil when none is.
+  public func ownKey() throws(AccountError) -> OwnKey? {
+    try keychain { () throws(KeychainError) in try ownKeys.load() }
   }
 
   /// Settles the own key against the account's own key check in `state`, the account as just read

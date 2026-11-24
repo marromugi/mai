@@ -239,7 +239,7 @@ struct AccountContractTests {
     #expect(try await second.account.settleOwnKey(signedIn, against: state) == .recoveryKeyNeeded)
     let check = try #require(state.ownKeyCheck)
 
-    let outcome = try await second.account.startOver(signedIn, dropping: check)
+    let outcome = try await second.account.startOver(signedIn, replacing: check)
     let made = try #require(try second.ownKeys.load())
     #expect(outcome == .made(RecoveryKey(made)))
     #expect(made != recoveryKey.ownKey)
@@ -247,12 +247,13 @@ struct AccountContractTests {
     #expect(try await WritingServer(url: try #require(url), token: signedIn.token).list().isEmpty)
     #expect(try await first.account.check() == .sessionEnded)
 
-    await #expect {
-      try await second.account.startOver(signedIn, dropping: check)
-    } throws: { error in
-      guard case .ownKeyChanged = error as? AccountError else { return false }
-      return true
-    }
-    #expect(try second.ownKeys.load() == made)
+    // Sent again, as when its answer was lost: done already, and the same key's.
+    let sealed = try made.seal(writing)
+    _ = try await WritingServer(url: try #require(url), token: signedIn.token).save(
+      sealed, over: nil)
+    #expect(
+      try await second.account.startOver(signedIn, replacing: check) == .made(RecoveryKey(made)))
+    #expect(
+      try await WritingServer(url: try #require(url), token: signedIn.token).list().count == 1)
   }
 }

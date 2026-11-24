@@ -15,6 +15,7 @@ struct PlansView: View {
   @State private var notice: PlanNotice?
   @Environment(\.purchase) private var purchase
   @Environment(\.account) private var account
+  @Environment(\.writingSync) private var sync
 
   var body: some View {
     Group {
@@ -31,7 +32,11 @@ struct PlansView: View {
             signIn: { Task { await account?.signIn() } },
             restore: { await account?.restore(from: $0) },
             startOver: {
-              await account?.startOver()
+              if let sync {
+                await sync.startOver()
+              } else {
+                await account?.startOver()
+              }
               return account?.phase == .recoveryKeyNeeded
             })
         } else if offers.isEmpty {

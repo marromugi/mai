@@ -46,12 +46,24 @@ async function call(
   return answer;
 }
 
-/** `sent` null sends no `Mai-Own-Key-Check`. */
-function startOver(token: string, sent: string | null = hex(check), now = Date.now()) {
+/** The own key check a start over puts in place of `check`. */
+const fresh = new Uint8Array(32).fill(0xcd);
+
+/** Starts over with `sent` as the check replaced, and `put` as the new one. */
+function startOver(
+  token: string,
+  sent: string = hex(check),
+  now = Date.now(),
+  put: Uint8Array<ArrayBuffer> = fresh,
+) {
   return call(
     "/account/own-key-check",
     token,
-    { method: "DELETE", headers: sent === null ? {} : { "Mai-Own-Key-Check": sent } },
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream", "Mai-Replaces-Own-Key-Check": sent },
+      body: put,
+    },
     now,
   );
 }
@@ -137,15 +149,15 @@ async function readAccount(token: string): Promise<Read> {
   return answer.json<Read>();
 }
 
-describe("DELETE /account/own-key-check", () => {
-  it("deletes what the own key sealed, drops the check, and ends the account's other sessions", async () => {
+describe("PUT /account/own-key-check with Mai-Replaces-Own-Key-Check", () => {
+  it("deletes what the own key sealed, keeps the new check, and ends the account's other sessions", async () => {
     const account = await filledAccount();
     expect(await keysOf(account.account)).toHaveLength(2);
 
     expect((await startOver(account.token)).status).toBe(204);
 
     const read = await readAccount(account.token);
-    expect(read.ownKeyCheck).toBeNull();
+    expect(read.ownKeyCheck).toBe(hex(fresh));
     expect(read.lapsed).toBe(false);
     expect(read.usage["writings"]?.used).toBe(0);
     expect(read.usage["writingsBytes"]?.used).toBe(0);
@@ -160,17 +172,9 @@ describe("DELETE /account/own-key-check", () => {
     expect(await listed.json()).toEqual({ writings: [] });
   });
 
-  it("lets the account put a new own key check and write again", async () => {
+  it("lets the account write again with the new key", async () => {
     const account = await filledAccount();
     expect((await startOver(account.token)).status).toBe(204);
-    const another = new Uint8Array(32).fill(9);
-    const kept = await call("/account/own-key-check", account.token, {
-      method: "PUT",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: another,
-    });
-    expect(kept.status).toBe(204);
-    expect((await readAccount(account.token)).ownKeyCheck).toBe(hex(another));
     const saved = await call(`/writings/${account.writing}`, account.token, {
       method: "PUT",
       headers: { "Content-Type": "application/octet-stream", "Mai-Base-Revision": "none" },
@@ -179,7 +183,7 @@ describe("DELETE /account/own-key-check", () => {
     expect(saved.status).toBe(200);
   });
 
-  it("changes nothing, answering 409, when the check sent isn't the account's", async () => {
+  it("changes nothing, answering 409, when the check replaced isn't the account's", async () => {
     const account = await filledAccount();
     const answer = await startOver(account.token, hex(new Uint8Array(32).fill(8)));
     expect(answer.status).toBe(409);
@@ -191,7 +195,7 @@ describe("DELETE /account/own-key-check", () => {
     expect((await call("/writings", account.otherToken)).status).toBe(200);
   });
 
-  it("answers 409 when sent again, keeping what was written since", async () => {
+  it("answers 204 when sent again, deleting nothing written since", async () => {
     const account = await filledAccount();
     expect((await startOver(account.token)).status).toBe(204);
     const saved = await call(`/writings/${account.writing}`, account.token, {
@@ -200,13 +204,22 @@ describe("DELETE /account/own-key-check", () => {
       body: envelope(account.writing),
     });
     expect(saved.status).toBe(200);
-    expect((await startOver(account.token)).status).toBe(409);
+    expect((await startOver(account.token)).status).toBe(204);
     expect(await countOf("writings", account.account)).toBe(1);
+  });
+
+  it("answers 409 to another start over from the same check once one is done", async () => {
+    const account = await filledAccount();
+    expect((await startOver(account.token)).status).toBe(204);
+    const other = new Uint8Array(32).fill(0xef);
+    expect((await startOver(account.token, hex(check), Date.now(), other)).status).toBe(409);
+    expect((await readAccount(account.token)).ownKeyCheck).toBe(hex(fresh));
   });
 
   it("answers 409 for an account with no own key check", async () => {
     const { token } = await newAccount();
     expect((await startOver(token)).status).toBe(409);
+    expect((await readAccount(token)).ownKeyCheck).toBeNull();
   });
 
   it("leaves other accounts as they are", async () => {
@@ -227,14 +240,15 @@ describe("DELETE /account/own-key-check", () => {
   });
 
   it.each([
-    ["no header", null],
     ["uppercase hex", hex(check).toUpperCase()],
     ["31 bytes", hex(check.slice(1))],
     ["not hex", "z".repeat(64)],
-  ])("refuses %s with 400 and changes nothing", async (_, sent) => {
+    ["the check sent itself", hex(fresh)],
+  ])("refuses %s as the check replaced with 400 and changes nothing", async (_, sent) => {
     const account = await filledAccount();
     expect((await startOver(account.token, sent)).status).toBe(400);
     expect((await readAccount(account.token)).ownKeyCheck).toBe(hex(check));
+    expect(await countOf("writings", account.account)).toBe(1);
   });
 
   it("needs a live session", async () => {

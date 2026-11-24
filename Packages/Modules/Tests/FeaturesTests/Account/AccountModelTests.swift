@@ -434,7 +434,6 @@ struct AccountModelTests {
     let worker = ScriptedWorker([
       "PUT /account/subscription": [.status(200)],
       "GET /account": [ScriptedWorker.account(check: check)],
-      "DELETE /account/own-key-check": [.status(204)],
       "PUT /account/own-key-check": [.status(204)],
     ])
     let model = try model([:], worker: worker, session: session)
@@ -443,10 +442,10 @@ struct AccountModelTests {
     #expect(model.phase == .recoveryKeyNeeded)
     await model.startOver()
     #expect(model.phase == .signedIn)
-    #expect(model.recoveryKeyToShow != nil)
     #expect(model.problem == nil)
     let keys = try #require(try await model.syncKeys())
     #expect(model.recoveryKeyToShow == RecoveryKey(keys.ownKey))
+    #expect(worker.asked.filter { $0 == "PUT /account/own-key-check" }.count == 1)
   }
 
   /// Another device changed the own key since it was read: nothing goes, that is said, and the key
@@ -457,17 +456,77 @@ struct AccountModelTests {
       "PUT /account/subscription": [.status(200)],
       "GET /account": [
         ScriptedWorker.account(check: Data(repeating: 1, count: 32)),
-        ScriptedWorker.account(check: key.check),
+        ScriptedWorker.account(check: Data(repeating: 2, count: 32)),
       ],
-      "DELETE /account/own-key-check": [.status(409)],
+      "PUT /account/own-key-check": [.status(409)],
     ])
     let model = try model([:], worker: worker, session: session, key: key)
     await model.checkAtLaunch()
     await model.refresh()
     await model.startOver()
     #expect(model.problem == AccountError.ownKeyChanged.localizedDescription)
+    #expect(model.phase == .recoveryKeyNeeded)
+    #expect(model.recoveryKeyToShow == nil)
+  }
+
+  /// The start over reached the server, but its answer didn't reach the device: the settling after
+  /// it finds the key the account's, and shows its recovery key all the same.
+  @Test func aStartOverWhoseAnswerWasLostShowsTheRecoveryKey() async throws {
+    let key = OwnKey.generate()
+    let worker = ScriptedWorker([
+      "PUT /account/subscription": [.status(200)],
+      "GET /account": [
+        ScriptedWorker.account(check: Data(repeating: 1, count: 32)),
+        ScriptedWorker.account(check: key.check),
+        ScriptedWorker.account(check: key.check),
+      ],
+    ])
+    let model = try model([:], worker: worker, session: session, key: key)
+    await model.checkAtLaunch()
+    await model.refresh()
+    await model.startOver()
     #expect(model.phase == .signedIn)
-    #expect(worker.asked.filter { $0 == "PUT /account/own-key-check" }.isEmpty)
+    #expect(model.recoveryKeyToShow == RecoveryKey(key))
+    #expect(model.problem == nil)
+
+    // Shown once.
+    model.recoveryKeyWrittenDown()
+    await model.refresh()
+    #expect(model.phase == .signedIn)
+    #expect(model.recoveryKeyToShow == nil)
+  }
+
+  /// Signed out before the start over ended: the recovery key is shown once signed in again.
+  @Test func aStartOverOvertakenByASignOutShowsTheRecoveryKeyOnSigningInAgain() async throws {
+    let key = OwnKey.generate()
+    let worker = ScriptedWorker(
+      [
+        "PUT /account/subscription": [.status(200)],
+        "GET /account": [
+          ScriptedWorker.account(check: Data(repeating: 1, count: 32)),
+          ScriptedWorker.account(check: key.check),
+        ],
+        "PUT /account/own-key-check": [.status(204)],
+        "DELETE /session": [.status(204)],
+        "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
+        "POST /account": [.status(201, json: #"{"token":"s1.a.b"}"#)],
+      ], holding: "PUT /account/own-key-check")
+    let model = try model([:], worker: worker, session: session, key: key)
+    await model.checkAtLaunch()
+    await model.refresh()
+    let startingOver = Task { await model.startOver() }
+    while !worker.isHolding {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    await model.signOut()
+    worker.release()
+    await startingOver.value
+    #expect(model.phase == .signedOut)
+    #expect(model.recoveryKeyToShow == nil)
+
+    await model.signIn()
+    #expect(model.phase == .signedIn)
+    #expect(model.recoveryKeyToShow == RecoveryKey(key))
   }
 
   @Test func startingOverWhileTheKeyIsHereSendsNothing() async throws {
@@ -480,7 +539,7 @@ struct AccountModelTests {
     await model.checkAtLaunch()
     await model.refresh()
     await model.startOver()
-    #expect(!worker.asked.contains("DELETE /account/own-key-check"))
+    #expect(!worker.asked.contains("PUT /account/own-key-check"))
     #expect(model.phase == .signedIn)
   }
 

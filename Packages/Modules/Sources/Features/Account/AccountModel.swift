@@ -22,6 +22,8 @@ enum AccountPhase: Equatable {
 @Observable public final class AccountModel {
   private let account: SyncAccount
   let kept: KeptAccountID
+  /// Whether a start over was asked for whose recovery key hasn't been shown.
+  private let startedOver: StartedOver
   private(set) var phase = AccountPhase.signedOut {
     didSet {
       if phase != .signedIn {
@@ -59,6 +61,7 @@ enum AccountPhase: Equatable {
   ) {
     self.account = account
     self.kept = kept
+    startedOver = StartedOver(defaults: kept.defaults)
     self.syncState = syncState
   }
 
@@ -233,6 +236,8 @@ enum AccountPhase: Equatable {
         return "サインインしていません。もう一度サインインしてください。"
       }
       try await account.restore(from: text, session)
+      // The person holds the recovery key a start over would show.
+      startedOver.forget()
       phase = .signedIn
       return nil
     } catch {
@@ -242,18 +247,21 @@ enum AccountPhase: Equatable {
   }
 
   /// Starts the account over without its own key, once the person confirmed it, as when no
-  /// device holds the key and its recovery key is lost too: the server's writings go, and a new own
-  /// key is made, whose recovery key is shown. Only while the own key isn't here, and not while
-  /// settling or deleting the account; it counts as settling. When another device changed the
-  /// account's own key meanwhile, nothing goes, and the key is settled again.
+  /// device holds the key and its recovery key is lost too: the server's writings go, and the own
+  /// key held, or one made, becomes the account's, whose recovery key is shown. Only while the own
+  /// key isn't here, and not while settling or deleting the account; it counts as settling. The
+  /// device is marked before it asks, so that, whatever ends the start over, the recovery key is
+  /// shown once the key is found to be the account's. Settled again when it fails, as when the
+  /// server's answer was lost or another device changed the account's own key meanwhile.
   func startOver() async {
     guard phase == .recoveryKeyNeeded, !settling, !deleting, let check = state?.ownKeyCheck
     else { return }
     settling = true
-    var changed = false
+    var failed = false
     do {
       if let session = try account.session() {
-        let outcome = try await account.startOver(session, dropping: check)
+        startedOver.mark()
+        let outcome = try await account.startOver(session, replacing: check)
         if try account.session() == session {
           apply(outcome)
         } else {
@@ -264,12 +272,10 @@ enum AccountPhase: Equatable {
       }
     } catch {
       report(error, "Starting over")
-      if case .ownKeyChanged = error {
-        changed = true
-      }
+      failed = true
     }
     settling = false
-    if changed {
+    if failed {
       await settleOwnKey()
     }
   }
@@ -316,6 +322,7 @@ enum AccountPhase: Equatable {
     kept.forget()
     canSignIn = false
     recoveryKeyToShow = nil
+    startedOver.forget()
     phase = .signedOut
   }
 
@@ -371,8 +378,13 @@ enum AccountPhase: Equatable {
   private func settle(_ session: Session) async throws(AccountError) -> Bool {
     let read = try await self.read(session)
     guard try stillIn(session, keeping: read) else { return false }
-    let outcome = try await account.settleOwnKey(session, against: read.state)
+    var outcome = try await account.settleOwnKey(session, against: read.state)
     guard try account.session() == session else { return false }
+    if outcome == .ready, startedOver.isMarked, let key = try account.ownKey() {
+      // What went wrong as the start over ended no longer stands.
+      problem = nil
+      outcome = .made(RecoveryKey(key))
+    }
     apply(outcome)
     return true
   }
@@ -384,6 +396,7 @@ enum AccountPhase: Equatable {
       phase = .signedIn
       ownKeySettled = true
     case .made(let recoveryKey):
+      startedOver.forget()
       phase = .signedIn
       ownKeySettled = true
       recoveryKeyToShow = recoveryKey
@@ -396,5 +409,23 @@ enum AccountPhase: Equatable {
     if case AccountError.cancelled = error { return }
     accountLogger.error("\(step, privacy: .public) failed: \(error)")
     problem = error.localizedDescription
+  }
+}
+
+/// Whether a start over was asked for whose recovery key hasn't been shown yet, kept across
+/// launches: a start over that reached the server may end without saying so.
+struct StartedOver {
+  static let key = "syncStartedOver"
+
+  let defaults: UserDefaults
+
+  var isMarked: Bool { defaults.bool(forKey: Self.key) }
+
+  func mark() {
+    defaults.set(true, forKey: Self.key)
+  }
+
+  func forget() {
+    defaults.removeObject(forKey: Self.key)
   }
 }

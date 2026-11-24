@@ -159,18 +159,25 @@ export async function serve(
       if (check.length !== 32) {
         return turnedDown(400, "the own key check is 32 bytes");
       }
+      const replacing = request.headers.get("Mai-Replaces-Own-Key-Check");
+      if (replacing !== null) {
+        const replaced = parseHex(replacing);
+        if (replaced?.length !== 32 || hex(replaced) === hex(check)) {
+          return turnedDown(
+            400,
+            "Mai-Replaces-Own-Key-Check holds the own key check read, in lowercase hex, and not the one sent",
+          );
+        }
+        return answered(
+          await startOver(caller, replaced, check, store, photos, now),
+          (done) => done,
+        );
+      }
       return answered(await store.keepOwnKeyCheck(caller, check, now), (kept) =>
         kept
           ? new Response(null, { status: 204 })
           : problem(409, "the account has another own key check; its own key was made already"),
       );
-    }
-    case "DELETE /account/own-key-check": {
-      const check = parseHex(request.headers.get("Mai-Own-Key-Check") ?? "");
-      if (check?.length !== 32) {
-        return turnedDown(400, "Mai-Own-Key-Check holds the own key check read, in lowercase hex");
-      }
-      return answered(await startOver(caller, check, store, photos, now), (done) => done);
     }
   }
 

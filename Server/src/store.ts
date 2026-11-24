@@ -110,6 +110,9 @@ export type Purchase = {
 export type Made = "made" | "challenge-used" | "taken" | "purchase-taken" | "no-plan";
 
 /** What an account's own resent subscription did: the account's plan and paid-until time after it. */
+/** Whether the account started over, or else whether its check was the one sent already. */
+export type StartedOver = { started: true; account: AccountId } | { started: false; kept: boolean };
+
 export type Kept =
   | { kept: "kept"; tier: string; paidUntil: number }
   | { kept: "another-account" | "no-plan" };
@@ -794,34 +797,41 @@ export class Store {
   }
 
   /**
-   * Starts the caller's account over without its own key, while `check` is still its own key
+   * Starts the caller's account over with the own key check `check`, while `replaced` is still its
    * check: deletes its writings, the rows of its photos and its read mode copies, ends its other
-   * sessions, and drops the check. Answers the account when it did; undefined when the account has
-   * another check or none, and nothing changed. A lapsed account starts over too. What R2 holds of
-   * its photos is left to the caller.
+   * sessions, and keeps `check`. Answers `started` with the account when it did, `kept` when the
+   * account's check is `check` already (a start over sent again), and `other` when it is neither,
+   * and nothing changed. A lapsed account starts over too. What R2 holds of its photos is left to
+   * the caller.
    */
   async startOver(
     caller: Caller,
+    replaced: Uint8Array,
     check: Uint8Array,
     now: number,
-  ): Promise<Answer<AccountId | undefined>> {
+  ): Promise<Answer<StartedOver>> {
+    const args = { replaced, check };
     const answer = await this.#run(caller, now, "other", (account, allowed) => {
       const held = `${allowed} AND EXISTS (SELECT 1 FROM accounts
-        WHERE id = ${account} AND own_key_check = :check)`;
+        WHERE id = ${account} AND own_key_check = :replaced)`;
       return [
         ...(["writings", "photos", "copies"] as const).map((table) => ({
           sql: `DELETE FROM ${table} WHERE account_id = ${account} AND ${held}`,
-          args: { check },
+          args,
         })),
         {
           sql: `DELETE FROM sessions WHERE account_id = ${account} AND id != :session AND ${held}`,
-          args: { check },
+          args,
         },
         {
-          sql: `UPDATE accounts SET own_key_check = NULL, writings_bytes = 0, writings_count = 0
-                WHERE id = ${account} AND own_key_check = :check AND ${allowed}
+          sql: `UPDATE accounts SET own_key_check = :check, writings_bytes = 0, writings_count = 0
+                WHERE id = ${account} AND own_key_check = :replaced AND ${allowed}
                 RETURNING id`,
-          args: { check },
+          args,
+        },
+        {
+          sql: `SELECT own_key_check = :check AS same FROM accounts WHERE id = ${account}`,
+          args,
         },
       ];
     });
@@ -829,7 +839,11 @@ export class Store {
       return answer;
     }
     const id = answer.value[4]?.rows[0]?.["id"];
-    return { ok: true, value: id === undefined ? undefined : stored(parseAccountId, id) };
+    if (id !== undefined) {
+      return { ok: true, value: { started: true, account: stored(parseAccountId, id) } };
+    }
+    const same = Number(answer.value[5]?.rows[0]?.["same"]) === 1;
+    return { ok: true, value: { started: false, kept: same } };
   }
 
   /** Reads the caller's account; a lapsed account reads it too. */

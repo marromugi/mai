@@ -170,14 +170,20 @@ public struct AccountServer: Sendable {
     return response.statusCode == 204
   }
 
-  /// Starts the account over without its own key, while `check` is still its own key check: the
-  /// server's writings, photos and read mode copies go, the account's other sessions end, and the
-  /// check is dropped. False when the account has another check or none, and nothing changed.
-  public func startOver(dropping check: Data, token: String) async throws(ServerError) -> Bool {
+  /// Starts the account over with the own key check `check`, while `replaced` is still its check:
+  /// the server's writings, photos and read mode copies go, the account's other sessions end, and
+  /// `check` is kept. True too when `check` is the account's already, as when sent again; false
+  /// when the account's check is neither, and nothing changed.
+  public func startOver(replacing replaced: Data, with check: Data, token: String)
+    async throws(ServerError) -> Bool
+  {
     var request = authorized(URLRequest(url: url.appending(path: "account/own-key-check")), token)
-    request.httpMethod = "DELETE"
+    request.httpMethod = "PUT"
+    request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
     request.setValue(
-      check.map { String(format: "%02x", $0) }.joined(), forHTTPHeaderField: "Mai-Own-Key-Check")
+      replaced.map { String(format: "%02x", $0) }.joined(),
+      forHTTPHeaderField: "Mai-Replaces-Own-Key-Check")
+    request.httpBody = check
     let (_, response) = try await transport.answer(request, expecting: [204, 409])
     return response.statusCode == 204
   }

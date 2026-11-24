@@ -163,57 +163,67 @@ struct SyncAccountTests {
     #expect(try sessions.load() == nil)
   }
 
-  @Test func startingOverSendsTheCheckReadAndReplacesTheKeyHeld() async throws {
+  @Test func startingOverSendsTheKeyHeldInPlaceOfTheCheckRead() async throws {
     let held = OwnKey.generate()
     let ownKeys = MemoryOwnKeys(held)
-    let server = ScriptedServer([
-      "DELETE /account/own-key-check": [.status(204)],
-      "PUT /account/own-key-check": [.status(204)],
-    ])
+    let server = ScriptedServer(["PUT /account/own-key-check": [.status(204)]])
     let check = Data(repeating: 0xab, count: 32)
-    let outcome = try await account(server, ownKeys: ownKeys).startOver(session, dropping: check)
-    let made = try #require(try ownKeys.load())
-    #expect(made != held)
-    #expect(outcome == .made(RecoveryKey(made)))
+    let outcome = try await account(server, ownKeys: ownKeys).startOver(session, replacing: check)
+    #expect(outcome == .made(RecoveryKey(held)))
+    #expect(try ownKeys.load() == held)
+    let sent = try #require(server.requests.first)
     #expect(
-      server.requests.first?.value(forHTTPHeaderField: "Mai-Own-Key-Check")
+      sent.value(forHTTPHeaderField: "Mai-Replaces-Own-Key-Check")
         == String(repeating: "ab", count: 32))
-    #expect(server.requests.last?.httpBody == made.check)
+    #expect(sent.httpBody == held.check)
+    #expect(server.routes() == ["PUT /account/own-key-check"])
   }
 
-  @Test func startingOverWithNoKeyHeldKeepsTheNewOne() async throws {
+  @Test func startingOverWithNoKeyHeldKeepsANewOneBeforeSendingIt() async throws {
     let ownKeys = MemoryOwnKeys()
-    let server = ScriptedServer([
-      "DELETE /account/own-key-check": [.status(204)],
-      "PUT /account/own-key-check": [.status(204)],
-    ])
-    let outcome = try await account(server, ownKeys: ownKeys).startOver(
-      session, dropping: Data(count: 32))
-    #expect(outcome == .made(RecoveryKey(try #require(try ownKeys.load()))))
+    let server = ScriptedServer([:])
+    await #expect(throws: AccountError.self) {
+      try await account(server, ownKeys: ownKeys).startOver(session, replacing: Data(count: 32))
+    }
+    let made = try #require(try ownKeys.load())
+    #expect(server.requests.first?.httpBody == made.check)
+  }
+
+  /// The first start over reached the server but its answer didn't reach the device: the second
+  /// sends the same key, which the server says is done.
+  @Test func aStartOverSentAgainSendsTheSameKey() async throws {
+    let ownKeys = MemoryOwnKeys()
+    let server = ScriptedServer(["PUT /account/own-key-check": [.unreachable, .status(204)]])
+    let account = try account(server, ownKeys: ownKeys)
+    await #expect(throws: AccountError.self) {
+      try await account.startOver(session, replacing: Data(count: 32))
+    }
+    let outcome = try await account.startOver(session, replacing: Data(count: 32))
+    let made = try #require(try ownKeys.load())
+    #expect(outcome == .made(RecoveryKey(made)))
+    #expect(server.requests.map(\.httpBody) == [made.check, made.check])
   }
 
   @Test func aCheckChangedSinceItWasReadStartsNothingOver() async throws {
     let held = OwnKey.generate()
     let ownKeys = MemoryOwnKeys(held)
-    let server = ScriptedServer(["DELETE /account/own-key-check": [.status(409)]])
+    let server = ScriptedServer(["PUT /account/own-key-check": [.status(409)]])
     await #expect {
-      try await account(server, ownKeys: ownKeys).startOver(session, dropping: Data(count: 32))
+      try await account(server, ownKeys: ownKeys).startOver(session, replacing: Data(count: 32))
     } throws: { error in
       guard case .ownKeyChanged = error as? AccountError else { return false }
       return true
     }
     #expect(try ownKeys.load() == held)
-    #expect(server.routes() == ["DELETE /account/own-key-check"])
   }
 
-  /// Another device put its check between the start over and this device's put.
-  @Test func aCheckPutFirstByAnotherDeviceAfterStartingOverAsksForTheRecoveryKey() async throws {
-    let server = ScriptedServer([
-      "DELETE /account/own-key-check": [.status(204)],
-      "PUT /account/own-key-check": [.status(409)],
-    ])
-    let outcome = try await account(server).startOver(session, dropping: Data(count: 32))
-    #expect(outcome == .recoveryKeyNeeded)
+  @Test func aKeyHeldThatIsTheAccountsStartsNothingOver() async throws {
+    let held = OwnKey.generate()
+    let server = ScriptedServer([:])
+    let outcome = try await account(server, ownKeys: MemoryOwnKeys(held)).startOver(
+      session, replacing: held.check)
+    #expect(outcome == .ready)
+    #expect(server.requests.isEmpty)
   }
 
   @Test func signingInWithNoPlanBoughtAsksNothingOfAppleOrTheServer() async throws {
