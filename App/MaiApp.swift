@@ -5,16 +5,17 @@ import SwiftUI
 @main
 struct MaiApp: App {
   @State private var fonts: FontLibrary
-  @State private var account: AccountModel?
+  @State private var account: AccountModel
 
   init() {
-    let fonts = FontLibrary(server: Self.server)
+    let server = Self.server
+    let fonts = FontLibrary(server: server)
     fonts.load()
     _fonts = State(initialValue: fonts)
-    let account = Self.server.map(Self.account(server:))
+    let account = Self.account(server: server)
     _account = State(initialValue: account)
     // From launch, as StoreKit asks, so no transaction is missed.
-    Task { await PlanTransactions.listen { await account?.check() } }
+    Task { await PlanTransactions.listen { await account.check() } }
   }
 
   var body: some Scene {
@@ -23,18 +24,17 @@ struct MaiApp: App {
     }
   }
 
-  /// The Worker in `Server/`. Not deployed yet, so only a debug build has one: the one `wrangler dev`
-  /// serves, or the one `MAI_SERVER_URL` names.
-  private static var server: URL? {
+  /// The Worker in `Server/` this build configuration names (`MAI_SERVER` in `project.yml`), or,
+  /// in a debug build, the one `MAI_SERVER_URL` names, such as a local `wrangler dev`.
+  private static var server: URL {
+    var address = Bundle.main.object(forInfoDictionaryKey: "MaiServer") as? String
     #if DEBUG
-      let address = ProcessInfo.processInfo.environment["MAI_SERVER_URL"] ?? "http://localhost:8787"
-      guard let url = URL(string: address) else {
-        preconditionFailure("MAI_SERVER_URL, \(address), isn't a URL.")
-      }
-      return url
-    #else
-      return nil
+      address = ProcessInfo.processInfo.environment["MAI_SERVER_URL"] ?? address
     #endif
+    guard let address, let url = URL(string: address), url.host() != nil else {
+      preconditionFailure("The server, \(address ?? "none"), isn't a URL.")
+    }
+    return url
   }
 
   /// Signs in with Apple, or, in a debug build given `MAI_STAND_IN_APPLE_USER`, as that user of
