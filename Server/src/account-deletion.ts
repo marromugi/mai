@@ -1,4 +1,5 @@
 import type { AccountId } from "./account-id";
+import { hex } from "./hex";
 import { problem } from "./http";
 import { uploadOfKey, type Photos } from "./photos";
 import type { Caller } from "./sessions";
@@ -147,7 +148,7 @@ async function deleteFound(
     return "kept";
   }
   const marked = await signIn.store.refreshTokenOf(account);
-  if (marked !== undefined && !sameBytes(marked.sealedRefreshToken, sealedRefreshToken)) {
+  if (marked !== undefined && hex(marked.sealedRefreshToken) !== hex(sealedRefreshToken)) {
     const replaced = await signIn.refreshTokens.open(marked.sealedRefreshToken, account);
     if (!(await signIn.tokens.revoke(replaced, now)).ok) {
       return "unrevoked";
@@ -159,10 +160,6 @@ async function deleteFound(
   }
   photos.keepAlive(deleteRowlessPhotosOf(account, photos.bucket, signIn.store));
   return "deleted";
-}
-
-function sameBytes(one: Uint8Array, other: Uint8Array): boolean {
-  return one.length === other.length && one.every((byte, index) => byte === other[index]);
 }
 
 /** Deletes every object R2 holds under `<account>/`. */

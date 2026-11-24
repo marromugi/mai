@@ -11,6 +11,7 @@ import { newSessionToken } from "../src/sessions";
 import { readCompactJws } from "../src/jws";
 import { RefreshTokens } from "../src/refresh-tokens";
 import type { SignIn } from "../src/sign-in";
+import type { Store } from "../src/store";
 import { photos, products, store } from "./accounts";
 import {
   base64url,
@@ -73,8 +74,8 @@ function fakeApple(
     environments?: string;
     /** Runs when the token endpoint is asked, before it answers. */
     onToken?: () => Promise<void>;
-    /** Runs when the revoke endpoint is asked, before it answers. */
-    onRevoke?: () => Promise<void>;
+    /** Runs when the revoke endpoint is asked; what it gives is answered in place of 200. */
+    onRevoke?: () => Promise<Response | undefined>;
   } = {},
 ) {
   const codes = new Map<string, Grant>();
@@ -90,8 +91,7 @@ function fakeApple(
     }
     if (url === appleRevokeUrl && init?.body instanceof URLSearchParams) {
       revoked.push(init.body.get("token") ?? "");
-      await options.onRevoke?.();
-      return new Response(null, { status: 200 });
+      return (await options.onRevoke?.()) ?? new Response(null, { status: 200 });
     }
     if (url !== appleTokenUrl || !(init?.body instanceof URLSearchParams)) {
       throw new Error(`the Worker reached ${url}, which the fake Apple doesn't serve`);
@@ -1148,6 +1148,7 @@ describe("signing in while the account is deleted", () => {
         if (sub !== undefined && signedIn === undefined) {
           signedIn = (await signInAs(other, sub, "refresh-during-delete")).status;
         }
+        return undefined;
       },
     });
     const made = await makeAccount(apple);
@@ -1168,6 +1169,100 @@ describe("signing in while the account is deleted", () => {
     expect(deleted.status).toBe(204);
     expect(apple.revoked).toEqual(["refresh-before-delete", "refresh-during-delete"]);
     expect(await rowsOf(made.account, made.sub)).toEqual({ sessions: 0, accounts: 0 });
+  });
+
+  it("revokes the token a sign-in kept just before the account was marked", async () => {
+    const apple = fakeApple();
+    const other = fakeApple();
+    const made = await makeAccount(apple);
+    const { token } = await (
+      await signInAs(apple, made.sub, "refresh-before-delete")
+    ).json<{
+      token: string;
+    }>();
+    let signedIn: number | undefined;
+    const signIn = await apple.signIn;
+    const marking: Store = new Proxy(signIn.store, {
+      get(target, name) {
+        if (name === "markForDeletionByCaller") {
+          return async (...args: Parameters<Store["markForDeletionByCaller"]>) => {
+            signedIn = (await signInAs(other, made.sub, "refresh-before-mark")).status;
+            return target.markForDeletionByCaller(...args);
+          };
+        }
+        const value: unknown = Reflect.get(target, name);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    const deleted = await serve(
+      new Request("https://mai.test/account", { method: "DELETE", ...as(token) }),
+      { ...signIn, store: marking },
+      photos,
+    );
+
+    expect(signedIn).toBe(200);
+    expect(deleted.status).toBe(204);
+    expect(apple.revoked).toEqual(["refresh-before-delete", "refresh-before-mark"]);
+  });
+
+  it("answers 502 and deletes nothing when Apple doesn't answer the second revoke", async () => {
+    let sub: string | undefined;
+    let revokes = 0;
+    const other = fakeApple();
+    const apple = fakeApple({
+      onRevoke: async () => {
+        revokes += 1;
+        if (revokes === 1 && sub !== undefined) {
+          await signInAs(other, sub, "refresh-during-delete");
+        }
+        return revokes === 2 ? new Response("down", { status: 503 }) : undefined;
+      },
+    });
+    const made = await makeAccount(apple);
+    const { token } = await (await signInAs(apple, made.sub)).json<{ token: string }>();
+    sub = made.sub;
+
+    const deleted = await serve(
+      new Request("https://mai.test/account", { method: "DELETE", ...as(token) }),
+      await apple.signIn,
+      photos,
+    );
+
+    expect(deleted.status).toBe(502);
+    expect((await rowsOf(made.account, made.sub)).accounts).toBe(1);
+    // The cron tests pick marked accounts from the same database.
+    await store.deleteAccount(parseAccountId(made.account) ?? fail());
+  });
+});
+
+describe("a sign-in on a used challenge", () => {
+  it("keeps the token of the sign-in that used it", async () => {
+    const apple = fakeApple();
+    const { account, sub } = await makeAccount(apple);
+    const fresh = await challenge(apple.signIn);
+    const token = await identityToken(sub, fresh);
+    const first = await call(apple.signIn, "/sessions", {
+      challenge: fresh,
+      identityToken: token,
+      authorizationCode: codeFor(apple, sub, "refresh-first"),
+    });
+    expect(first.status).toBe(200);
+
+    const again = await call(apple.signIn, "/sessions", {
+      challenge: fresh,
+      identityToken: token,
+      authorizationCode: codeFor(apple, sub, "refresh-again"),
+    });
+
+    expect(again.status).toBe(401);
+    const kept = (await accountRow(account))?.["apple_refresh_token"];
+    if (!(kept instanceof ArrayBuffer)) {
+      throw new Error("accounts.apple_refresh_token is a BLOB");
+    }
+    expect(await new RefreshTokens(env.REFRESH_TOKEN_KEY).open(new Uint8Array(kept), account)).toBe(
+      "refresh-first",
+    );
   });
 });
 
