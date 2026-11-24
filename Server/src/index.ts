@@ -4,7 +4,7 @@ import { AppleTokens } from "./apple-tokens";
 import { serveFont } from "./fonts";
 import { Challenges } from "./challenges";
 import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
-import { hex } from "./hex";
+import { hex, parseHex } from "./hex";
 import { RefreshTokens } from "./refresh-tokens";
 import { callerOf } from "./sessions";
 import { appleRootCaG3 } from "./apple-root";
@@ -17,6 +17,7 @@ import {
   subscriptionKept,
 } from "./subscriptions";
 import { issueChallenge, makeAccount, startSession, type SignIn } from "./sign-in";
+import { startOver } from "./start-over";
 import { receiveSignInNotification } from "./sign-in-notifications";
 import { Store } from "./store";
 import { answered, refused } from "./answers";
@@ -163,6 +164,13 @@ export async function serve(
           ? new Response(null, { status: 204 })
           : problem(409, "the account has another own key check; its own key was made already"),
       );
+    }
+    case "DELETE /account/own-key-check": {
+      const check = parseHex(request.headers.get("Mai-Own-Key-Check") ?? "");
+      if (check?.length !== 32) {
+        return turnedDown(400, "Mai-Own-Key-Check holds the own key check read, in lowercase hex");
+      }
+      return answered(await startOver(caller, check, store, photos, now), (done) => done);
     }
   }
 

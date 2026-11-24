@@ -793,6 +793,45 @@ export class Store {
     return { ok: true, value: Number(answer.value[1]?.rows[0]?.["same"]) === 1 };
   }
 
+  /**
+   * Starts the caller's account over without its own key, while `check` is still its own key
+   * check: deletes its writings, the rows of its photos and its read mode copies, ends its other
+   * sessions, and drops the check. Answers the account when it did; undefined when the account has
+   * another check or none, and nothing changed. A lapsed account starts over too. What R2 holds of
+   * its photos is left to the caller.
+   */
+  async startOver(
+    caller: Caller,
+    check: Uint8Array,
+    now: number,
+  ): Promise<Answer<AccountId | undefined>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => {
+      const held = `${allowed} AND EXISTS (SELECT 1 FROM accounts
+        WHERE id = ${account} AND own_key_check = :check)`;
+      return [
+        ...(["writings", "photos", "copies"] as const).map((table) => ({
+          sql: `DELETE FROM ${table} WHERE account_id = ${account} AND ${held}`,
+          args: { check },
+        })),
+        {
+          sql: `DELETE FROM sessions WHERE account_id = ${account} AND id != :session AND ${held}`,
+          args: { check },
+        },
+        {
+          sql: `UPDATE accounts SET own_key_check = NULL, writings_bytes = 0, writings_count = 0
+                WHERE id = ${account} AND own_key_check = :check AND ${allowed}
+                RETURNING id`,
+          args: { check },
+        },
+      ];
+    });
+    if (!answer.ok) {
+      return answer;
+    }
+    const id = answer.value[4]?.rows[0]?.["id"];
+    return { ok: true, value: id === undefined ? undefined : stored(parseAccountId, id) };
+  }
+
   /** Reads the caller's account; a lapsed account reads it too. */
   async account(caller: Caller, now: number): Promise<Answer<AccountState>> {
     const answer = await this.#run(caller, now, "other", (account, allowed) => [

@@ -178,7 +178,7 @@ async function deletePhotosOf(account: AccountId, bucket: R2Bucket): Promise<voi
  * Deletes the objects under `<account>/` whose upload has no row in `photos`. An account made
  * again with the same ID (the same purchase's `appAccountToken`) keeps the photos it stored since.
  */
-async function deleteRowlessPhotosOf(
+export async function deleteRowlessPhotosOf(
   account: AccountId,
   bucket: R2Bucket,
   store: Store,
