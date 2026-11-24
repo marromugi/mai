@@ -22,7 +22,7 @@ import { parsePhotoId } from "./photo-id";
 import { getPhoto, putPhoto, sizeOf, sweepUploads, type Photos } from "./photos";
 
 /**
- * The server keeps only sealed writings and photos. It knows of each writing only its ID, updated
+ * Of writings and photos, the server keeps only sealed ones. It knows of each writing only its ID, updated
  * time and size, and of each photo its ID and size; of each account, its Apple user, Apple's refresh
  * token (sealed), its own key check, and its App Store subscriptions (transaction ID, product,
  * expiry, environment).
