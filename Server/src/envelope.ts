@@ -3,6 +3,9 @@
  * writes it in `Packages/Sync/Sources/Sync/Sealed.swift`.
  */
 
+import { hex } from "./hex";
+import { lowercaseUuid } from "./uuid";
+
 export const magic = [0x6d, 0x61, 0x69, 0x01] as const;
 const headerLength = 28;
 const sealedKeyLength = 12 + 32 + 16;
@@ -20,7 +23,7 @@ export function parseWritingId(text: string): WritingId | undefined {
 }
 
 function isWritingId(text: string): text is WritingId {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(text);
+  return lowercaseUuid.test(text);
 }
 
 /** SHA-256 of a sealed writing, in lowercase hex: what tells one save from another. */
@@ -68,10 +71,6 @@ function idFromBytes(bytes: Uint8Array): WritingId {
     throw new Error(`16 bytes always format as a writing ID, but gave ${text}`);
   }
   return id;
-}
-
-function hex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function parseRevision(text: string): Revision | undefined {

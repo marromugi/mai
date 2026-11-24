@@ -1,5 +1,5 @@
 import { createClient, LibsqlError } from "@libsql/client/web";
-import type { Client, InStatement, InValue, ResultSet } from "@libsql/client/web";
+import type { Client, InStatement, InValue, ResultSet, Row } from "@libsql/client/web";
 import {
   parseRevision,
   parseWritingId,
@@ -11,10 +11,15 @@ import { parseAccountId, type AccountId } from "./account-id";
 import type { Challenge } from "./challenges";
 import { lastUsedResolution, sessionLifetime, type Caller } from "./sessions";
 import type { Environment } from "./app-store";
+import { parsePhotoId, parsePhotoPart, type PhotoId, type PhotoPart } from "./photo-id";
 
 /**
  * The only file that speaks to Turso. Every request is one `batch()`, so one round trip and one
- * transaction: it checks the caller, does the work only when the caller may, and counts it.
+ * transaction: it checks the caller, does the work only when the caller may, and counts it. A
+ * photo put is the one exception: its reservation is such a batch, and what follows R2 (marking it
+ * stored, or releasing it) is written apart, by the upload's ID, without the caller. Deleting an
+ * account is the other: it reads the account first, and deletes its rows in a batch of their own
+ * once Apple and R2 are done with it (`src/account-deletion.ts`).
  * The tables are in `Server/schema.sql`.
  */
 
@@ -25,7 +30,7 @@ export type Listed = { id: WritingId; revision: Revision; updated: number; size:
  * lapsed, or a limit of its plan reached.
  */
 export type Refusal = "session" | "lapsed" | Limit;
-export type Limit = "requests" | "lists" | "saves" | "storage";
+export type Limit = "requests" | "lists" | "saves" | "photos" | "storage" | "photo-storage";
 
 export type Answer<T> = { ok: true; value: T } | { ok: false; refusal: Refusal };
 
@@ -72,15 +77,52 @@ export type Kept =
   | { kept: "kept"; tier: string; paidUntil: number }
   | { kept: "another-account" | "no-plan" };
 
+/** How much of one of its plan's limits an account has used. */
+export type Use = { used: number; limit: number };
+
+/**
+ * What a signed-in device reads of its account. `requests`, `lists` and `saves` are today's (UTC),
+ * before the request that read them. `ownKeyCheck` is null until a device keeps one.
+ */
+export type AccountState = {
+  tier: string;
+  paidUntil: number;
+  lapsed: boolean;
+  /** When a lapsed account is deleted, `lapsedKept` after `paidUntil`; null while it is paid for. */
+  deletesAt: number | null;
+  usage: Record<
+    "writingsBytes" | "writings" | "photosBytes" | "requests" | "lists" | "saves" | "photos",
+    Use
+  >;
+  ownKeyCheck: Uint8Array | null;
+};
+
 export type SignedIn =
   | { signedIn: true; account: AccountId }
   | { signedIn: false; reason: "challenge-used" | "no-account" };
 
 /**
- * What a request counts against its plan's daily limits, beside the request itself. `save` and
- * `write` write the account's data, which only a paid-for account may do; only `save` is counted.
+ * What a request counts against its plan's daily limits, beside the request itself. `save`,
+ * `photo` and `write` write the account's data, which only a paid-for account may do; `write` is
+ * not counted.
  */
-type Counted = "list" | "save" | "write" | "other";
+type Counted = "list" | "save" | "photo" | "write" | "other";
+
+/** One upload of a part of a photo, which reserved room for it in the account's plan. */
+export type Upload = {
+  readonly account: AccountId;
+  readonly id: PhotoId;
+  readonly part: PhotoPart;
+  /** Tells this upload from any other of the same part. */
+  readonly upload: string;
+  readonly size: number;
+};
+
+/** What deleting an account needs before its rows go: its ID, and Apple's refresh token sealed. */
+export type ToDelete = { readonly account: AccountId; readonly sealedRefreshToken: Uint8Array };
+
+/** Not reserved: the account has that part of the photo already, or is taking it now. */
+export type Reserved = { reserved: true; upload: Upload } | { reserved: false };
 
 type Statement = { sql: string; args?: Record<string, InValue> };
 
@@ -99,6 +141,18 @@ const claimStatement = `INSERT INTO used_challenges (value, expires, claim)
  * it expires still finds it there, however late its batch reaches the database.
  */
 export const usedChallengeMargin = 60 * 60 * 1000;
+
+/**
+ * An upload whose bytes R2 doesn't hold this long after it reserved room for them has failed
+ * without releasing it; the cron trigger releases it.
+ */
+export const uploadLifetime = 60 * 60 * 1000;
+
+/**
+ * A lapsed account is read but not written for this long after `paid_until`; then the cron
+ * trigger deletes it (`src/account-deletion.ts`).
+ */
+export const lapsedKept = 90 * day;
 const claimed = `EXISTS (SELECT 1 FROM used_challenges WHERE value = :challenge AND claim = :claim)`;
 
 export class Store {
@@ -211,6 +265,136 @@ export class Store {
         revision: revision === undefined ? null : stored(parseRevision, revision),
       },
     };
+  }
+
+  /**
+   * Reserves `size` bytes of the caller's plan for a part of the photo `id`, before its bytes are
+   * sent on, unless the account has that part already or is taking it now. Only a photo, not its
+   * thumbnail, counts as one of the day's photos.
+   */
+  async reservePhoto(
+    caller: Caller,
+    id: PhotoId,
+    part: PhotoPart,
+    size: number,
+    now: number,
+  ): Promise<Answer<Reserved>> {
+    const upload = crypto.randomUUID();
+    const counted = part === "photo" ? "photo" : "write";
+    let answer;
+    try {
+      answer = await this.#run(caller, now, counted, (account, allowed) => [
+        {
+          sql: `INSERT INTO photos (account_id, id, part, upload, size, reserved)
+                SELECT ${account}, :id, :part, :upload, :size, :now WHERE ${allowed}
+                ON CONFLICT (account_id, id, part) DO NOTHING`,
+          args: { id, part, upload, size },
+        },
+        {
+          sql: `SELECT account_id FROM photos
+                WHERE account_id = ${account} AND id = :id AND part = :part AND upload = :upload`,
+          args: { id, part, upload },
+        },
+      ]);
+    } catch (error) {
+      if (
+        error instanceof LibsqlError &&
+        error.message.includes("mai: over the plan's photo storage")
+      ) {
+        return { ok: false, refusal: "photo-storage" };
+      }
+      throw error;
+    }
+    if (!answer.ok) {
+      return answer;
+    }
+    const row = answer.value[1]?.rows[0];
+    if (row === undefined) {
+      return { ok: true, value: { reserved: false } };
+    }
+    return {
+      ok: true,
+      value: {
+        reserved: true,
+        upload: { account: stored(parseAccountId, row["account_id"]), id, part, upload, size },
+      },
+    };
+  }
+
+  /**
+   * Marks `upload` stored once R2 holds its bytes. False when it is being released or is gone:
+   * released as stale (`uploadLifetime`) before this.
+   */
+  async storePhoto(upload: Upload): Promise<boolean> {
+    const done = await this.#client.execute({
+      sql: `UPDATE photos SET state = 'stored' WHERE upload = :upload AND state = 'reserved'`,
+      args: { upload: upload.upload },
+    });
+    return done.rowsAffected === 1;
+  }
+
+  /** The upload R2 holds for that part of the caller's photo `id`, or undefined for none. */
+  async readPhoto(
+    caller: Caller,
+    id: PhotoId,
+    part: PhotoPart,
+    now: number,
+  ): Promise<Answer<Upload | undefined>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT account_id, id, part, upload, size FROM photos
+              WHERE account_id = ${account} AND id = :id AND part = :part AND state = 'stored'
+                AND ${allowed}`,
+        args: { id, part },
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    const row = answer.value[0]?.rows[0];
+    return { ok: true, value: row === undefined ? undefined : uploadOf(row) };
+  }
+
+  /**
+   * Starts releasing `upload`, which failed, unless it was stored. Answers it while it is being
+   * released, for what R2 got of it to be deleted before `forgetReleased`.
+   */
+  async startReleasing(upload: Upload): Promise<Upload[]> {
+    const { rows } = await this.#client.execute({
+      sql: `UPDATE photos SET state = 'releasing' WHERE upload = :upload AND state != 'stored'
+            RETURNING account_id, id, part, upload, size`,
+      args: { upload: upload.upload },
+    });
+    return rows.map(uploadOf);
+  }
+
+  /**
+   * Starts releasing at most `count` uploads reserved `uploadLifetime` or longer before `now` and
+   * never stored, and answers them.
+   */
+  async releaseStale(now: number, count: number): Promise<Upload[]> {
+    const { rows } = await this.#client.execute({
+      sql: `UPDATE photos SET state = 'releasing'
+            WHERE upload IN (SELECT upload FROM photos
+                             WHERE state != 'stored' AND reserved <= :stale LIMIT :count)
+            RETURNING account_id, id, part, upload, size`,
+      args: { stale: now - uploadLifetime, count },
+    });
+    return rows.map(uploadOf);
+  }
+
+  /** Releases the room of `uploads` being released, once R2 holds nothing of them. */
+  async forgetReleased(uploads: readonly Upload[]): Promise<void> {
+    if (uploads.length === 0) {
+      return;
+    }
+    await this.#client.batch(
+      uploads.map((upload) => ({
+        sql: `DELETE FROM photos WHERE upload = :upload AND state = 'releasing'`,
+        args: { upload: upload.upload },
+      })),
+      "write",
+    );
   }
 
   /** Checks the caller and counts the request, for a request that does nothing else. */
@@ -367,6 +551,87 @@ export class Store {
   }
 
   /**
+   * The caller's account and its sealed refresh token, for deleting it; undefined when the caller
+   * has no live session. Neither counted nor limited, so a lapsed account or one past its day's
+   * requests is deleted too.
+   */
+  async accountToDelete(caller: Caller, now: number): Promise<ToDelete | undefined> {
+    const { rows } = await this.#client.execute(
+      bind(
+        `SELECT a.id, a.apple_refresh_token FROM sessions s JOIN accounts a ON a.id = s.account_id
+         WHERE ${liveSession}`,
+        callerValues(caller, now),
+      ),
+    );
+    const row = rows[0];
+    return row === undefined ? undefined : toDelete(row);
+  }
+
+  /** Which of `uploads` have a row in `photos`, in any state. */
+  async heldUploads(uploads: readonly string[]): Promise<Set<string>> {
+    if (uploads.length === 0) {
+      return new Set();
+    }
+    const { rows } = await this.#client.execute({
+      sql: `SELECT upload FROM photos WHERE upload IN (SELECT value FROM json_each(:uploads))`,
+      args: { uploads: JSON.stringify(uploads) },
+    });
+    return new Set(rows.map((row) => stored((upload) => upload, row["upload"])));
+  }
+
+  /**
+   * Deletes every row of the caller's account `account`, its sessions last, in one batch, while
+   * the caller's session is live. False when it wasn't, and nothing was deleted.
+   */
+  async deleteAccount(caller: Caller, account: AccountId, now: number): Promise<boolean> {
+    return this.#deleteRows(
+      account,
+      `:account = (SELECT s.account_id FROM sessions s WHERE ${liveSession})`,
+      callerValues(caller, now),
+      ["accounts", ...accountTables],
+    );
+  }
+
+  /**
+   * At most `count` accounts lapsed `lapsedKept` or longer before `now`, picked at random, with
+   * their sealed refresh tokens, for the cron trigger to delete. At random, so that accounts that
+   * fail every time can't take every place in every run.
+   */
+  async lapsedToDelete(now: number, count: number): Promise<ToDelete[]> {
+    const { rows } = await this.#client.execute({
+      sql: `SELECT id, apple_refresh_token FROM accounts WHERE paid_until <= :due
+            ORDER BY random() LIMIT :count`,
+      args: { due: now - lapsedKept, count },
+    });
+    return rows.map(toDelete);
+  }
+
+  /**
+   * Marks `account` as being deleted when it is still lapsed `lapsedKept` or longer at `now`, so
+   * that a resubscription no longer keeps it. False when it isn't, as after a resubscription.
+   */
+  async markForDeletion(account: AccountId, now: number): Promise<boolean> {
+    const marked = await this.#client.execute({
+      sql: `UPDATE accounts SET deleting = 1 WHERE id = :account AND paid_until <= :due`,
+      args: { account, due: now - lapsedKept },
+    });
+    return marked.rowsAffected === 1;
+  }
+
+  /**
+   * Deletes every row of `account`, its `accounts` row last, in one batch, when `markForDeletion`
+   * marked it. False when it hadn't, and nothing was deleted.
+   */
+  async deleteLapsedAccount(account: AccountId): Promise<boolean> {
+    return this.#deleteRows(
+      account,
+      "EXISTS (SELECT 1 FROM accounts WHERE id = :account AND deleting = 1)",
+      {},
+      [...accountTables, "accounts"],
+    );
+  }
+
+  /**
    * Keeps `check` as the account's own key check when it has none. Answers whether the account's
    * check is now `check`: false means another own key was made first.
    */
@@ -388,6 +653,62 @@ export class Store {
     return { ok: true, value: Number(answer.value[1]?.rows[0]?.["same"]) === 1 };
   }
 
+  /** Reads the caller's account; a lapsed account reads it too. */
+  async account(caller: Caller, now: number): Promise<Answer<AccountState>> {
+    const answer = await this.#run(caller, now, "other", (account, allowed) => [
+      {
+        sql: `SELECT a.tier, a.paid_until, NOT ${paidNow} AS lapsed, a.own_key_check,
+                a.writings_bytes, p.writings_bytes AS writings_bytes_limit,
+                a.writings_count, p.writings_count AS writings_count_limit,
+                a.photos_bytes, p.photos_bytes AS photos_bytes_limit,
+                coalesce(u.requests, 0) AS requests, p.requests_per_day,
+                coalesce(u.lists, 0) AS lists, p.lists_per_day,
+                coalesce(u.saves, 0) AS saves, p.saves_per_day,
+                coalesce(u.photos, 0) AS photos, p.photos_per_day
+              FROM accounts a
+              JOIN plans p ON p.tier = a.tier
+              LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
+              WHERE a.id = ${account} AND ${allowed}`,
+      },
+    ]);
+    if (!answer.ok) {
+      return answer;
+    }
+    const row = answer.value[0]?.rows[0];
+    if (row === undefined) {
+      throw new Error("a caller let in has an account on a plan");
+    }
+    const check = row["own_key_check"];
+    if (check !== null && !(check instanceof ArrayBuffer)) {
+      throw new Error("accounts.own_key_check is a BLOB or NULL, but came back as something else");
+    }
+    const use = (used: string, limit: string): Use => ({
+      used: Number(row[used]),
+      limit: Number(row[limit]),
+    });
+    const paidUntil = Number(row["paid_until"]);
+    const lapsed = Number(row["lapsed"]) === 1;
+    return {
+      ok: true,
+      value: {
+        tier: stored((tier) => tier, row["tier"]),
+        paidUntil,
+        lapsed,
+        deletesAt: lapsed ? paidUntil + lapsedKept : null,
+        usage: {
+          writingsBytes: use("writings_bytes", "writings_bytes_limit"),
+          writings: use("writings_count", "writings_count_limit"),
+          photosBytes: use("photos_bytes", "photos_bytes_limit"),
+          requests: use("requests", "requests_per_day"),
+          lists: use("lists", "lists_per_day"),
+          saves: use("saves", "saves_per_day"),
+          photos: use("photos", "photos_per_day"),
+        },
+        ownKeyCheck: check === null ? null : new Uint8Array(check),
+      },
+    };
+  }
+
   /** Removes what has expired by `now`; run by the Worker's cron trigger. */
   async sweep(now: number): Promise<void> {
     await this.#client.batch(
@@ -404,6 +725,30 @@ export class Store {
       ],
       "write",
     );
+  }
+
+  /**
+   * Deletes the rows of `account` from `tables` in that order, in one batch, each only while
+   * `still` holds with `values`; `still` reads a table that comes last. Answers whether its
+   * `accounts` row went.
+   */
+  async #deleteRows(
+    account: AccountId,
+    still: string,
+    values: Record<string, InValue>,
+    tables: readonly ("accounts" | (typeof accountTables)[number])[],
+  ): Promise<boolean> {
+    const results = await this.#client.batch(
+      tables.map((table) =>
+        bind(
+          `DELETE FROM ${table} WHERE ${table === "accounts" ? "id" : "account_id"} = :account
+             AND ${still}`,
+          { ...values, account },
+        ),
+      ),
+      "write",
+    );
+    return results[tables.indexOf("accounts")]?.rowsAffected === 1;
   }
 
   /**
@@ -452,7 +797,8 @@ export class Store {
       day: Math.floor(now / day),
       list: counted === "list" ? 1 : 0,
       save: counted === "save" ? 1 : 0,
-      write: counted === "save" || counted === "write" ? 1 : 0,
+      photo: counted === "photo" ? 1 : 0,
+      write: counted === "save" || counted === "photo" || counted === "write" ? 1 : 0,
     };
     const callerRows = `FROM sessions s
       JOIN accounts a ON a.id = s.account_id
@@ -460,14 +806,15 @@ export class Store {
       LEFT JOIN usage u ON u.account_id = a.id AND u.day = :day
       WHERE s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive`;
     // An account writes only while its subscription is paid for.
-    const paid = "(:write = 0 OR a.paid_until > :now)";
+    const paid = `(:write = 0 OR ${paidNow})`;
     const left = {
       requests: "coalesce(u.requests, 0) < p.requests_per_day",
       lists: "(:list = 0 OR coalesce(u.lists, 0) < p.lists_per_day)",
       saves: "(:save = 0 OR coalesce(u.saves, 0) < p.saves_per_day)",
+      photos: "(:photo = 0 OR coalesce(u.photos, 0) < p.photos_per_day)",
     };
     const allowed = `EXISTS (SELECT 1 ${callerRows}
-      AND ${paid} AND ${left.requests} AND ${left.lists} AND ${left.saves})`;
+      AND ${paid} AND ${left.requests} AND ${left.lists} AND ${left.saves} AND ${left.photos})`;
     const account = "(SELECT account_id FROM sessions WHERE id = :session)";
     const statements = work(account, allowed);
 
@@ -475,14 +822,15 @@ export class Store {
       [
         {
           sql: `SELECT ${paid} AS lapsed, ${left.requests} AS requests, ${left.lists} AS lists,
-                ${left.saves} AS saves ${callerRows}`,
+                ${left.saves} AS saves, ${left.photos} AS photos ${callerRows}`,
         },
         ...statements,
         {
-          sql: `INSERT INTO usage (account_id, day, requests, lists, saves)
-                SELECT ${account}, :day, 1, :list, :save WHERE ${allowed}
+          sql: `INSERT INTO usage (account_id, day, requests, lists, saves, photos)
+                SELECT ${account}, :day, 1, :list, :save, :photo WHERE ${allowed}
                 ON CONFLICT (account_id, day) DO UPDATE SET requests = requests + 1,
-                  lists = lists + excluded.lists, saves = saves + excluded.saves`,
+                  lists = lists + excluded.lists, saves = saves + excluded.saves,
+                  photos = photos + excluded.photos`,
         },
         {
           sql: `UPDATE sessions SET last_used = :now
@@ -497,7 +845,7 @@ export class Store {
     if (gate === undefined) {
       return { ok: false, refusal: "session" };
     }
-    for (const limit of ["lapsed", "requests", "lists", "saves"] as const) {
+    for (const limit of ["lapsed", "requests", "lists", "saves", "photos"] as const) {
       if (Number(gate[limit]) !== 1) {
         return { ok: false, refusal: limit };
       }
@@ -505,6 +853,23 @@ export class Store {
     return { ok: true, value: results.slice(1, 1 + statements.length) };
   }
 }
+
+/**
+ * Every table whose rows belong to an account by their `account_id`, which deleting an account
+ * empties of it; `sessions` last, since `DELETE /account` checks the caller's session in each
+ * delete.
+ */
+export const accountTables = ["writings", "photos", "usage", "subscriptions", "sessions"] as const;
+
+/** Whether the session `s` is the caller's, and live at `:now`, with `callerValues`. */
+const liveSession = "s.id = :session AND s.token_sha256 = :hash AND s.last_used > :alive";
+
+function callerValues(caller: Caller, now: number): Record<string, InValue> {
+  return { session: caller.session, hash: caller.secretSha256, alive: now - sessionLifetime };
+}
+
+/** Whether the account `a` is paid for at `:now`; once it isn't, the account has lapsed. */
+const paidNow = "a.paid_until > :now";
 
 /** Whether a plan is sold as the subscription's product, `:product`. */
 const plan = "EXISTS (SELECT 1 FROM plans WHERE product_id = :product)";
@@ -523,8 +888,8 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
 /**
  * Replaces the kept subscription `:original` with newer data about the same or a later billing
  * period, or keeps it for the account `:account` when it isn't kept yet; then sets its account's
- * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan).
- * Each statement holds `condition` in its WHERE.
+ * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan),
+ * unless the cron trigger is deleting it. Each statement holds `condition` in its WHERE.
  */
 function keepStatements(condition: string): string[] {
   return [
@@ -543,8 +908,28 @@ function keepStatements(condition: string): string[] {
                         WHERE s.account_id = accounts.id
                         ORDER BY s.paid_until DESC, p.writings_bytes DESC LIMIT 1), tier)
      WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original)
-       AND ${condition}`,
+       AND deleting = 0 AND ${condition}`,
   ];
+}
+
+/** An upload as a row of `photos` holds it. */
+function uploadOf(row: Row): Upload {
+  return {
+    account: stored(parseAccountId, row["account_id"]),
+    id: stored(parsePhotoId, row["id"]),
+    part: stored(parsePhotoPart, row["part"]),
+    upload: stored((upload) => upload, row["upload"]),
+    size: Number(row["size"]),
+  };
+}
+
+/** An account and its sealed refresh token, as a row of `accounts` holds them. */
+function toDelete(row: Row): ToDelete {
+  const sealed = row["apple_refresh_token"];
+  if (!(sealed instanceof ArrayBuffer)) {
+    throw new Error("accounts.apple_refresh_token is a BLOB, but came back as something else");
+  }
+  return { account: stored(parseAccountId, row["id"]), sealedRefreshToken: new Uint8Array(sealed) };
 }
 
 /** A value read back from a column only this file writes, which holds only valid values. */

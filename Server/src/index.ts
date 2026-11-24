@@ -1,8 +1,10 @@
+import { deleteAccount, deleteLapsedAccounts } from "./account-deletion";
 import { AppleSignInKeys } from "./apple-sign-in";
 import { AppleTokens } from "./apple-tokens";
 import { serveFont } from "./fonts";
 import { Challenges } from "./challenges";
 import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
+import { hex } from "./hex";
 import { RefreshTokens } from "./refresh-tokens";
 import { callerOf } from "./sessions";
 import { appleRootCaG3 } from "./apple-root";
@@ -16,27 +18,39 @@ import {
 } from "./subscriptions";
 import { issueChallenge, makeAccount, startSession, type SignIn } from "./sign-in";
 import { Store, type Answer, type Refusal } from "./store";
+import { parsePhotoId } from "./photo-id";
+import { getPhoto, putPhoto, sizeOf, sweepUploads, type Photos } from "./photos";
 
 /**
- * Of writings, the server keeps only sealed ones, and knows of each only its ID, updated time and size;
- * of each account, its Apple user, Apple's refresh token (sealed), its own key check, and its
- * App Store subscriptions (transaction ID, product, expiry, environment).
+ * The server keeps only sealed writings and photos. It knows of each writing only its ID, updated
+ * time and size, and of each photo its ID and size; of each account, its Apple user, Apple's refresh
+ * token (sealed), its own key check, and its App Store subscriptions (transaction ID, product,
+ * expiry, environment).
  * Font files are served apart from accounts, from R2 (`src/fonts.ts`), so of a font fetched it
  * knows only which file and the request's address. Routes are listed in `Server/README.md`.
  */
 export default {
-  fetch(request, env): Promise<Response> {
+  fetch(request, env, ctx): Promise<Response> {
     if (new URL(request.url).pathname.startsWith("/fonts/")) {
       return serveFont(request, env.FONTS);
     }
     return serve(
       request,
       signInOf(env, (url, init) => fetch(url, init), caches.default),
+      { bucket: env.PHOTOS, keepAlive: (work) => ctx.waitUntil(work) },
     );
   },
 
-  async scheduled(_controller, env): Promise<void> {
-    await Store.open(env.TURSO_URL, env.TURSO_TOKEN).sweep(Date.now());
+  async scheduled(_controller, env, ctx): Promise<void> {
+    const store = Store.open(env.TURSO_URL, env.TURSO_TOKEN);
+    const now = Date.now();
+    await store.sweep(now);
+    await sweepUploads(store, env.PHOTOS, now);
+    await deleteLapsedAccounts(
+      signInOf(env, (url, init) => fetch(url, init), caches.default),
+      { bucket: env.PHOTOS, keepAlive: (work) => ctx.waitUntil(work) },
+      now,
+    );
   },
 } satisfies ExportedHandler<Env>;
 
@@ -69,8 +83,8 @@ export function signInOf(
   };
 }
 
-/** Answers `request`, with Apple and Turso reached through `signIn`. */
-export async function serve(request: Request, signIn: SignIn): Promise<Response> {
+/** Answers `request`, with Apple and Turso reached through `signIn`, and photos kept in `photos`. */
+export async function serve(request: Request, signIn: SignIn, photos: Photos): Promise<Response> {
   const now = Date.now();
   const route = `${request.method} ${new URL(request.url).pathname}`;
   switch (route) {
@@ -99,6 +113,19 @@ export async function serve(request: Request, signIn: SignIn): Promise<Response>
       return (await store.endSession(caller, now))
         ? new Response(null, { status: 204 })
         : refused("session");
+    case "DELETE /account":
+      return answered(await deleteAccount(caller, signIn, photos, now), (deleted) => deleted);
+    case "GET /account":
+      return answered(await store.account(caller, now), (state) =>
+        Response.json({
+          plan: state.tier,
+          paidUntil: state.paidUntil,
+          lapsed: state.lapsed,
+          deletesAt: state.deletesAt,
+          usage: state.usage,
+          ownKeyCheck: state.ownKeyCheck === null ? null : hex(state.ownKeyCheck),
+        }),
+      );
     case "PUT /account/subscription": {
       const sent = await sentSubscription(request, signIn.appStore);
       if (!sent.ok) {
@@ -123,6 +150,48 @@ export async function serve(request: Request, signIn: SignIn): Promise<Response>
   }
 
   const path = new URL(request.url).pathname.split("/").slice(1);
+  if (path[0] === "photos") {
+    const part = path.length === 2 ? "photo" : path[2] === "thumbnail" ? "thumbnail" : undefined;
+    const id = parsePhotoId(path[1] ?? "");
+    if (part === undefined || path.length > 3) {
+      return turnedDown(
+        404,
+        "a photo is at /photos/<ID>, and its thumbnail at /photos/<ID>/thumbnail",
+      );
+    }
+    if (id === undefined) {
+      return turnedDown(404, "a photo's ID is a UUID");
+    }
+    switch (request.method) {
+      case "GET":
+        return answered(
+          await getPhoto(caller, id, part, store, photos.bucket, now),
+          (read) => read ?? problem(404, `the server has no ${part} for this photo`),
+        );
+      case "PUT": {
+        const sized = sizeOf(request, part);
+        if (!sized.ok) {
+          return turnedDown(sized.status, sized.reason);
+        }
+        return answered(
+          await putPhoto(
+            sized.body,
+            sized.size,
+            caller,
+            id,
+            part,
+            store,
+            photos.bucket,
+            photos.keepAlive,
+            now,
+          ),
+          (put) => put,
+        );
+      }
+      default:
+        return turnedDown(405, `a ${part} is read with GET and sent with PUT`);
+    }
+  }
   if (path[0] !== "writings" || path.length > 2) {
     return turnedDown(404, "there is no such route; Server/README.md lists them");
   }
@@ -188,7 +257,9 @@ const refusals: Record<Refusal, { status: number; reason: string }> = {
   requests: { status: 429, reason: "the plan's requests for today are used up" },
   lists: { status: 429, reason: "the plan's listings for today are used up" },
   saves: { status: 429, reason: "the plan's saves for today are used up" },
+  photos: { status: 429, reason: "the plan's photos for today are used up" },
   storage: { status: 429, reason: "the plan's storage for writings is full" },
+  "photo-storage": { status: 429, reason: "the plan's storage for photos has no room for this" },
 };
 
 function refused(refusal: Refusal): Response {
