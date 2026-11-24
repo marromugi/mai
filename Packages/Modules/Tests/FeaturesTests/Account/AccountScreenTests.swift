@@ -26,6 +26,11 @@ struct AccountScreenTests {
     assertSyncSection(.signedIn, canSignIn: true)
   }
 
+  /// Signed in, with the plan no longer current: 「サインアウト」 is still there.
+  @Test func syncSectionSignedInWithNoPlanCurrent() {
+    assertSyncSection(.signedIn, canSignIn: false)
+  }
+
   @Test func syncSectionAsksForTheRecoveryKey() {
     assertSyncSection(.recoveryKeyNeeded, canSignIn: true)
   }

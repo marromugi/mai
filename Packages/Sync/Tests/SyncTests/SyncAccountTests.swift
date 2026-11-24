@@ -6,7 +6,7 @@ import Testing
 /// another device acts in between, a server that can't be reached, and what Apple says. The usual
 /// paths run on the Worker in `AccountContractTests`.
 struct SyncAccountTests {
-  private let session = Session(token: "s1.x.y", account: UUID(), appleUser: "user")
+  private let session = Session(token: "s1.x.y", account: UUID(), appleUser: "000456.signed-in")
   private let sessions = MemorySessions()
 
   private func account(
@@ -135,7 +135,7 @@ struct SyncAccountTests {
 
   @Test func signingInWithNoPlanBoughtAsksNothingOfAppleOrTheServer() async throws {
     let server = ScriptedServer([:])
-    let apple = ScriptedApple(bought: [])
+    let apple = ScriptedApple(bought: .success([]))
     let account = try account(server, apple: apple)
     #expect(try await !account.isBought(UUID()))
     await #expect {
@@ -146,5 +146,70 @@ struct SyncAccountTests {
     }
     #expect(apple.signInsAsked == 0)
     #expect(server.requests.isEmpty)
+  }
+
+  /// The session keeps the Apple user who signed in, and the check at launch asks Apple of them.
+  @Test func theCheckAsksAppleOfTheUserWhoSignedIn() async throws {
+    let apple = ScriptedApple()
+    let server = ScriptedServer([
+      "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
+      "POST /account": [.status(201, json: #"{"token":"s1.a.b"}"#)],
+      "PUT /account/subscription": [.status(200)],
+    ])
+    let account = try account(server, apple: apple)
+    let signedIn = try await account.signIn(for: UUID())
+    #expect(signedIn.appleUser == ScriptedApple.user)
+    _ = try await account.check()
+    #expect(apple.usersAsked == [ScriptedApple.user])
+  }
+
+  @Test func aSubscriptionTheServerFailsOnIsSaidAndTheSessionKept() async throws {
+    let account = try signedIn().account(
+      ScriptedServer(["PUT /account/subscription": [.status(500)]]))
+    await #expect {
+      try await account.check()
+    } throws: { error in
+      guard case .server(.refused(status: 500, _)) = error as? AccountError else { return false }
+      return true
+    }
+    #expect(try sessions.load() == session)
+  }
+
+  @Test func purchasesNotReadAreSaidAsTheAppStores() async throws {
+    let apple = ScriptedApple(bought: .failure(URLError(.notConnectedToInternet)))
+    await #expect {
+      try await account(ScriptedServer([:]), apple: apple).isBought(UUID())
+    } throws: { error in
+      guard case .appStore = error as? AccountError else { return false }
+      return true
+    }
+  }
+
+  @Test func anOwnKeyCheckOfOddLengthIsNotTakenAsHex() async throws {
+    let server = ScriptedServer([
+      "GET /account": [
+        .status(200, json: #"{"plan":"basic","paidUntil":1,"ownKeyCheck":"abc"}"#)
+      ]
+    ])
+    await #expect {
+      try await account(server).settleOwnKey(session)
+    } throws: { error in
+      guard case .server(.unexpectedAnswer) = error as? AccountError else { return false }
+      return true
+    }
+  }
+
+  @Test(arguments: [
+    (
+      AccountError.server(.unreachable(URLError(.notConnectedToInternet))),
+      "サーバーにつながりませんでした。ネットワークを確かめて、もう一度お試しください。"
+    ),
+    (.server(.refused(status: 500, reason: "x")), "サーバーで問題が起きました。しばらくしてから、もう一度お試しください。"),
+    (.appStore(URLError(.notConnectedToInternet)), "App Store から購入を読めませんでした。しばらくしてから、もう一度お試しください。"),
+    (.noPurchase, "この App Store のアカウントには、同期のプランの購入が見つかりませんでした。"),
+    (.notTheAccountsKey, "このリカバリーキーは、このアカウントの鍵ではありません。"),
+  ])
+  func tellsAPersonWhatWentWrong(_ error: AccountError, _ message: String) {
+    #expect(error.localizedDescription == message)
   }
 }

@@ -171,7 +171,13 @@ final class PlanPurchaseTests {
     #expect(
       renewalInfo["originalTransactionId"] as? String
         == transaction["originalTransactionId"] as? String)
+    // Each is the one it is named: only a transaction has its ID, only renewal info what renews.
+    #expect(transaction["transactionId"] != nil)
+    #expect(transaction["autoRenewProductId"] == nil)
+    #expect(renewalInfo["autoRenewProductId"] as? String == SyncPlan.plus.productID)
+    #expect(renewalInfo["transactionId"] == nil)
     #expect(try await purchases.subscriptions(for: UUID()).isEmpty)
+    #expect(try await StoreKitPurchases(productIDs: []).subscriptions(for: id).isEmpty)
   }
 
   /// As on a device that keeps no account ID: a purchase approved through Ask to Buy reaches

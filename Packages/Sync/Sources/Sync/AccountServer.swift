@@ -6,7 +6,6 @@ public struct AccountState: Sendable, Equatable {
   public let plan: String
   /// Milliseconds since 1970.
   public let paidUntil: Int64
-  public let lapsed: Bool
   /// Nil until a device has put one.
   public let ownKeyCheck: Data?
 }
@@ -77,7 +76,7 @@ public struct AccountServer: Sendable {
       check = bytes
     }
     return AccountState(
-      plan: read.plan, paidUntil: read.paidUntil, lapsed: read.lapsed, ownKeyCheck: check)
+      plan: read.plan, paidUntil: read.paidUntil, ownKeyCheck: check)
   }
 
   /// Puts the account's own key check; false when the account has another one.
@@ -172,7 +171,6 @@ public struct AccountServer: Sendable {
   private struct ReadAccount: Decodable {
     let plan: String
     let paidUntil: Int64
-    let lapsed: Bool
     let ownKeyCheck: String?
   }
 }

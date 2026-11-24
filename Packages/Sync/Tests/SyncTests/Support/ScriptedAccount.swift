@@ -60,32 +60,40 @@ final class ScriptedServer: HTTPTransport {
   }
 }
 
-/// Apple and the App Store as each test sets them, counting the sign-ins asked for.
+/// Apple and the App Store as each test sets them, counting the sign-ins asked for and keeping whose
+/// credential state was asked. Signs in as the Apple user `user`.
 final class ScriptedApple: AppleSignIn, Purchases {
+  static let user = "000123.scripted"
+
   private let state: Mutex<Result<AppleCredentialState, URLError>>
-  private let bought: [SignedSubscription]
+  private let bought: Result<[SignedSubscription], URLError>
   private let signIns = Mutex(0)
+  private let asked = Mutex<[String]>([])
 
   init(
     state: Result<AppleCredentialState, URLError> = .success(.authorized),
-    bought: [SignedSubscription] = [SignedSubscription(transaction: "t", renewalInfo: "r")]
+    bought: Result<[SignedSubscription], URLError> = .success([
+      SignedSubscription(transaction: "t", renewalInfo: "r")
+    ])
   ) {
     self.state = Mutex(state)
     self.bought = bought
   }
 
   var signInsAsked: Int { signIns.withLock { $0 } }
+  var usersAsked: [String] { asked.withLock { $0 } }
 
   func signIn(nonce: String) async throws -> AppleCredential {
     signIns.withLock { $0 += 1 }
-    return AppleCredential(user: "user", identityToken: "id", authorizationCode: "code")
+    return AppleCredential(user: Self.user, identityToken: "id", authorizationCode: "code")
   }
 
   func credentialState(of user: String) async throws -> AppleCredentialState {
-    try state.withLock { try $0.get() }
+    asked.withLock { $0.append(user) }
+    return try state.withLock { try $0.get() }
   }
 
   func subscriptions(for account: UUID) async throws -> [SignedSubscription] {
-    bought
+    try bought.get()
   }
 }

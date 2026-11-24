@@ -45,6 +45,19 @@ struct SessionKeychainTests {
         == kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
   }
 
+  @Test func aSessionItCantReadIsSaid() throws {
+    defer { remove() }
+    var item = keychain.base
+    item[kSecValueData] = Data("not a session".utf8)
+    #expect(SecItemAdd(item as CFDictionary, nil) == errSecSuccess)
+    #expect {
+      try keychain.load()
+    } throws: { error in
+      guard case KeychainError.unreadableSession = error else { return false }
+      return true
+    }
+  }
+
   private func remove() {
     SecItemDelete(keychain.base as CFDictionary)
   }
