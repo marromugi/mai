@@ -42,7 +42,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 | 経路                         | 内容                                                                                                                                                                                                                                      |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DELETE /session`            | サインアウト。このセッションを終えて 204                                                                                                                                                                                                  |
-| `GET /account`               | 200 と `{"plan", "paidUntil", "lapsed", "usage", "ownKeyCheck"}`。期限の切れたアカウントも読める。表の下に                                                                                                                                |
+| `GET /account`               | 200 と `{"plan", "paidUntil", "lapsed", "deletesAt", "usage", "ownKeyCheck"}`。期限の切れたアカウントも読める。表の下に                                                                                                                   |
 | `PUT /account/subscription`  | アプリが起動のたびに、今の購読の取引と更新の情報を `{"transaction", "renewalInfo"}`(どちらも `jwsRepresentation`)で送り直す。200 と `{"plan", "paidUntil"}`(送り直したあとのプランと、いつまで払われているか)。下の「購読」               |
 | `PUT /account/own-key-check` | 自分の鍵から作った確かめの値(32 バイト)を `application/octet-stream` で。アカウントにまだなければ置いて 204、同じ値なら 204、別の値なら 409(2 つ目の自分の鍵は作らせない)。長さが違えば 400、型が違えば 415                               |
 | `DELETE /account`            | アカウントを消す。Apple の refresh トークンを取り消し、R2 とすべての表からそのアカウントのものを消して 204。期限の切れたアカウントも、その日のリクエストを使い切ったアカウントも消せる。下の「アカウントの削除」                          |
@@ -54,7 +54,7 @@ ID トークンは `src/apple-sign-in.ts` で、Apple の鍵の署名・`iss`・
 
 `PUT /writings/<ID>` は `Specs/ReadMode` のモデルの `Save` のうち文書そのものを置く部分にあたる。モデルには断られる保存がないので、#26 は受けられた保存にだけ写しを送る。`GET /writings/<ID>` は文書を取るもので、モデルは文書の中身を扱わない。モデルの `Sync` が取り込む設定は #26 が足す。
 
-`GET /account` はセッションのアカウントのことを答える。`plan` はプラン、`paidUntil` はいつまで払われているか(1970 年からのミリ秒)、`lapsed` はそれを過ぎたか。`usage` は `writingsBytes`・`writings`・`photosBytes`・`requests`・`lists`・`saves`・`photos` それぞれの `{"used", "limit"}` で、`limit` はプランの上限、`requests`・`lists`・`saves`・`photos` の `used` はその日(UTC)の、この要求の前までの数。`ownKeyCheck` は自分の鍵の確かめの値(小文字の 16 進)で、まだなければ null。端末はこれで自分の鍵を決める(#22 の設計の 3 節)。
+`GET /account` はセッションのアカウントのことを答える。`plan` はプラン、`paidUntil` はいつまで払われているか(1970 年からのミリ秒)、`lapsed` はそれを過ぎたか。`deletesAt` は期限の切れたアカウントが消える時刻(`paidUntil` の 90 日あと、1970 年からのミリ秒)で、期限が切れていなければ null(下の「期限切れのあとの削除」)。`usage` は `writingsBytes`・`writings`・`photosBytes`・`requests`・`lists`・`saves`・`photos` それぞれの `{"used", "limit"}` で、`limit` はプランの上限、`requests`・`lists`・`saves`・`photos` の `used` はその日(UTC)の、この要求の前までの数。`ownKeyCheck` は自分の鍵の確かめの値(小文字の 16 進)で、まだなければ null。端末はこれで自分の鍵を決める(#22 の設計の 3 節)。
 
 - 端末に自分の鍵があるとき: その鍵から作った値と同じならそのまま使う。null なら `PUT /account/own-key-check` でその値を置く。違えばその鍵は使わず、リカバリーキーを求める。
 - 端末に自分の鍵がないとき: null なら鍵を作って、その値を置く。null でなければ鍵を作らず、リカバリーキーを求める。
@@ -99,7 +99,7 @@ R2 のキーは `<アカウント ID>/<写真 ID>/<photo か thumbnail>/<送る�
 - **送り直し**(`PUT /account/subscription`): 同じように確かめ、更新の情報は同じ `originalTransactionId` の取引のものに限る(別の購読のものは 400)。期限が過ぎたものや取り消されたものも受け、その通りに写す。`appAccountToken` が呼んだアカウントでないか、その購読が別のアカウントのものなら 409。期限の切れたアカウントからも送れる。今のものより古いか同じ時刻のもの、前の期間のものなら何も変えずに 200(アプリが同じ取引を送り直したときも)。
 - **通知**(`POST /app-store/notifications`): 署名と環境を同じように確かめ、通らなければ 400、受けない環境なら 403。取引のない通知(`TEST` など)、自動更新の購読でない取引、まだ置いていない購読で `appAccountToken` のアカウントがないものは、何もせず 200。まだ置いていない購読でアカウントがあれば、そのアカウントのものとして置く。今のものより古いか同じ時刻のもの、前の期間のものは何も変えない。Apple は 200 を返すまで送り直す。
 
-`accounts.paid_until` を過ぎたアカウントは期限切れで、文書と写真を読めるが書けない。文書の保存(`PUT /writings/<ID>`)、写真とサムネイル(`PUT /photos/<ID>`、`.../thumbnail`)、自分の鍵の確かめの値(`PUT /account/own-key-check`)は 402 で、何も書かず、数えもしない。一覧・読み出し、アカウントを読むこと(`GET /account`)、購読を戻すための送り直しはそのまま使える。`paid_until` が期限の切れた時刻で、それから 90 日で消すのは #22 の S6。
+`accounts.paid_until` を過ぎたアカウントは期限切れで、文書と写真を読めるが書けない。文書の保存(`PUT /writings/<ID>`)、写真とサムネイル(`PUT /photos/<ID>`、`.../thumbnail`)、自分の鍵の確かめの値(`PUT /account/own-key-check`)は 402 で、何も書かず、数えもしない。一覧・読み出し、アカウントを読むこと(`GET /account`)、購読を戻すための送り直しはそのまま使える。`paid_until` が期限の切れた時刻で、その 90 日あとに Cron が消す(下の「期限切れのあとの削除」)。
 
 `APP_STORE_ENVIRONMENTS` は受ける購入の環境で、`Production`・`Sandbox`、または両方をカンマで。`wrangler.jsonc` の値は `Production` で、本番の Worker は Sandbox(TestFlight と Sandbox のテスト用アカウント)の購入を受けない。Sandbox のビルドは、`APP_STORE_ENVIRONMENTS` を `Sandbox` にした別の Worker と別のデータベースに向ける。App Review の購入も Sandbox なので、本番が Sandbox も受けるかは #54 で聞いている。Xcode の StoreKit の試験(`environment: "Xcode"`)の取引は Apple の鍵で署名されていないので、どの Worker も受けない。
 
@@ -122,6 +122,18 @@ R2 のキーは `<アカウント ID>/<写真 ID>/<photo か thumbnail>/<送る�
 ### 期限の掃除
 
 Cron(毎分)が、最後に使ってから 180 日たったセッションと、前の日までの `usage` と、期限から 1 時間たった `used_challenges` を消す(`Store.sweep`)。1 時間たっても書き終わらない写真の取り置きを、R2 のものと一緒に 1 回 1,000 件まで戻す(`sweepUploads`)。#26 の写しと読み取りモードの期限もここに足す。
+
+### 期限切れのあとの削除
+
+期限が切れてから(`accounts.paid_until` から)90 日たったアカウントを、Cron が 1 回 10 件まで、その中から無作為に選んで消す(`deleteLapsedAccounts`、`src/account-deletion.ts`)。消し方は上の「アカウントの削除」と同じで、Apple の refresh トークンを取り消し、R2 の `<アカウント ID>/` の下を消し、すべての表の行を消す。
+
+- 90 日のうちに購読し直せば(`paid_until` がまた先になれば)消さない。購読の送り直しと通知は上の「購読」の通りに `paid_until` を変える。
+- Apple が取り消したあと、R2 に触る前に `accounts.deleting` を 1 にする。そこまでに購読し直していれば何も消さない。そのあとの購読し直しはもう `paid_until` を変えず、アカウントは消える。
+- 無作為に選ぶので、毎回失敗するアカウントが 10 件あっても、ほかのアカウントも消える。
+- 1 件の失敗はほかを止めない。失敗したアカウントはログに残り、次の回にやり直す。Apple が答えなければ何も消さない。R2 か行の削除で失敗すれば、`deleting` が 1 のまま次の回に終える。
+- `GET /account` の `deletesAt` で、端末はいつ消えるかを知る。
+
+#26 の読み取りモードと写しは、期限が切れたときに消す(#22 の設計の 7 節)。それは #26 が上の `Store.sweep` に足す。表に `account_id` を持たせれば `accountTables` に入れることになり(入れないと `test/account-deletion.test.ts` が落ちる)、この削除でも消える。
 
 ## Apple の署名
 

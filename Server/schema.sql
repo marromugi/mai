@@ -25,7 +25,10 @@ INSERT INTO plans VALUES
 -- src/refresh-tokens.ts; it is never kept unsealed. own_key_check is set once, by the first device
 -- to make the own key. tier and paid_until follow the account's subscriptions: tier is the plan of
 -- the one paid for longest, and paid_until the latest time any of them is paid until. Past
--- paid_until the account has lapsed: it is read but not written.
+-- paid_until the account has lapsed: it is read but not written, and 90 days past it the cron
+-- trigger deletes it (lapsedKept in src/store.ts). deleting is 1 once the cron trigger has revoked
+-- its Apple token and before it touches R2; from then on its subscriptions no longer change
+-- paid_until or tier, so a resubscription comes too late.
 CREATE TABLE accounts (
   id TEXT PRIMARY KEY,
   apple_sub TEXT NOT NULL UNIQUE,
@@ -36,8 +39,10 @@ CREATE TABLE accounts (
   writings_bytes INTEGER NOT NULL DEFAULT 0,
   writings_count INTEGER NOT NULL DEFAULT 0,
   photos_bytes INTEGER NOT NULL DEFAULT 0,
-  created INTEGER NOT NULL
+  created INTEGER NOT NULL,
+  deleting INTEGER NOT NULL DEFAULT 0 CHECK (deleting IN (0, 1))
 ) STRICT;
+CREATE INDEX accounts_paid_until ON accounts (paid_until);
 
 -- An App Store subscription, by the originalTransactionId every renewal of it shares, as the
 -- latest data the App Store signed about it reads (signed_date), among data about its latest billing

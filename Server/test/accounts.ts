@@ -1,4 +1,10 @@
-import { env } from "cloudflare:test";
+import {
+  createExecutionContext,
+  createScheduledController,
+  env,
+  waitOnExecutionContext,
+} from "cloudflare:test";
+import worker from "../src/index";
 import { parseAccountId } from "../src/account-id";
 import { challengeLifetime } from "../src/challenges";
 import { newSessionToken, type Caller } from "../src/sessions";
@@ -9,6 +15,20 @@ export const store = Store.open(env.TURSO_URL, env.TURSO_TOKEN);
 
 /** The local R2, for tests that call `serve` themselves; it awaits whatever it keeps alive. */
 export const photos: Photos = { bucket: env.PHOTOS, keepAlive: () => undefined };
+
+/**
+ * Runs the Worker's cron trigger once, with Apple reached through `fetch` and `secrets` over the
+ * tests' own, and waits for what it keeps alive.
+ */
+export async function runCron(secrets: Partial<Env> = {}): Promise<void> {
+  const ctx = createExecutionContext();
+  await worker.scheduled(
+    createScheduledController({ scheduledTime: Date.now() }),
+    { ...env, ...secrets },
+    ctx,
+  );
+  await waitOnExecutionContext(ctx);
+}
 
 /** The products `schema.sql` sells the plans as. */
 export const products = {

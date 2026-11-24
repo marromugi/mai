@@ -88,6 +88,8 @@ export type AccountState = {
   tier: string;
   paidUntil: number;
   lapsed: boolean;
+  /** When a lapsed account is deleted, `lapsedKept` after `paidUntil`; null while it is paid for. */
+  deletesAt: number | null;
   usage: Record<
     "writingsBytes" | "writings" | "photosBytes" | "requests" | "lists" | "saves" | "photos",
     Use
@@ -145,6 +147,12 @@ export const usedChallengeMargin = 60 * 60 * 1000;
  * without releasing it; the cron trigger releases it.
  */
 export const uploadLifetime = 60 * 60 * 1000;
+
+/**
+ * A lapsed account is read but not written for this long after `paid_until`; then the cron
+ * trigger deletes it (`src/account-deletion.ts`).
+ */
+export const lapsedKept = 90 * day;
 const claimed = `EXISTS (SELECT 1 FROM used_challenges WHERE value = :challenge AND claim = :claim)`;
 
 export class Store {
@@ -556,17 +564,7 @@ export class Store {
       ),
     );
     const row = rows[0];
-    if (row === undefined) {
-      return undefined;
-    }
-    const sealed = row["apple_refresh_token"];
-    if (!(sealed instanceof ArrayBuffer)) {
-      throw new Error("accounts.apple_refresh_token is a BLOB, but came back as something else");
-    }
-    return {
-      account: stored(parseAccountId, row["id"]),
-      sealedRefreshToken: new Uint8Array(sealed),
-    };
+    return row === undefined ? undefined : toDelete(row);
   }
 
   /** Which of `uploads` have a row in `photos`, in any state. */
@@ -586,17 +584,51 @@ export class Store {
    * the caller's session is live. False when it wasn't, and nothing was deleted.
    */
   async deleteAccount(caller: Caller, account: AccountId, now: number): Promise<boolean> {
-    const live = `:account = (SELECT s.account_id FROM sessions s WHERE ${liveSession})`;
-    const results = await this.#client.batch(
-      [
-        `DELETE FROM accounts WHERE id = :account AND ${live}`,
-        ...accountTables.map(
-          (table) => `DELETE FROM ${table} WHERE account_id = :account AND ${live}`,
-        ),
-      ].map((sql) => bind(sql, { ...callerValues(caller, now), account })),
-      "write",
+    return this.#deleteRows(
+      account,
+      `:account = (SELECT s.account_id FROM sessions s WHERE ${liveSession})`,
+      callerValues(caller, now),
+      ["accounts", ...accountTables],
     );
-    return results[0]?.rowsAffected === 1;
+  }
+
+  /**
+   * At most `count` accounts lapsed `lapsedKept` or longer before `now`, picked at random, with
+   * their sealed refresh tokens, for the cron trigger to delete. At random, so that accounts that
+   * fail every time can't take every place in every run.
+   */
+  async lapsedToDelete(now: number, count: number): Promise<ToDelete[]> {
+    const { rows } = await this.#client.execute({
+      sql: `SELECT id, apple_refresh_token FROM accounts WHERE paid_until <= :due
+            ORDER BY random() LIMIT :count`,
+      args: { due: now - lapsedKept, count },
+    });
+    return rows.map(toDelete);
+  }
+
+  /**
+   * Marks `account` as being deleted when it is still lapsed `lapsedKept` or longer at `now`, so
+   * that a resubscription no longer keeps it. False when it isn't, as after a resubscription.
+   */
+  async markForDeletion(account: AccountId, now: number): Promise<boolean> {
+    const marked = await this.#client.execute({
+      sql: `UPDATE accounts SET deleting = 1 WHERE id = :account AND paid_until <= :due`,
+      args: { account, due: now - lapsedKept },
+    });
+    return marked.rowsAffected === 1;
+  }
+
+  /**
+   * Deletes every row of `account`, its `accounts` row last, in one batch, when `markForDeletion`
+   * marked it. False when it hadn't, and nothing was deleted.
+   */
+  async deleteLapsedAccount(account: AccountId): Promise<boolean> {
+    return this.#deleteRows(
+      account,
+      "EXISTS (SELECT 1 FROM accounts WHERE id = :account AND deleting = 1)",
+      {},
+      [...accountTables, "accounts"],
+    );
   }
 
   /**
@@ -654,12 +686,15 @@ export class Store {
       used: Number(row[used]),
       limit: Number(row[limit]),
     });
+    const paidUntil = Number(row["paid_until"]);
+    const lapsed = Number(row["lapsed"]) === 1;
     return {
       ok: true,
       value: {
         tier: stored((tier) => tier, row["tier"]),
-        paidUntil: Number(row["paid_until"]),
-        lapsed: Number(row["lapsed"]) === 1,
+        paidUntil,
+        lapsed,
+        deletesAt: lapsed ? paidUntil + lapsedKept : null,
         usage: {
           writingsBytes: use("writings_bytes", "writings_bytes_limit"),
           writings: use("writings_count", "writings_count_limit"),
@@ -690,6 +725,30 @@ export class Store {
       ],
       "write",
     );
+  }
+
+  /**
+   * Deletes the rows of `account` from `tables` in that order, in one batch, each only while
+   * `still` holds with `values`; `still` reads a table that comes last. Answers whether its
+   * `accounts` row went.
+   */
+  async #deleteRows(
+    account: AccountId,
+    still: string,
+    values: Record<string, InValue>,
+    tables: readonly ("accounts" | (typeof accountTables)[number])[],
+  ): Promise<boolean> {
+    const results = await this.#client.batch(
+      tables.map((table) =>
+        bind(
+          `DELETE FROM ${table} WHERE ${table === "accounts" ? "id" : "account_id"} = :account
+             AND ${still}`,
+          { ...values, account },
+        ),
+      ),
+      "write",
+    );
+    return results[tables.indexOf("accounts")]?.rowsAffected === 1;
   }
 
   /**
@@ -797,7 +856,8 @@ export class Store {
 
 /**
  * Every table whose rows belong to an account by their `account_id`, which deleting an account
- * empties of it; `sessions` last, since each delete checks the caller's session.
+ * empties of it; `sessions` last, since `DELETE /account` checks the caller's session in each
+ * delete.
  */
 export const accountTables = ["writings", "photos", "usage", "subscriptions", "sessions"] as const;
 
@@ -828,8 +888,8 @@ function purchaseValues(purchase: Purchase): Record<string, InValue> {
 /**
  * Replaces the kept subscription `:original` with newer data about the same or a later billing
  * period, or keeps it for the account `:account` when it isn't kept yet; then sets its account's
- * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan).
- * Each statement holds `condition` in its WHERE.
+ * plan and paid-until time from all of the account's subscriptions (on a tie, the larger plan),
+ * unless the cron trigger is deleting it. Each statement holds `condition` in its WHERE.
  */
 function keepStatements(condition: string): string[] {
   return [
@@ -848,7 +908,7 @@ function keepStatements(condition: string): string[] {
                         WHERE s.account_id = accounts.id
                         ORDER BY s.paid_until DESC, p.writings_bytes DESC LIMIT 1), tier)
      WHERE id = (SELECT account_id FROM subscriptions WHERE original_transaction_id = :original)
-       AND ${condition}`,
+       AND deleting = 0 AND ${condition}`,
   ];
 }
 
@@ -861,6 +921,15 @@ function uploadOf(row: Row): Upload {
     upload: stored((upload) => upload, row["upload"]),
     size: Number(row["size"]),
   };
+}
+
+/** An account and its sealed refresh token, as a row of `accounts` holds them. */
+function toDelete(row: Row): ToDelete {
+  const sealed = row["apple_refresh_token"];
+  if (!(sealed instanceof ArrayBuffer)) {
+    throw new Error("accounts.apple_refresh_token is a BLOB, but came back as something else");
+  }
+  return { account: stored(parseAccountId, row["id"]), sealedRefreshToken: new Uint8Array(sealed) };
 }
 
 /** A value read back from a column only this file writes, which holds only valid values. */

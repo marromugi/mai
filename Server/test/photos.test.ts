@@ -1,14 +1,14 @@
-import { createScheduledController, env } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { createClient } from "@libsql/client/web";
 import { describe, expect, it } from "vitest";
-import worker, { serve, signInOf } from "../src/index";
+import { serve, signInOf } from "../src/index";
 import { parseAccountId } from "../src/account-id";
 import { parsePhotoId, parsePhotoPart, type PhotoId, type PhotoPart } from "../src/photo-id";
 import { largestPart, photoKey, sweepUploads } from "../src/photos";
 import type { Caller } from "../src/sessions";
 import type { Upload } from "../src/store";
-import { newAccount, products, store } from "./accounts";
+import { newAccount, products, runCron, store } from "./accounts";
 
 const database = createClient({ url: env.TURSO_URL });
 const day = 24 * 60 * 60 * 1000;
@@ -367,7 +367,7 @@ describe("an upload that fails", () => {
       sql: "UPDATE photos SET reserved = reserved - ? WHERE account_id = ?",
       args: [hour, account],
     });
-    await worker.scheduled(createScheduledController({ scheduledTime: Date.now() }), env);
+    await runCron();
     expect(await photoRows(account)).toEqual([]);
     expect(await photosBytes(account)).toBe(0);
     expect(await keysOf(account)).toEqual([]);
@@ -434,7 +434,7 @@ describe("the cron trigger", () => {
       sql: "UPDATE photos SET reserved = reserved - ? WHERE account_id = ?",
       args: [day, account],
     });
-    await worker.scheduled(createScheduledController({ scheduledTime: Date.now() }), env);
+    await runCron();
     expect(await photosBytes(account)).toBe(10);
     expect((await call(`/photos/${id}`, token)).status).toBe(200);
   });

@@ -54,6 +54,7 @@ describe("GET /account", () => {
       plan: "basic",
       paidUntil: await paidUntilOf(account),
       lapsed: false,
+      deletesAt: null,
       usage: {
         writingsBytes: { used: 0, limit: 100_000_000 },
         writings: { used: 0, limit: 10_000 },
@@ -131,6 +132,25 @@ describe("GET /account", () => {
     const paidUntil = await paidUntilOf(account);
     expect(paidUntil).toBeLessThan(Date.now());
     expect(await readAccount(token)).toMatchObject({ paidUntil, lapsed: true, plan: "basic" });
+  });
+
+  it("says when a lapsed account is deleted, 90 days past when it was paid until", async () => {
+    const { account, caller } = await newAccount();
+    const paidUntil = await paidUntilOf(account);
+    expect(await store.account(caller, paidUntil - 1)).toMatchObject({
+      ok: true,
+      value: { deletesAt: null },
+    });
+    expect(await store.account(caller, paidUntil)).toMatchObject({
+      ok: true,
+      value: { deletesAt: paidUntil + 90 * day },
+    });
+    const lapsed = await newAccount(products.basic, Date.now() - 60 * day);
+    const lapsedUntil = await paidUntilOf(lapsed.account);
+    expect(await readAccount(lapsed.token)).toMatchObject({
+      lapsed: true,
+      deletesAt: lapsedUntil + 90 * day,
+    });
   });
 
   it("says an account has lapsed from the moment it is paid until", async () => {
