@@ -17,7 +17,7 @@ import type { SignIn } from "./sign-in";
  */
 const accountDeleting = new Set(["account-deleted", "account-delete"]);
 
-/** The events that end every session of the user's account. */
+/** The events that end every session of the user's account, and its read mode. */
 const sessionEnding = new Set(["consent-revoked", ...accountDeleting]);
 
 /**
@@ -55,10 +55,9 @@ export async function receiveSignInNotification(
     // `iat` counts seconds. A session started after its second, by signing in again, outlives the
     // same notification sent again.
     const iat = whole(claims["iat"]);
-    await signIn.store.endSessionsOfAppleUser(
-      event.sub,
-      iat === undefined ? now : (iat + 1) * 1000,
-    );
+    const before = iat === undefined ? now : (iat + 1) * 1000;
+    await signIn.store.endReadModeOfAppleUser(event.sub, before);
+    await signIn.store.endSessionsOfAppleUser(event.sub, before);
   }
   if (accountDeleting.has(event.type)) {
     await deleteAccountOfAppleUser(event.sub, signIn, photos, now);

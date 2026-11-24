@@ -202,6 +202,73 @@ async function sessionWorks(token: string): Promise<boolean> {
   return answer.status === 200;
 }
 
+/** A request to the Worker as deployed, as `token`'s device or agent. */
+function deployed(path: string, token: string, method = "GET", body?: unknown): Promise<Response> {
+  return exports.default.fetch(
+    new Request(`https://mai.test${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }),
+  );
+}
+
+/**
+ * Approves an agent for the account of the session `token`, turns read mode on for a minute, and
+ * sends the agent a copy of the account's writing; answers the agent's token.
+ */
+async function readingAgent(account: string, token: string): Promise<string> {
+  const key = Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  const approved = await deployed("/agents", token, "POST", { publicKey: key, signature: "00" });
+  expect(approved.status).toBe(201);
+  const agent = await approved.json<{ agent: string; token: string }>();
+  const until = Date.now() + 60 * 1000;
+  expect((await deployed("/read-mode", token, "PUT", { until })).status).toBe(200);
+  const revision = "a".repeat(64);
+  await database.execute({
+    sql: "UPDATE writings SET revision = ? WHERE account_id = ?",
+    args: [revision, account],
+  });
+  const { rows } = await database.execute({
+    sql: "SELECT id FROM writings WHERE account_id = ?",
+    args: [account],
+  });
+  const sent = await deployed("/copies", token, "POST", {
+    expires: until,
+    copies: [{ writing: rows[0]?.["id"], agent: agent.agent, revision, wrapped: "00" }],
+  });
+  expect(sent.status).toBe(200);
+  expect(await agentReads(agent.token)).toBe(1);
+  return agent.token;
+}
+
+/** How many writings the agent of `token` can read; 401 counts as none. */
+async function agentReads(token: string): Promise<number> {
+  const answer = await deployed("/agent/writings", token);
+  if (answer.status === 401) {
+    return 0;
+  }
+  expect(answer.status).toBe(200);
+  return (await answer.json<{ writings: unknown[] }>()).writings.length;
+}
+
+/** Whether the account's read mode is kept, with how many copies, and its agents unrevoked. */
+async function readModeOf(account: string) {
+  const { rows } = await database.execute({
+    sql: `SELECT (SELECT count(*) FROM read_modes WHERE account_id = :account) AS modes,
+            (SELECT count(*) FROM copies WHERE account_id = :account) AS copies,
+            (SELECT count(*) FROM agents WHERE account_id = :account AND revoked = 0) AS agents`,
+    args: { account },
+  });
+  return {
+    modes: Number(rows[0]?.["modes"]),
+    copies: Number(rows[0]?.["copies"]),
+    agents: Number(rows[0]?.["agents"]),
+  };
+}
+
 describe("Sign in with Apple notifications", () => {
   for (const type of ["consent-revoked", "account-deleted", "account-delete"]) {
     it(`ends every session of the account on ${type}, and no other account's`, async () => {
@@ -238,6 +305,45 @@ describe("Sign in with Apple notifications", () => {
       expect(await sessionWorks(other.token)).toBe(true);
     });
   }
+
+  it("turns read mode off on consent-revoked, so agents read nothing, and no other account's", async () => {
+    const one = await accountWithSessions();
+    const other = await accountWithSessions();
+    const agent = await readingAgent(one.account, one.token);
+    const otherAgent = await readingAgent(other.account, other.token);
+
+    expect((await notify(await notification({ sub: one.sub }))).status).toBe(200);
+
+    expect(await agentReads(agent)).toBe(0);
+    expect(await readModeOf(one.account)).toEqual({ modes: 0, copies: 0, agents: 1 });
+    expect(await agentReads(otherAgent)).toBe(1);
+    expect(await readModeOf(other.account)).toEqual({ modes: 1, copies: 1, agents: 1 });
+  });
+
+  it("keeps read mode turned on again after the user signed in again, when sent again", async () => {
+    const one = await accountWithSessions();
+    await readingAgent(one.account, one.token);
+    const sent = await notification({ sub: one.sub, iat: Math.floor(Date.now() / 1000) - 30 });
+    expect((await notify(sent)).status).toBe(200);
+    const again = await newSessionToken();
+    await database.execute({
+      sql: `INSERT INTO sessions (id, account_id, token_sha256, created, last_used)
+            VALUES (?, ?, ?, ?, ?)`,
+      args: [
+        again.caller.session,
+        one.account,
+        again.caller.secretSha256,
+        Date.now() - 10 * 1000,
+        Date.now(),
+      ],
+    });
+    const agent = await readingAgent(one.account, again.token);
+
+    expect((await notify(sent)).status).toBe(200);
+
+    expect(await agentReads(agent)).toBe(1);
+    expect((await readModeOf(one.account)).modes).toBe(1);
+  });
 
   it("keeps the account on consent-revoked", async () => {
     const one = await accountWithSessions();

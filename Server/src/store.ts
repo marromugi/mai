@@ -629,6 +629,23 @@ export class Store {
   }
 
   /**
+   * Turns off the read mode of the Apple user's account and deletes its copies, so its agents read
+   * nothing; none when the user has no account, or has started a session at `before` or later by
+   * signing in again since.
+   */
+  async endReadModeOfAppleUser(appleSub: string, before: number): Promise<void> {
+    const ofUser = `account_id = (SELECT id FROM accounts WHERE apple_sub = :sub)
+      AND NOT EXISTS (SELECT 1 FROM sessions s JOIN accounts a ON a.id = s.account_id
+                      WHERE a.apple_sub = :sub AND s.created >= :before)`;
+    await this.#client.batch(
+      [`DELETE FROM copies WHERE ${ofUser}`, `DELETE FROM read_modes WHERE ${ofUser}`].map((sql) =>
+        bind(sql, { sub: appleSub, before }),
+      ),
+      "write",
+    );
+  }
+
+  /**
    * The caller's account and its sealed refresh token, for deleting it; undefined when the caller
    * has no live session. Neither counted nor limited, so a lapsed account or one past its day's
    * requests is deleted too.
