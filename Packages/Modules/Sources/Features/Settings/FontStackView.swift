@@ -45,7 +45,7 @@ struct FontStackView: View {
     }
   }
 
-  static let sample = "朝の光が desk に届くころ、Mai で書きかけの draft をもう一度読み返す。"
+  static let sample = "朝の光が desk に届くころ、Cotoma で書きかけの draft をもう一度読み返す。"
 }
 
 /// One family of a stack: its title in its own regular face once it can be set in, and where it
