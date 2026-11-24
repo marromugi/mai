@@ -1,5 +1,6 @@
 import Foundation
 import Sync
+import SyncFakes
 import Synchronization
 
 /// Answers each request to the Worker with the next answer written for its route, and keeps every
@@ -51,12 +52,7 @@ final class ScriptedServer: HTTPTransport {
 
   /// `GET /account`'s answer for an account whose own key check is `check`.
   static func account(check: Data?) -> Answer {
-    let hex = check.map { "\"\($0.map { String(format: "%02x", $0) }.joined())\"" } ?? "null"
-    return .status(
-      200,
-      json:
-        #"{"plan":"basic","paidUntil":1,"lapsed":false,"deletesAt":null,"usage":{},"ownKeyCheck":"#
-        + hex + "}")
+    .status(200, json: accountAnswer(check: check))
   }
 }
 

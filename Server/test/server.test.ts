@@ -309,7 +309,10 @@ describe("a plan's daily limits", () => {
     }
     const refused = await request(`/writings/${id}`, { authorization });
     expect(refused.status).toBe(429);
-    expect(await refused.json()).toHaveProperty("error");
+    expect(await refused.json()).toEqual({
+      error: "the plan's requests for today are used up",
+      limit: "requests",
+    });
     expect((await request("/writings", { authorization })).status).toBe(429);
   });
 
@@ -317,7 +320,12 @@ describe("a plan's daily limits", () => {
     const authorization = await onTheDailyPlan();
     expect((await request("/writings", { authorization })).status).toBe(200);
     expect((await request("/writings", { authorization })).status).toBe(200);
-    expect((await request("/writings", { authorization })).status).toBe(429);
+    const refused = await request("/writings", { authorization });
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toEqual({
+      error: "the plan's listings for today are used up",
+      limit: "lists",
+    });
     expect((await request("/writings", { authorization })).status).toBe(429);
     // Two requests counted so far, so two more of another kind pass.
     expect((await request(`/writings/${id}`, { authorization })).status).toBe(404);
@@ -333,7 +341,10 @@ describe("a plan's daily limits", () => {
     expect((await save("none")).status).toBe(409);
     const refused = await save(first);
     expect(refused.status).toBe(429);
-    expect(await refused.json()).toHaveProperty("error");
+    expect(await refused.json()).toEqual({
+      error: "the plan's saves for today are used up",
+      limit: "saves",
+    });
   });
 
   it("does the last save and list the day allows, and nothing past them", async () => {
@@ -389,7 +400,10 @@ describe("a plan's storage", () => {
       authorization,
     });
     expect(refused.status).toBe(429);
-    expect(await refused.json()).toHaveProperty("error");
+    expect(await refused.json()).toEqual({
+      error: "the plan's storage for writings is full",
+      limit: "storage",
+    });
     expect((await request(`/writings/${third}`, { authorization })).status).toBe(404);
   });
 

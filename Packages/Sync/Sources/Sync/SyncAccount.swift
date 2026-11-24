@@ -99,13 +99,13 @@ public struct SyncAccount: Sendable {
     return try keep(Session(token: started.token, account: started.account, appleUser: again.user))
   }
 
-  /// Settles the own key against the account's own key check (`Server/README.md`, `GET /account`).
-  /// A key is made only when the account has none and neither has the device; it is kept before
-  /// its check is put, so a check is never put for a key nobody holds.
-  public func settleOwnKey(_ session: Session) async throws(AccountError) -> OwnKeyOutcome {
-    let state = try await serverCall { () async throws(ServerError) in
-      try await server.account(token: session.token)
-    }
+  /// Settles the own key against the account's own key check in `state`, the account as just read
+  /// with `session` (`Server/README.md`, `GET /account`). A key is made only when the account has
+  /// none and neither has the device; it is kept before its check is put, so a check is never put
+  /// for a key nobody holds.
+  public func settleOwnKey(_ session: Session, against state: AccountState)
+    async throws(AccountError) -> OwnKeyOutcome
+  {
     let kept = try keychain { () throws(KeychainError) in try ownKeys.load() }
     switch (kept, state.ownKeyCheck) {
     case (let key?, let check?):
@@ -118,6 +118,13 @@ public struct SyncAccount: Sendable {
       let key = OwnKey.generate()
       try keychain { () throws(KeychainError) in try ownKeys.save(key) }
       return try await putCheck(of: key, session) ? .made(RecoveryKey(key)) : .recoveryKeyNeeded
+    }
+  }
+
+  /// What the server says of the account now: its plan, whether it is paid for, and what it used.
+  public func state(_ session: Session) async throws(AccountError) -> AccountState {
+    try await serverCall { () async throws(ServerError) in
+      try await server.account(token: session.token)
     }
   }
 

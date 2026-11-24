@@ -189,7 +189,10 @@ struct SyncAccountTests {
   @Test func anOwnKeyCheckOfOddLengthIsNotTakenAsHex() async throws {
     let server = ScriptedServer([
       "GET /account": [
-        .status(200, json: #"{"plan":"basic","paidUntil":1,"ownKeyCheck":"abc"}"#)
+        .status(
+          200,
+          json: accountAnswer(check: nil).replacing(
+            #""ownKeyCheck":null"#, with: #""ownKeyCheck":"abc""#))
       ]
     ])
     await #expect {

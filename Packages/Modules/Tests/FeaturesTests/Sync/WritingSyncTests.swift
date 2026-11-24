@@ -242,8 +242,8 @@ struct WritingSyncTests {
     await device.account.checkAtLaunch()
 
     await device.sync.syncNow()
-    let message = ServerError.refused(status: status, reason: "").localizedDescription
-    #expect(device.sync.status == .stopped(message))
+    let error = status == 429 ? ServerError.limitReached(.saves) : .refused(status: 402, reason: "")
+    #expect(device.sync.status == .stopped(error.localizedDescription))
     try device.library.edit(written.id, at: .now) { $0.title = "夜" }
     device.sync.edited()
     #expect(device.sync.pending == nil)
@@ -376,6 +376,19 @@ struct WritingSyncTests {
       try await synced.keepBoth(received, copy: copy)
     }
     #expect(try store.all().contains { $0.id == copy.id })
+  }
+
+  /// 「今すぐ同期」 reads the account again once the sync is done, for what it used.
+  @Test func aSyncAskedForReadsTheAccountAfter() async throws {
+    let device = try device([writing("朝", at: 1_000)])
+    await device.account.checkAtLaunch()
+
+    await device.sync.syncAsked()
+
+    let routes = device.sent.all.map { "\($0.httpMethod ?? "GET") \($0.url?.path() ?? "")" }
+    #expect(routes.filter { $0 == "GET /account" }.count == 2)
+    #expect(routes.last == "GET /account")
+    #expect(device.account.state != nil)
   }
 
   /// Signing in, on a device that holds the account's key, syncs at once.
@@ -526,6 +539,6 @@ nonisolated final class Requests: HTTPTransport {
       let response = HTTPURLResponse(
         url: url, statusCode: refusing, httpVersion: nil, headerFields: nil)
     else { throw URLError(.cannotConnectToHost) }
-    return (Data(#"{"error":"refused"}"#.utf8), response)
+    return (Data(#"{"error":"refused","limit":"saves"}"#.utf8), response)
   }
 }

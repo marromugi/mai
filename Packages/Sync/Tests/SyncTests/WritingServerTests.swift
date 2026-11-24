@@ -272,8 +272,11 @@ struct WritingServerTests {
     await #expect {
       try await device.synchronizer.sync()
     } throws: { error in
-      guard case .refused(status, _) = error as? ServerError else { return false }
-      return true
+      switch error as? ServerError {
+      case .refused(status: 401, _): status == 401
+      case .limitReached(.saves?): status == 429
+      default: false
+      }
     }
   }
 
@@ -495,7 +498,7 @@ private struct Refusing: HTTPTransport {
       let response = HTTPURLResponse(
         url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])
     else { return try await next.send(request) }
-    return (Data(#"{"error":"refused"}"#.utf8), response)
+    return (Data(#"{"error":"refused","limit":"saves"}"#.utf8), response)
   }
 }
 

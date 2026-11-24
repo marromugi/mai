@@ -137,6 +137,7 @@ export async function serve(
           plan: state.tier,
           paidUntil: state.paidUntil,
           lapsed: state.lapsed,
+          gracePeriod: state.gracePeriod,
           deletesAt: state.deletesAt,
           usage: state.usage,
           ownKeyCheck: state.ownKeyCheck === null ? null : hex(state.ownKeyCheck),

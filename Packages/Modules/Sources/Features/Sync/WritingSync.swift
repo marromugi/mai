@@ -83,7 +83,7 @@ internal import Sync
       status = .stopped(ServerError.refused(status: 402, reason: "").localizedDescription)
     } catch let error as ServerError {
       switch error {
-      case .refused(status: 429, _):
+      case .limitReached:
         status = .stopped(error.localizedDescription)
       case .refused(status: 401, _):
         status = .sessionEnded(error.localizedDescription)
@@ -95,6 +95,12 @@ internal import Sync
     } catch {
       status = .failed(error.localizedDescription)
     }
+  }
+
+  /// 「今すぐ同期」: syncs, then reads the account again, for what the sync used of the plan.
+  func syncAsked() async {
+    await syncNow()
+    await account.readState()
   }
 
   /// Signs in for the account a plan was bought for, then syncs.

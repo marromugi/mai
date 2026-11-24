@@ -57,10 +57,13 @@ private struct AppleIDButton: UIViewRepresentable {
 
 /// The settings' section for the account, under 「同期」: signing in once a plan is bought, the
 /// recovery key when the own key isn't here, how the sync went with 「今すぐ同期」 while signed in,
-/// and signing out. Nothing while signed out with no plan bought.
+/// and signing out; then, while signed in, the plan's (`PlanStateSections`) once `state` is read.
+/// Nothing while signed out with no plan bought.
 struct AccountRows: View {
   let phase: AccountPhase
   let canSignIn: Bool
+  /// What the server last said of the account; nil until read.
+  var state: AccountState?
   let signIn: () -> Void
   let signOut: () -> Void
   let restore: (String) async -> String?
@@ -76,6 +79,9 @@ struct AccountRows: View {
       } footer: {
         Text(Self.footer(phase))
       }
+    }
+    if phase == .signedIn || phase == .recoveryKeyNeeded, let state {
+      PlanStateSections(state: state)
     }
   }
 
@@ -167,7 +173,7 @@ struct AccountSection: View {
 
   var body: some View {
     AccountRows(
-      phase: account.phase, canSignIn: account.canSignIn,
+      phase: account.phase, canSignIn: account.canSignIn, state: account.state,
       signIn: {
         Task {
           if let sync {
@@ -185,7 +191,7 @@ struct AccountSection: View {
         return await account.restore(from: text)
       },
       syncStatus: sync?.status,
-      syncNow: { Task { await sync?.syncNow() } }
+      syncNow: { Task { await sync?.syncAsked() } }
     )
     .task { await account.refresh() }
   }
