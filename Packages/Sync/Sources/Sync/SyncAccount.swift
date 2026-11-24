@@ -99,14 +99,10 @@ public struct SyncAccount: Sendable {
     return try keep(Session(token: started.token, account: started.account, appleUser: again.user))
   }
 
-  /// Settles the own key against the account's own key check (`Server/README.md`, `GET /account`).
-  /// A key is made only when the account has none and neither has the device; it is kept before
-  /// its check is put, so a check is never put for a key nobody holds.
-  public func settleOwnKey(_ session: Session) async throws(AccountError) -> OwnKeyOutcome {
-    try await settleOwnKey(session, against: state(session))
-  }
-
-  /// Settles the own key against the check in `state`, the account as just read.
+  /// Settles the own key against the account's own key check in `state`, the account as just read
+  /// with `session` (`Server/README.md`, `GET /account`). A key is made only when the account has
+  /// none and neither has the device; it is kept before its check is put, so a check is never put
+  /// for a key nobody holds.
   public func settleOwnKey(_ session: Session, against state: AccountState)
     async throws(AccountError) -> OwnKeyOutcome
   {

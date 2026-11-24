@@ -48,7 +48,8 @@ public struct PlanUsage: Sendable, Equatable, Decodable {
       self.limit = limit
     }
 
-    /// Whether what is used is at the limit, past which the server answers 429.
+    /// Whether what is used is at the limit. A day's count past it is answered 429; storage can be
+    /// refused sooner, by a save that would take it past.
     public var isUsedUp: Bool { used >= limit }
   }
 

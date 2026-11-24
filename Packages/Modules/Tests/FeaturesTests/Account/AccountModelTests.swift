@@ -113,6 +113,29 @@ struct AccountModelTests {
     #expect(model.state == nil)
   }
 
+  /// The account read for a session the device signed out of while it was read is dropped, and
+  /// settles nothing.
+  @Test func anAccountReadAcrossASignOutIsDropped() async throws {
+    let key = OwnKey.generate()
+    let worker = ScriptedWorker(
+      [
+        "PUT /account/subscription": [.status(200)],
+        "GET /account": [ScriptedWorker.account(check: key.check)],
+        "DELETE /session": [.status(204)],
+      ], holding: "GET /account")
+    let model = try model([:], worker: worker, session: session, key: key)
+    await model.checkAtLaunch()
+    let reading = Task { await model.refresh() }
+    while !worker.isHolding {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    await model.signOut()
+    worker.release()
+    await reading.value
+    #expect(model.phase == .signedOut)
+    #expect(model.state == nil)
+  }
+
   @Test func aSignedOutDeviceDoesntReadTheAccount() async throws {
     let worker = ScriptedWorker([:])
     let model = try model([:], worker: worker, keeps: false)
