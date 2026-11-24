@@ -483,6 +483,27 @@ describe("a deletion that fails partway", () => {
     expect(await rowsOf(one.account)).toEqual(noRow);
   });
 
+  it("is finished by the cron trigger when it fails once marked and every session ended", async () => {
+    const one = await fullAccount();
+    await expect(deleteAccount(one.token, { store: tursoFailing })).rejects.toThrow(
+      /Turso is unavailable/,
+    );
+    await database.execute({
+      sql: "DELETE FROM sessions WHERE account_id = ?",
+      args: [one.account],
+    });
+    expect((await deleteAccount(one.token)).status).toBe(401);
+    // Its renewals no longer keep it; it is paid for but being deleted.
+    await testStore.keepNotified(renewal(one, Date.now()));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    for (let run = 0; run < 20 && (await rowsOf(one.account)).accounts === 1; run += 1) {
+      await deleteLapsed(Date.now());
+    }
+    expect(await rowsOf(one.account)).toEqual(noRow);
+    expect(await keysOf(one.account)).toEqual([]);
+  });
+
   it("deletes no row when the session ends before the account is marked", async () => {
     const one = await fullAccount();
     const answer = await deleteAccount(one.token, {

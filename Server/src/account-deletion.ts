@@ -10,7 +10,8 @@ import type { Answer, Store, ToDelete } from "./store";
  * caller's session is live, then R2 is emptied of it, then its rows are deleted. Once marked, its
  * sessions ending (Apple's `consent-revoked` for this very revoke) no longer stops it. Until the
  * rows go, the session still works, so a call that fails partway is called again from the start:
- * revoking, marking and emptying R2 twice do no harm. Once they go, nothing on the server names the
+ * revoking, marking and emptying R2 twice do no harm; one that fails once marked is also finished by
+ * the cron trigger. Once they go, nothing on the server names the
  * account, so R2 is swept once more after them, for a photo put that stored its bytes while this
  * ran.
  */
@@ -43,18 +44,19 @@ export async function deleteAccount(
 export const lapsedDeletedAtOnce = 10;
 
 /**
- * Deletes the accounts lapsed `lapsedKept` or longer, at most `lapsedDeletedAtOnce` picked at
- * random, as `deleteAccount` does; run by the cron trigger. Each is marked once Apple has revoked
- * its token and before R2 is touched: a resubscription before then keeps the account whole, and
- * one after it no longer keeps it, so an account that fails partway is finished by a later run.
- * One that fails is logged and left for the next run, and the others go on.
+ * Deletes the accounts lapsed `lapsedKept` or longer, and those a `DELETE /account` marked and
+ * didn't finish, at most `lapsedDeletedAtOnce` picked at random, as `deleteAccount` does; run by
+ * the cron trigger. Each is marked once Apple has revoked its token and before R2 is touched: a
+ * resubscription before then keeps a lapsed account whole, and one after it no longer keeps it, so
+ * an account that fails partway is finished by a later run. One that fails is logged and left for
+ * the next run, and the others go on.
  */
 export async function deleteLapsedAccounts(
   signIn: SignIn,
   photos: Photos,
   now: number,
 ): Promise<void> {
-  const lapsed = await signIn.store.lapsedToDelete(now, lapsedDeletedAtOnce);
+  const lapsed = await signIn.store.dueForDeletion(now, lapsedDeletedAtOnce);
   await Promise.all(
     lapsed.map(async (found) => {
       try {
