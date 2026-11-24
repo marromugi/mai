@@ -25,19 +25,36 @@ nonisolated final class SyncedWritings: PlainWritingStore {
   }
 
   func save(_ writing: PlainWriting) async throws {
+    try await takeIn(writing, keeping: nil)
+  }
+
+  func keepBoth(_ received: PlainWriting, copy: PlainWriting) async throws {
+    try await takeIn(received, keeping: copy)
+  }
+
+  private func takeIn(_ received: PlainWriting, keeping copy: PlainWriting?) async throws {
+    let writing = try Self.writing(received)
+    let kept = try copy.map(Self.writing)
+    let seenThen = seen.withLock { $0[received.id] }
+    try await library.takeIn(writing, keeping: kept, seen: seenThen)
+    seen.withLock { seen in
+      seen[received.id] = received.updated
+      if let copy {
+        seen[copy.id] = copy.updated
+      }
+    }
+  }
+
+  private static func writing(_ plain: PlainWriting) throws -> Writing {
     let contents: Writing.Contents
     do {
-      contents = try JSONDecoder().decode(Writing.Contents.self, from: writing.contents)
+      contents = try JSONDecoder().decode(Writing.Contents.self, from: plain.contents)
     } catch {
-      throw UnreadableContents(id: writing.id, reason: error)
+      throw UnreadableContents(id: plain.id, reason: error)
     }
-    let seenThen = seen.withLock { $0[writing.id] }
-    try await library.takeIn(
-      Writing(
-        id: writing.id, title: contents.title, body: contents.body, links: contents.links,
-        updated: writing.updated),
-      seen: seenThen)
-    seen.withLock { $0[writing.id] = writing.updated }
+    return Writing(
+      id: plain.id, title: contents.title, body: contents.body, links: contents.links,
+      updated: plain.updated)
   }
 }
 

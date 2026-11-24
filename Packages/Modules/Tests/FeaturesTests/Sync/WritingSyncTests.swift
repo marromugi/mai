@@ -22,11 +22,13 @@ struct WritingSyncTests {
     let library: WritingLibrary
     let sync: WritingSync
     let sent: Requests
+    let ownKeys: MemoryOwnKeys
   }
 
   private func device(
     _ kept: [Writing] = [], signedIn: Bool = true, server: FakeWritingServer? = nil,
-    refusingWritings: Int? = nil, pause: Duration = .zero, interval: Duration = .zero
+    refusingWritings: Int? = nil, holdingFirstListing: Bool = false, pause: Duration = .zero,
+    interval: Duration = .zero
   ) throws -> Device {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defaults.removePersistentDomain(forName: suite)
@@ -37,12 +39,13 @@ struct WritingSyncTests {
       try ownKeys.save(ownKey)
     }
     let answers: [String: [ScriptedWorker.Answer]] = [
-      "PUT /account/subscription": [.status(200)],
+      // The launch check's, then the one a sync refused with 401 asks for, which the Worker refuses too.
+      "PUT /account/subscription": [.status(200), .status(401)],
       "GET /account": [ScriptedWorker.account(check: ownKey.check)],
     ]
     let sent = Requests(
       writings: server ?? FakeWritingServer(accepting: token), account: ScriptedWorker(answers),
-      refusing: refusingWritings)
+      refusing: refusingWritings, holdingFirstListing: holdingFirstListing)
     let account = AccountModel(
       account: SyncAccount(
         server: AccountServer(
@@ -56,7 +59,7 @@ struct WritingSyncTests {
     return Device(
       account: account, library: library,
       sync: WritingSync(account: account, library: library, pause: pause, interval: interval),
-      sent: sent)
+      sent: sent, ownKeys: ownKeys)
   }
 
   private func writing(_ title: String, at seconds: Double) -> Writing {
@@ -229,6 +232,63 @@ struct WritingSyncTests {
     #expect(device.sent.all.count > asked)
   }
 
+  /// A sync waits for the one before it, even when the own key changed between them and it runs
+  /// on another `Synchronizer`: both share the account's state file and the library.
+  @Test func aSyncOnNewKeysWaitsForTheOneRunning() async throws {
+    let device = try device([writing("朝", at: 1_000)], holdingFirstListing: true)
+    await device.account.checkAtLaunch()
+    let first = Task { await device.sync.syncNow() }
+    while device.sent.listings == 0 {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    try device.ownKeys.replace(with: OwnKey.generate())
+
+    let second = Task { await device.sync.syncNow() }
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(device.sent.listings == 1)
+    device.sent.release()
+    await first.value
+    await second.value
+    #expect(device.sent.listings == 2)
+  }
+
+  /// When the person edits the writing between the copy of their edit and the other device's
+  /// save, neither is saved, and the next sync keeps one copy, of the latest edit.
+  @Test func anEditWhileKeepingBothSavesNeither() async throws {
+    let written = writing("朝", at: 1_000)
+    let library = WritingLibrary(store: MemoryWritingStore([written]))
+    library.load(seedingWhenEmpty: [])
+    let synced = SyncedWritings(library: library)
+    _ = try await synced.all()
+    try library.edit(written.id, at: Date(timeIntervalSince1970: 3_000)) { $0.body = "二度目" }
+    let received = PlainWriting(
+      id: written.id, updated: Date(timeIntervalSince1970: 2_000),
+      contents: try Writing.Contents(writing("他の端末", at: 0)).encoded())
+    let copy = PlainWriting(
+      id: UUID(), updated: Date(timeIntervalSince1970: 2_500),
+      contents: try Writing.Contents(writing("一度目", at: 0)).encoded())
+
+    await #expect(throws: EditedDuringSync.self) {
+      try await synced.keepBoth(received, copy: copy)
+    }
+    #expect(try library.forSync().map(\.body) == ["二度目"])
+    #expect(try library.store.all().map(\.body) == ["二度目"])
+  }
+
+  /// A session the Worker ended is dropped, so the section offers signing in again, as the
+  /// message says.
+  @Test func anEndedSessionIsDroppedAndSaysSo() async throws {
+    let device = try device([writing("朝", at: 1_000)], refusingWritings: 401)
+    await device.account.checkAtLaunch()
+
+    await device.sync.syncNow()
+
+    #expect(
+      device.sync.status
+        == .failed(ServerError.refused(status: 401, reason: "").localizedDescription))
+    #expect(device.account.phase == .signedOut)
+  }
+
   /// Any other failure is shown, and an edit still sets the next sync.
   @Test func anUnreachableServerIsShownAndEditsStillSync() async throws {
     let written = writing("朝", at: 1_000)
@@ -269,18 +329,40 @@ nonisolated final class Requests: HTTPTransport {
   private let writings: FakeWritingServer
   private let account: ScriptedWorker
   private let refusing: Int?
+  private let held: Mutex<(holding: Bool, gate: CheckedContinuation<Void, Never>?)>
   private let sent = Mutex<[URLRequest]>([])
 
-  init(writings: FakeWritingServer, account: ScriptedWorker, refusing: Int? = nil) {
+  /// With `holdingFirstListing`, the first listing of the writings waits until `release()`.
+  init(
+    writings: FakeWritingServer, account: ScriptedWorker, refusing: Int? = nil,
+    holdingFirstListing: Bool = false
+  ) {
+    held = Mutex((holdingFirstListing, nil))
     self.writings = writings
     self.account = account
     self.refusing = refusing
   }
 
   var all: [URLRequest] { sent.withLock { $0 } }
+  var listings: Int {
+    all.filter { $0.httpMethod == "GET" && $0.url?.path() == "/writings" }.count
+  }
+
+  func release() {
+    held.withLock { $0.gate?.resume() }
+  }
 
   func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     sent.withLock { $0.append(request) }
+    let holds =
+      request.httpMethod == "GET" && request.url?.path() == "/writings"
+      && held.withLock { held in
+        defer { held.holding = false }
+        return held.holding
+      }
+    if holds {
+      await withCheckedContinuation { gate in held.withLock { $0.gate = gate } }
+    }
     guard request.url?.pathComponents.dropFirst().first == "writings" else {
       return try await account.send(request)
     }

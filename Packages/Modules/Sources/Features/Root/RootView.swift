@@ -87,6 +87,11 @@ public struct RootView: View {
       guard phase == .active, launchChecked else { return }
       Task { await sync?.syncNow() }
     }
+    // On signing in, or bringing the own key back, after launch.
+    .onChange(of: account?.phase) { _, phase in
+      guard phase == .signedIn, launchChecked else { return }
+      Task { await sync?.syncNow() }
+    }
     .sheet(isPresented: $showingSettings) {
       SettingsView(fonts: fonts)
         .environment(\.account, account)

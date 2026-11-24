@@ -31,6 +31,9 @@ internal import Sync
   @ObservationIgnored private var lastStarted: ContinuousClock.Instant?
   /// The sync an edit set to run; nil once it has started.
   @ObservationIgnored private(set) var pending: Task<Void, Never>?
+  /// The last sync asked for. Each waits for the one before, even on another `Synchronizer`, since
+  /// they share the account's state file and the library's take-in.
+  @ObservationIgnored private var running: Task<Void, Never>?
 
   init(
     account: AccountModel, library: WritingLibrary, pause: Duration = .seconds(30),
@@ -45,6 +48,16 @@ internal import Sync
   /// Syncs now, after any sync already running. Does nothing while signed out or while the own
   /// key isn't the account's.
   func syncNow() async {
+    let previous = running
+    let task = Task {
+      await previous?.value
+      await syncOnce()
+    }
+    running = task
+    await task.value
+  }
+
+  private func syncOnce() async {
     let keys: SyncKeys
     do {
       guard let settled = try await account.syncKeys() else { return }
@@ -67,6 +80,10 @@ internal import Sync
       switch error {
       case .refused(status: 402, _), .refused(status: 429, _):
         status = .stopped(error.localizedDescription)
+      case .refused(status: 401, _):
+        status = .failed(error.localizedDescription)
+        // Drops the ended session, so the section offers signing in again.
+        await account.check()
       default:
         status = .failed(error.localizedDescription)
       }

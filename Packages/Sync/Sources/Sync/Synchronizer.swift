@@ -8,6 +8,17 @@ public protocol PlainWritingStore: Sendable {
   /// Throws a `OneWritingFailure` when it is this writing alone that can't be saved, such as
   /// contents the store can't read; any other error stops the sync.
   func save(_ writing: PlainWriting) async throws
+  /// Saves `copy`, the device's edit as a new writing, then `received` in place of that edit. A
+  /// store that can refuse `received` refuses before saving either, so a refusal leaves no copy.
+  func keepBoth(_ received: PlainWriting, copy: PlainWriting) async throws
+}
+
+extension PlainWritingStore {
+  /// Saves `copy`, then `received`, for a store that refuses no writing for having changed.
+  public func keepBoth(_ received: PlainWriting, copy: PlainWriting) async throws {
+    try await save(copy)
+    try await save(received)
+  }
 }
 
 /// A store's failure to save one writing, which leaves the sync to go on with the others.
@@ -120,12 +131,13 @@ public actor Synchronizer {
       copy = PlainWriting(id: writing.copyID, updated: writing.updated, contents: writing.contents)
     }
     if let copy {
-      try await writings.save(copy)
+      try await writings.keepBoth(received, copy: copy)
       report.keptBoth[id] = copy.id
+    } else {
+      try await writings.save(received)
     }
     // The server's copy and the sync state are kept before the device's copy is sent, so a
     // failed send leaves only a new writing for the next sync to send, not a second copy.
-    try await writings.save(received)
     synced[id] = SyncState.Entry(
       revision: revision, updated: Layout.milliseconds(of: received.updated))
     try state.save(synced)

@@ -37,21 +37,23 @@ import Observation
     }
   }
 
-  /// Saves `writing` from a sync in place of the one with its ID, unless that one changed since
-  /// the sync read it: `seen` is its updated time then, nil when there was none.
-  func takeIn(_ writing: Writing, seen: Date?) throws {
+  /// Saves `writing` from a sync in place of the one with its ID, after `copy`, the device's edit
+  /// kept as a new writing, when there is one. Saves neither when the one with its ID changed
+  /// since the sync read it: `seen` is its updated time then, nil when there was none.
+  func takeIn(_ writing: Writing, keeping copy: Writing? = nil, seen: Date?) throws {
     var all = try forSync()
-    let index = all.firstIndex { $0.id == writing.id }
-    guard index.map({ all[$0].updated }) == seen else {
+    guard all.first(where: { $0.id == writing.id })?.updated == seen else {
       throw EditedDuringSync(id: writing.id)
     }
-    try store.save(writing)
-    if let index {
-      all[index] = writing
-    } else {
-      all.append(writing)
+    defer { writings = .success(all) }
+    for saved in [copy, writing].compactMap(\.self) {
+      try store.save(saved)
+      if let index = all.firstIndex(where: { $0.id == saved.id }) {
+        all[index] = saved
+      } else {
+        all.append(saved)
+      }
     }
-    writings = .success(all)
   }
 
   struct NotReadYet: LocalizedError {
