@@ -1384,6 +1384,23 @@ struct CaretTests {
     #expect(abs(empty.height - typed.height) < 0.01)
   }
 
+  /// The line Return opens after the title, still empty, has its caret where the body's first
+  /// character goes.
+  @Test func theCaretAfterReturnAtTheTitlesEndStaysAsACharacterIsTyped() throws {
+    let page = HostedPage(screen(edits: Edits(writing: Writing(title: "朝", body: ""))))
+    let editor = try focusedEditor(in: page)
+    editor.selectedRange = NSRange(location: 1, length: 0)
+    type("\n", into: editor)
+    page.settle()
+    let empty = try caretRect(at: 2, in: editor)
+    type("本", into: editor)
+    page.settle()
+    let typed = try caretRect(at: 2, in: editor)
+    #expect(abs(empty.minY - typed.minY) < 0.01)
+    #expect(abs(empty.height - typed.height) < 0.01)
+    #expect(abs(empty.height - (try font(.body, in: editor)).lineHeightOfType) < 0.01)
+  }
+
   /// A selection's handles are as tall as the caret at each of its ends; its highlight is UIKit's.
   @Test func theSelectionsEndsAreAsTallAsTheCaretThere() throws {
     let edits = Edits(writing: Writing(title: "朝の机", body: "本文の一行目\n二行目"))
@@ -1404,14 +1421,19 @@ struct CaretTests {
     #expect(abs(starts[0].rect.minX - startCaret.midX) < 0.01)
     #expect(abs(ends[0].rect.minX - endCaret.midX) < 0.01)
     let highlight = rects.filter { !$0.containsStart && !$0.containsEnd }.map(\.rect)
-    #expect(highlight.map(\.minY).min()! < startCaret.minY)
-    #expect(highlight.map(\.maxY).max()! > endCaret.maxY)
+    #expect(try #require(highlight.map(\.minY).min()) < startCaret.minY)
+    #expect(try #require(highlight.map(\.maxY).max()) > endCaret.maxY)
   }
 }
 
 @MainActor
 private func caretRect(at offset: Int, in view: UITextView) throws -> CGRect {
   view.caretRect(for: try #require(view.position(from: view.beginningOfDocument, offset: offset)))
+}
+
+extension UIFont {
+  /// From the ascender to the descender.
+  fileprivate var lineHeightOfType: CGFloat { ascender - descender }
 }
 
 @MainActor
