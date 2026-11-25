@@ -110,6 +110,9 @@ export type Purchase = {
 export type Made = "made" | "challenge-used" | "taken" | "purchase-taken" | "no-plan";
 
 /** What an account's own resent subscription did: the account's plan and paid-until time after it. */
+/** Whether the account started over, or else whether its check was the one sent already. */
+export type StartedOver = { started: true; account: AccountId } | { started: false; kept: boolean };
+
 export type Kept =
   | { kept: "kept"; tier: string; paidUntil: number }
   | { kept: "another-account" | "no-plan" };
@@ -125,6 +128,11 @@ export type AccountState = {
   tier: string;
   paidUntil: number;
   lapsed: boolean;
+  /**
+   * Whether the account is paid for only by a billing grace period: none of its subscriptions is
+   * paid for by a billing period that hasn't ended.
+   */
+  gracePeriod: boolean;
   /** When a lapsed account is deleted, `lapsedKept` after `paidUntil`; null while it is paid for. */
   deletesAt: number | null;
   usage: Record<
@@ -788,11 +796,65 @@ export class Store {
     return { ok: true, value: Number(answer.value[1]?.rows[0]?.["same"]) === 1 };
   }
 
+  /**
+   * Starts the caller's account over with the own key check `check`, while `replaced` is still its
+   * check: deletes its writings, the rows of its photos and its read mode copies, ends its other
+   * sessions, and keeps `check`. Answers `started` with the account when it did, `kept` when the
+   * account's check is `check` already (a start over sent again), and `other` when it is neither,
+   * and nothing changed. A lapsed account starts over too. What R2 holds of its photos is left to
+   * the caller.
+   */
+  async startOver(
+    caller: Caller,
+    replaced: Uint8Array,
+    check: Uint8Array,
+    now: number,
+  ): Promise<Answer<StartedOver>> {
+    const args = { replaced, check };
+    const answer = await this.#run(caller, now, "other", (account, allowed) => {
+      const held = `${allowed} AND EXISTS (SELECT 1 FROM accounts
+        WHERE id = ${account} AND own_key_check = :replaced)`;
+      return [
+        ...(["writings", "photos", "copies"] as const).map((table) => ({
+          sql: `DELETE FROM ${table} WHERE account_id = ${account} AND ${held}`,
+          args,
+        })),
+        {
+          sql: `DELETE FROM sessions WHERE account_id = ${account} AND id != :session AND ${held}`,
+          args,
+        },
+        {
+          sql: `UPDATE accounts SET own_key_check = :check, writings_bytes = 0, writings_count = 0
+                WHERE id = ${account} AND own_key_check = :replaced AND ${allowed}
+                RETURNING id`,
+          args,
+        },
+        {
+          sql: `SELECT own_key_check = :check AS same FROM accounts WHERE id = ${account}`,
+          args,
+        },
+      ];
+    });
+    if (!answer.ok) {
+      return answer;
+    }
+    const id = answer.value[4]?.rows[0]?.["id"];
+    if (id !== undefined) {
+      return { ok: true, value: { started: true, account: stored(parseAccountId, id) } };
+    }
+    const same = Number(answer.value[5]?.rows[0]?.["same"]) === 1;
+    return { ok: true, value: { started: false, kept: same } };
+  }
+
   /** Reads the caller's account; a lapsed account reads it too. */
   async account(caller: Caller, now: number): Promise<Answer<AccountState>> {
     const answer = await this.#run(caller, now, "other", (account, allowed) => [
       {
         sql: `SELECT a.tier, a.paid_until, NOT ${paidNow} AS lapsed, a.own_key_check,
+                ${paidNow} AND NOT EXISTS (
+                  SELECT 1 FROM subscriptions s
+                  WHERE s.account_id = a.id AND s.period_ends > :now AND s.paid_until > :now
+                ) AS grace_period,
                 a.writings_bytes, p.writings_bytes AS writings_bytes_limit,
                 a.writings_count, p.writings_count AS writings_count_limit,
                 a.photos_bytes, p.photos_bytes AS photos_bytes_limit,
@@ -829,6 +891,7 @@ export class Store {
         tier: stored((tier) => tier, row["tier"]),
         paidUntil,
         lapsed,
+        gracePeriod: Number(row["grace_period"]) === 1,
         deletesAt: lapsed ? paidUntil + lapsedKept : null,
         usage: {
           writingsBytes: use("writings_bytes", "writings_bytes_limit"),

@@ -191,7 +191,7 @@ extension ServerError {
   /// writes, so the sync goes on taking in the server's writings.
   fileprivate var concernsOneWriting: Bool {
     switch self {
-    case .unreachable, .refused(status: 401, _), .refused(status: 429, _): false
+    case .unreachable, .refused(status: 401, _), .limitReached: false
     case .refused, .unexpectedAnswer: true
     }
   }

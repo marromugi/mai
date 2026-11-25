@@ -83,7 +83,7 @@ internal import Sync
       status = .stopped(ServerError.refused(status: 402, reason: "").localizedDescription)
     } catch let error as ServerError {
       switch error {
-      case .refused(status: 429, _):
+      case .limitReached:
         status = .stopped(error.localizedDescription)
       case .refused(status: 401, _):
         status = .sessionEnded(error.localizedDescription)
@@ -95,6 +95,12 @@ internal import Sync
     } catch {
       status = .failed(error.localizedDescription)
     }
+  }
+
+  /// 「今すぐ同期」: syncs, then reads the account again, for what the sync used of the plan.
+  func syncAsked() async {
+    await syncNow()
+    await account.readState()
   }
 
   /// Signs in for the account a plan was bought for, then syncs.
@@ -111,6 +117,32 @@ internal import Sync
     }
     await syncNow()
     return nil
+  }
+
+  /// Starts the account over without its own key (`AccountModel.startOver()`), then syncs the
+  /// device's writings sealed with the new key, and reads what the account uses now.
+  func startOver() async {
+    await account.startOver()
+    await syncNow()
+    await account.readState()
+  }
+
+  /// Deletes the account once any sync running has ended, so none writes the sync's state after
+  /// it is removed; a sync asked for meanwhile runs after it. A sync an edit set is dropped once
+  /// the device is signed out, and kept when the account stays.
+  func deleteAccount() async {
+    let previous = running
+    let deletion = Task {
+      await previous?.value
+      await account.deleteAccount()
+    }
+    running = deletion
+    await deletion.value
+    if account.phase == .signedOut {
+      pending?.cancel()
+      pending = nil
+      status = .notYet
+    }
   }
 
   /// Called after each edit saved on the device: sets a sync to run once edits pause.

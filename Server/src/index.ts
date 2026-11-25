@@ -4,7 +4,7 @@ import { AppleTokens } from "./apple-tokens";
 import { serveFont } from "./fonts";
 import { Challenges } from "./challenges";
 import { parseBase, parseEnvelope, parseWritingId } from "./envelope";
-import { hex } from "./hex";
+import { hex, parseHex } from "./hex";
 import { RefreshTokens } from "./refresh-tokens";
 import { callerOf } from "./sessions";
 import { appleRootCaG3 } from "./apple-root";
@@ -17,6 +17,7 @@ import {
   subscriptionKept,
 } from "./subscriptions";
 import { issueChallenge, makeAccount, startSession, type SignIn } from "./sign-in";
+import { startOver } from "./start-over";
 import { receiveSignInNotification } from "./sign-in-notifications";
 import { Store } from "./store";
 import { answered, refused } from "./answers";
@@ -137,6 +138,7 @@ export async function serve(
           plan: state.tier,
           paidUntil: state.paidUntil,
           lapsed: state.lapsed,
+          gracePeriod: state.gracePeriod,
           deletesAt: state.deletesAt,
           usage: state.usage,
           ownKeyCheck: state.ownKeyCheck === null ? null : hex(state.ownKeyCheck),
@@ -156,6 +158,20 @@ export async function serve(
       const check = new Uint8Array(await request.arrayBuffer());
       if (check.length !== 32) {
         return turnedDown(400, "the own key check is 32 bytes");
+      }
+      const replacing = request.headers.get("Mai-Replaces-Own-Key-Check");
+      if (replacing !== null) {
+        const replaced = parseHex(replacing);
+        if (replaced?.length !== 32 || hex(replaced) === hex(check)) {
+          return turnedDown(
+            400,
+            "Mai-Replaces-Own-Key-Check holds the own key check read, in lowercase hex, and not the one sent",
+          );
+        }
+        return answered(
+          await startOver(caller, replaced, check, store, photos, now),
+          (done) => done,
+        );
       }
       return answered(await store.keepOwnKeyCheck(caller, check, now), (kept) =>
         kept

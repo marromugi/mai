@@ -16,7 +16,7 @@ struct WritingSyncTests {
   private let ownKey = OwnKey.generate()
 
   /// A device signed in with `ownKey` when `signedIn`, its library read from `kept`, and every
-  /// request it sends kept in `sent`.
+  /// request it sends kept in `sent`; `DELETE /account` is answered with `deletion`.
   private struct Device {
     let account: AccountModel
     let library: WritingLibrary
@@ -29,7 +29,8 @@ struct WritingSyncTests {
     _ kept: [Writing] = [], signedIn: Bool = true, server: FakeWritingServer? = nil,
     deviceKey: OwnKey? = nil, refusingWritings: Int? = nil, holdingFirstListing: Bool = false,
     pause: Duration = .zero,
-    interval: Duration = .zero
+    interval: Duration = .zero, deletion: ScriptedWorker.Answer? = nil,
+    startOver: ScriptedWorker.Answer? = nil
   ) throws -> Device {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defaults.removePersistentDomain(forName: suite)
@@ -41,7 +42,7 @@ struct WritingSyncTests {
     if signedIn || deviceKey != nil {
       try ownKeys.save(deviceKey ?? ownKey)
     }
-    let answers: [String: [ScriptedWorker.Answer]] = [
+    var answers: [String: [ScriptedWorker.Answer]] = [
       // The launch check's, then the one a sync refused with 401 asks for, which the Worker
       // refuses too.
       "PUT /account/subscription": [.status(200), .status(401)],
@@ -49,6 +50,8 @@ struct WritingSyncTests {
       "POST /challenges": [.status(201, json: #"{"challenge":"c"}"#)],
       "POST /account": [.status(201, json: #"{"token":"\#(token)"}"#)],
     ]
+    answers["DELETE /account"] = deletion.map { [$0] }
+    answers["PUT /account/own-key-check"] = startOver.map { [$0] }
     let sent = Requests(
       writings: server ?? FakeWritingServer(accepting: token), account: ScriptedWorker(answers),
       refusing: refusingWritings, holdingFirstListing: holdingFirstListing)
@@ -242,8 +245,8 @@ struct WritingSyncTests {
     await device.account.checkAtLaunch()
 
     await device.sync.syncNow()
-    let message = ServerError.refused(status: status, reason: "").localizedDescription
-    #expect(device.sync.status == .stopped(message))
+    let error = status == 429 ? ServerError.limitReached(.saves) : .refused(status: 402, reason: "")
+    #expect(device.sync.status == .stopped(error.localizedDescription))
     try device.library.edit(written.id, at: .now) { $0.title = "夜" }
     device.sync.edited()
     #expect(device.sync.pending == nil)
@@ -378,6 +381,19 @@ struct WritingSyncTests {
     #expect(try store.all().contains { $0.id == copy.id })
   }
 
+  /// 「今すぐ同期」 reads the account again once the sync is done, for what it used.
+  @Test func aSyncAskedForReadsTheAccountAfter() async throws {
+    let device = try device([writing("朝", at: 1_000)])
+    await device.account.checkAtLaunch()
+
+    await device.sync.syncAsked()
+
+    let routes = device.sent.all.map { "\($0.httpMethod ?? "GET") \($0.url?.path() ?? "")" }
+    #expect(routes.filter { $0 == "GET /account" }.count == 2)
+    #expect(routes.last == "GET /account")
+    #expect(device.account.state != nil)
+  }
+
   /// Signing in, on a device that holds the account's key, syncs at once.
   @Test func signingInSyncs() async throws {
     let device = try device([writing("朝", at: 1_000)], signedIn: false, deviceKey: ownKey)
@@ -409,6 +425,25 @@ struct WritingSyncTests {
     }
   }
 
+  /// The account's key is lost with its recovery key: starting over makes the device's key the
+  /// account's, sends the writings sealed with it at once, then reads what the account uses.
+  @Test func startingOverSyncsAndReadsTheAccount() async throws {
+    let deviceKey = OwnKey.generate()
+    let device = try device(
+      [writing("朝", at: 1_000)], deviceKey: deviceKey, startOver: .status(204))
+    await device.account.checkAtLaunch()
+    await device.sync.syncNow()
+    #expect(device.account.phase == .recoveryKeyNeeded)
+
+    await device.sync.startOver()
+
+    #expect(device.account.phase == .signedIn)
+    #expect(device.account.recoveryKeyToShow == RecoveryKey(deviceKey))
+    #expect(device.sent.listings == 1)
+    let routes = device.sent.all.map { "\($0.httpMethod ?? "GET") \($0.url?.path() ?? "")" }
+    #expect(routes.last == "GET /account")
+  }
+
   /// Any other failure is shown, and an edit still sets the next sync.
   @Test func anUnreachableServerIsShownAndEditsStillSync() async throws {
     let written = writing("朝", at: 1_000)
@@ -420,6 +455,46 @@ struct WritingSyncTests {
       device.sync.status
         == .failed(ServerError.unreachable(URLError(.cannotConnectToHost)).localizedDescription))
     device.sync.edited()
+    #expect(device.sync.pending != nil)
+    device.sync.pending?.cancel()
+  }
+
+  /// The deletion waits for the sync running, so none writes the sync's state after it, and
+  /// then the device shows no sync, drops the one an edit set, and sends nothing more.
+  @Test func aDeletionWaitsForTheSyncRunningAndLeavesNothingToSync() async throws {
+    let written = writing("朝", at: 1_000)
+    let device = try device(
+      [written], holdingFirstListing: true, pause: .seconds(3_600), deletion: .status(204))
+    await device.account.checkAtLaunch()
+    let syncing = Task { await device.sync.syncNow() }
+    while device.sent.listings == 0 {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    device.sync.edited()
+    let deleting = Task { await device.sync.deleteAccount() }
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(!device.sent.routes.contains("DELETE /account"))
+
+    device.sent.release()
+    await syncing.value
+    await deleting.value
+    #expect(device.sent.routes.last == "DELETE /account")
+    #expect(device.account.phase == .signedOut)
+    #expect(device.sync.status == .notYet)
+    #expect(device.sync.pending == nil)
+    await device.sync.syncNow()
+    #expect(device.sent.routes.last == "DELETE /account")
+  }
+
+  /// A deletion the server refuses leaves the sync an edit set to run.
+  @Test func aDeletionTheServerRefusesKeepsTheSyncAnEditSet() async throws {
+    let written = writing("朝", at: 1_000)
+    let device = try device([written], pause: .seconds(3_600), deletion: .status(502))
+    await device.account.checkAtLaunch()
+    device.sync.edited()
+
+    await device.sync.deleteAccount()
+    #expect(device.account.phase == .signedIn)
     #expect(device.sync.pending != nil)
     device.sync.pending?.cancel()
   }
@@ -492,6 +567,8 @@ nonisolated final class Requests: HTTPTransport {
   }
 
   var all: [URLRequest] { sent.withLock { $0 } }
+  /// The routes asked, in order, `"DELETE /account"` for one.
+  var routes: [String] { all.map { "\($0.httpMethod ?? "GET") \($0.url?.path() ?? "")" } }
   var listings: Int {
     all.filter { $0.httpMethod == "GET" && $0.url?.path() == "/writings" }.count
   }
@@ -526,6 +603,6 @@ nonisolated final class Requests: HTTPTransport {
       let response = HTTPURLResponse(
         url: url, statusCode: refusing, httpVersion: nil, headerFields: nil)
     else { throw URLError(.cannotConnectToHost) }
-    return (Data(#"{"error":"refused"}"#.utf8), response)
+    return (Data(#"{"error":"refused","limit":"saves"}"#.utf8), response)
   }
 }

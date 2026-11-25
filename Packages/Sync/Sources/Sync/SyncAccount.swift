@@ -86,26 +86,55 @@ public struct SyncAccount: Sendable {
     }) {
       return try keep(Session(token: token, account: account, appleUser: credential.user))
     }
-    let second = try await serverCall { () async throws(ServerError) in try await server.challenge()
-    }
-    let again = try await self.credential(for: second)
-    guard
-      let started = try await serverCall({ () async throws(ServerError) in
-        try await server.startSession(challenge: second, credential: again)
-      })
-    else {
-      throw .purchaseIsAnotherAccounts
-    }
-    return try keep(Session(token: started.token, account: started.account, appleUser: again.user))
+    guard let session = try await startSession() else { throw .purchaseIsAnotherAccounts }
+    return session
   }
 
-  /// Settles the own key against the account's own key check (`Server/README.md`, `GET /account`).
-  /// A key is made only when the account has none and neither has the device; it is kept before
-  /// its check is put, so a check is never put for a key nobody holds.
-  public func settleOwnKey(_ session: Session) async throws(AccountError) -> OwnKeyOutcome {
-    let state = try await serverCall { () async throws(ServerError) in
-      try await server.account(token: session.token)
+  /// Signs in with Apple to the account the Apple user has, as on a device that didn't buy the
+  /// plan, and keeps the session (#22's design, §3).
+  public func signIn() async throws(AccountError) -> Session {
+    guard let session = try await startSession() else { throw .noAccount }
+    return session
+  }
+
+  /// Starts the account of `session` over with the own key held, or one made and kept now, in
+  /// place of `check`, the account's own key check that key isn't, as when no device holds the
+  /// account's key and its recovery key is lost too: the server's writings go. The key is kept
+  /// before it is sent, so a start over sent again sends the same key, and the server answers that
+  /// it is done. `.ready` without asking the server when the key held is the account's.
+  public func startOver(_ session: Session, replacing check: Data) async throws(AccountError)
+    -> OwnKeyOutcome
+  {
+    let key: OwnKey
+    if let held = try keychain({ () throws(KeychainError) in try ownKeys.load() }) {
+      guard held.check != check else { return .ready }
+      key = held
+    } else {
+      key = OwnKey.generate()
+      try keychain { () throws(KeychainError) in try ownKeys.save(key) }
     }
+    guard
+      try await serverCall({ () async throws(ServerError) in
+        try await server.startOver(replacing: check, with: key.check, token: session.token)
+      })
+    else {
+      throw .ownKeyChanged
+    }
+    return .made(RecoveryKey(key))
+  }
+
+  /// The own key kept on the device, nil when none is.
+  public func ownKey() throws(AccountError) -> OwnKey? {
+    try keychain { () throws(KeychainError) in try ownKeys.load() }
+  }
+
+  /// Settles the own key against the account's own key check in `state`, the account as just read
+  /// with `session` (`Server/README.md`, `GET /account`). A key is made only when the account has
+  /// none and neither has the device; it is kept before its check is put, so a check is never put
+  /// for a key nobody holds.
+  public func settleOwnKey(_ session: Session, against state: AccountState)
+    async throws(AccountError) -> OwnKeyOutcome
+  {
     let kept = try keychain { () throws(KeychainError) in try ownKeys.load() }
     switch (kept, state.ownKeyCheck) {
     case (let key?, let check?):
@@ -118,6 +147,13 @@ public struct SyncAccount: Sendable {
       let key = OwnKey.generate()
       try keychain { () throws(KeychainError) in try ownKeys.save(key) }
       return try await putCheck(of: key, session) ? .made(RecoveryKey(key)) : .recoveryKeyNeeded
+    }
+  }
+
+  /// What the server says of the account now: its plan, whether it is paid for, and what it used.
+  public func state(_ session: Session) async throws(AccountError) -> AccountState {
+    try await serverCall { () async throws(ServerError) in
+      try await server.account(token: session.token)
     }
   }
 
@@ -204,8 +240,7 @@ public struct SyncAccount: Sendable {
   ) -> Synchronizer {
     Synchronizer(
       writings: writings,
-      stateFile: stateDirectory.appending(
-        path: "\(keys.session.account.uuidString.lowercased()).json", directoryHint: .notDirectory),
+      stateFile: Self.syncStateFile(of: keys.session.account, in: stateDirectory),
       server: WritingServer(
         url: server.url, token: keys.session.token, transport: server.transport),
       ownKey: keys.ownKey)
@@ -225,6 +260,44 @@ public struct SyncAccount: Sendable {
     try keychain { () throws(KeychainError) in try sessions.remove() }
   }
 
+  /// Deletes the account on the server (`DELETE /account`), then forgets it on the device: the
+  /// session and the sync's state of it in `stateDirectory`. The device keeps everything when the
+  /// server doesn't answer 204, so the person can try again. A session the server no longer lets
+  /// in is dropped from the device, and the rest kept, since the server can't say whether the
+  /// account is gone.
+  public func deleteAccount(syncStateIn stateDirectory: URL) async throws(AccountError) {
+    guard let session = try session() else { throw .signInNeededToDelete }
+    do {
+      try await server.deleteAccount(token: session.token)
+    } catch .refused(status: 401, let reason) {
+      syncLogger.error("The server refused to delete the account for its session: \(reason)")
+      try keychain { () throws(KeychainError) in try sessions.remove() }
+      throw .signInNeededToDelete
+    } catch {
+      throw .server(error)
+    }
+    do {
+      try sessions.remove()
+    } catch {
+      throw .notForgotten(error)
+    }
+    do {
+      try FileManager.default.removeItem(
+        at: Self.syncStateFile(of: session.account, in: stateDirectory))
+    } catch CocoaError.fileNoSuchFile {
+      // Never synced.
+    } catch {
+      // Left behind, it only makes a later sync of the same account ID send every writing again.
+      syncLogger.error("The sync state of a deleted account couldn't be removed: \(error)")
+    }
+  }
+
+  /// Where the sync of `account` keeps its state, in `stateDirectory`.
+  static func syncStateFile(of account: UUID, in stateDirectory: URL) -> URL {
+    stateDirectory.appending(
+      path: "\(account.uuidString.lowercased()).json", directoryHint: .notDirectory)
+  }
+
   private func credential(for challenge: String) async throws(AccountError) -> AppleCredential {
     let nonce = SHA256.hash(data: Data(challenge.utf8)).map { String(format: "%02x", $0) }
       .joined()
@@ -235,6 +308,23 @@ public struct SyncAccount: Sendable {
     } catch {
       throw .apple(error)
     }
+  }
+
+  /// A session of the Apple user's account, kept; nil when the user has none.
+  private func startSession() async throws(AccountError) -> Session? {
+    let challenge = try await serverCall { () async throws(ServerError) in
+      try await server.challenge()
+    }
+    let credential = try await credential(for: challenge)
+    guard
+      let started = try await serverCall({ () async throws(ServerError) in
+        try await server.startSession(challenge: challenge, credential: credential)
+      })
+    else {
+      return nil
+    }
+    return try keep(
+      Session(token: started.token, account: started.account, appleUser: credential.user))
   }
 
   private func subscriptions(for account: UUID) async throws(AccountError)
@@ -289,9 +379,18 @@ public enum AccountError: LocalizedError {
   case noPurchase
   /// The server refused the purchase as another account's, and the Apple user has no account.
   case purchaseIsAnotherAccounts
+  /// The Apple user has no account to sign in to.
+  case noAccount
+  /// The account's own key check was no longer the one read, so nothing was started over.
+  case ownKeyChanged
   case recoveryKey(RecoveryKeyError)
   /// The recovery key is of another own key than the account's.
   case notTheAccountsKey
+  /// The server no longer let the session in to delete the account, or none was kept; the
+  /// session was dropped.
+  case signInNeededToDelete
+  /// The account was deleted on the server, but the device couldn't forget its session.
+  case notForgotten(KeychainError)
 
   public var errorDescription: String? {
     switch self {
@@ -310,11 +409,19 @@ public enum AccountError: LocalizedError {
     case .noPurchase:
       "この App Store のアカウントには、同期のプランの購入が見つかりませんでした。"
     case .purchaseIsAnotherAccounts:
-      "このプランの購入は、別の Apple アカウントのものです。購入した Apple アカウントでサインインしてください。"
+      "この端末の App Store で買ったプランは、別の Apple アカウントの同期のアカウントのものです。プランを買ったときの Apple アカウントでサインインするか、この端末の App Store を自分のアカウントにして、プランに入り直してください。"
+    case .noAccount:
+      "この Apple アカウントには、同期のアカウントがありません。ほかの端末でプランに入ったときと同じ Apple アカウントでサインインするか、プランに入ってください。"
+    case .ownKeyChanged:
+      "ほかの端末で自分の鍵が変わったため、サーバーの文書は消していません。"
     case .recoveryKey(let error):
       error.localizedDescription
     case .notTheAccountsKey:
       "このリカバリーキーは、このアカウントの鍵ではありません。"
+    case .signInNeededToDelete:
+      "サインインが切れたため、アカウントを削除できませんでした。もう一度 Apple でサインインしてから削除してください。"
+    case .notForgotten:
+      "アカウントは削除しましたが、この端末のサインインの情報を消せませんでした。"
     }
   }
 }

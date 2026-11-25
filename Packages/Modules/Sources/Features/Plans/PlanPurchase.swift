@@ -23,6 +23,11 @@ struct KeptAccountID {
   func keep(_ id: UUID) {
     defaults.set(id.uuidString, forKey: Self.key)
   }
+
+  /// Forgets the ID kept, as when its account is deleted.
+  func forget() {
+    defaults.removeObject(forKey: Self.key)
+  }
 }
 
 /// How a purchase that didn't fail ended.

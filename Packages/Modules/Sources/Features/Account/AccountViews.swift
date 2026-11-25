@@ -55,27 +55,36 @@ private struct AppleIDButton: UIViewRepresentable {
   }
 }
 
-/// The settings' section for the account, under 「同期」: signing in once a plan is bought, the
-/// recovery key when the own key isn't here, how the sync went with 「今すぐ同期」 while signed in,
-/// and signing out. Nothing while signed out with no plan bought.
+/// The settings' section for the account, under 「同期」: signing in, to make the account once a
+/// plan is bought, or to the account bought on another device; the recovery key when the own key
+/// isn't here, or starting over without it (`StartOverView`); how the sync went with 「今すぐ同期」
+/// while signed in, signing out, and the page that deletes the account (`AccountDeletionView`);
+/// then, while signed in, the plan's (`PlanStateSections`) once `state` is read.
 struct AccountRows: View {
   let phase: AccountPhase
   let canSignIn: Bool
+  /// What the server last said of the account; nil until read.
+  var state: AccountState?
   let signIn: () -> Void
   let signOut: () -> Void
   let restore: (String) async -> String?
+  /// Answers whether the own key is still to be brought back after it.
+  var startOver: () async -> Bool = { true }
+  /// Answers whether the device is signed out after it.
+  var deleteAccount: () async -> Bool = { false }
   /// Nil where nothing syncs.
   var syncStatus: WritingSync.Status?
   var syncNow: () -> Void = {}
   @State private var confirmingSignOut = false
 
   var body: some View {
-    if phase != .signedOut || canSignIn {
-      Section {
-        rows
-      } footer: {
-        Text(Self.footer(phase))
-      }
+    Section {
+      rows
+    } footer: {
+      Text(Self.footer(phase, canSignIn: canSignIn))
+    }
+    if phase == .signedIn || phase == .recoveryKeyNeeded, let state {
+      PlanStateSections(state: state)
     }
   }
 
@@ -105,6 +114,9 @@ struct AccountRows: View {
         NavigationLink("リカバリーキーを入力") {
           RecoveryKeyEntryView(restore: restore)
         }
+        NavigationLink("リカバリーキーをなくしたとき") {
+          StartOverView(startOver: startOver)
+        }
       }
       Button("サインアウト", role: .destructive) { confirmingSignOut = true }
         .confirmationDialog(
@@ -114,13 +126,18 @@ struct AccountRows: View {
         } message: {
           Text("この端末では同期をやめます。文書はこの端末に残ります。")
         }
+      NavigationLink("アカウントを削除") {
+        AccountDeletionView(deleteAccount: deleteAccount)
+      }
     }
   }
 
-  private static func footer(_ phase: AccountPhase) -> String {
+  private static func footer(_ phase: AccountPhase, canSignIn: Bool) -> String {
     switch phase {
     case .signedOut, .working:
-      "プランに入りました。Apple でサインインすると、同期のアカウントができます。"
+      canSignIn
+        ? "プランに入りました。Apple でサインインすると、同期のアカウントができます。"
+        : "ほかの端末でプランに入っていれば、そのときと同じ Apple アカウントでサインインすると、この端末でも同期できます。"
     case .signedIn:
       "Apple でサインインしています。サインアウトしても、文書はこの端末に残ります。"
     case .recoveryKeyNeeded:
@@ -167,7 +184,7 @@ struct AccountSection: View {
 
   var body: some View {
     AccountRows(
-      phase: account.phase, canSignIn: account.canSignIn,
+      phase: account.phase, canSignIn: account.canSignIn, state: account.state,
       signIn: {
         Task {
           if let sync {
@@ -184,8 +201,24 @@ struct AccountSection: View {
         }
         return await account.restore(from: text)
       },
+      startOver: {
+        if let sync {
+          await sync.startOver()
+        } else {
+          await account.startOver()
+        }
+        return account.phase == .recoveryKeyNeeded
+      },
+      deleteAccount: {
+        if let sync {
+          await sync.deleteAccount()
+        } else {
+          await account.deleteAccount()
+        }
+        return account.phase == .signedOut
+      },
       syncStatus: sync?.status,
-      syncNow: { Task { await sync?.syncNow() } }
+      syncNow: { Task { await sync?.syncAsked() } }
     )
     .task { await account.refresh() }
   }

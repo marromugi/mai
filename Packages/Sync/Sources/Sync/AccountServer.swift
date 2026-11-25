@@ -4,10 +4,75 @@ import Foundation
 public struct AccountState: Sendable, Equatable {
   /// The server's `plans.tier`.
   public let plan: String
-  /// Milliseconds since 1970.
-  public let paidUntil: Int64
+  public let standing: Standing
+  public let usage: PlanUsage
   /// Nil until a device has put one.
   public let ownKeyCheck: Data?
+
+  public init(plan: String, standing: Standing, usage: PlanUsage, ownKeyCheck: Data? = nil) {
+    self.plan = plan
+    self.standing = standing
+    self.usage = usage
+    self.ownKeyCheck = ownKeyCheck
+  }
+
+  /// Whether the account's subscription pays for it.
+  public enum Standing: Sendable, Equatable {
+    /// Paid for by a billing period until `until`.
+    case paid(until: Date)
+    /// Paid for only by the billing grace period, while the App Store retries the payment, until
+    /// `until`.
+    case gracePeriod(until: Date)
+    /// Unpaid since `since`: read but not written, and deleted at `deletesAt`.
+    case lapsed(since: Date, deletesAt: Date)
+  }
+}
+
+/// How much of each of its plan's limits an account has used. The counts are today's (UTC);
+/// `requests` counts the read that answered them, which the server counts before answering.
+public struct PlanUsage: Sendable, Equatable, Decodable {
+  public let writingsBytes: Use
+  public let writings: Use
+  public let photosBytes: Use
+  public let requests: Use
+  public let lists: Use
+  public let saves: Use
+  public let photos: Use
+
+  public struct Use: Sendable, Equatable, Decodable {
+    public let used: Int64
+    public let limit: Int64
+
+    public init(used: Int64, limit: Int64) {
+      self.used = used
+      self.limit = limit
+    }
+
+    /// Whether what is used is at the limit. A day's count past it is answered 429; storage can be
+    /// refused sooner, by a save that would take it past.
+    public var isUsedUp: Bool { used >= limit }
+  }
+
+  /// As read: the server gives the day's requests before the read that asked for them.
+  fileprivate var countingThisRead: Self {
+    Self(
+      writingsBytes: writingsBytes, writings: writings, photosBytes: photosBytes,
+      requests: Use(used: requests.used + 1, limit: requests.limit), lists: lists, saves: saves,
+      photos: photos)
+  }
+
+  public init(
+    writingsBytes: Use, writings: Use, photosBytes: Use, requests: Use, lists: Use, saves: Use,
+    photos: Use
+  ) {
+    self.writingsBytes = writingsBytes
+    self.writings = writings
+    self.photosBytes = photosBytes
+    self.requests = requests
+    self.lists = lists
+    self.saves = saves
+    self.photos = photos
+  }
 }
 
 /// The client of the Worker's account and sign-in routes (`Server/README.md`).
@@ -77,8 +142,22 @@ public struct AccountServer: Sendable {
       }
       check = bytes
     }
+    let paidUntil = Date(millisecondsSince1970: read.paidUntil)
+    let standing: AccountState.Standing
+    switch (read.lapsed, read.gracePeriod, read.deletesAt) {
+    case (false, false, nil):
+      standing = .paid(until: paidUntil)
+    case (false, true, nil):
+      standing = .gracePeriod(until: paidUntil)
+    case (true, false, let deletesAt?):
+      standing = .lapsed(since: paidUntil, deletesAt: Date(millisecondsSince1970: deletesAt))
+    default:
+      throw .unexpectedAnswer(
+        "lapsed \(read.lapsed), gracePeriod \(read.gracePeriod) and deletesAt \(String(describing: read.deletesAt)) don't go together"
+      )
+    }
     return AccountState(
-      plan: read.plan, paidUntil: read.paidUntil, ownKeyCheck: check)
+      plan: read.plan, standing: standing, usage: read.usage.countingThisRead, ownKeyCheck: check)
   }
 
   /// Puts the account's own key check; false when the account has another one.
@@ -86,6 +165,24 @@ public struct AccountServer: Sendable {
     var request = authorized(URLRequest(url: url.appending(path: "account/own-key-check")), token)
     request.httpMethod = "PUT"
     request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+    request.httpBody = check
+    let (_, response) = try await transport.answer(request, expecting: [204, 409])
+    return response.statusCode == 204
+  }
+
+  /// Starts the account over with the own key check `check`, while `replaced` is still its check:
+  /// the server's writings, photos and read mode copies go, the account's other sessions end, and
+  /// `check` is kept. True too when `check` is the account's already, as when sent again; false
+  /// when the account's check is neither, and nothing changed.
+  public func startOver(replacing replaced: Data, with check: Data, token: String)
+    async throws(ServerError) -> Bool
+  {
+    var request = authorized(URLRequest(url: url.appending(path: "account/own-key-check")), token)
+    request.httpMethod = "PUT"
+    request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+    request.setValue(
+      replaced.map { String(format: "%02x", $0) }.joined(),
+      forHTTPHeaderField: "Mai-Replaces-Own-Key-Check")
     request.httpBody = check
     let (_, response) = try await transport.answer(request, expecting: [204, 409])
     return response.statusCode == 204
@@ -106,6 +203,14 @@ public struct AccountServer: Sendable {
   /// Signs out: ends the session of `token`.
   public func endSession(token: String) async throws(ServerError) {
     var request = authorized(URLRequest(url: url.appending(path: "session")), token)
+    request.httpMethod = "DELETE"
+    _ = try await transport.answer(request, expecting: [204])
+  }
+
+  /// Deletes the account of `token` (`DELETE /account`): Apple's refresh token is revoked, and
+  /// the server's writings, photos and read mode copies of it go, with every session of it.
+  public func deleteAccount(token: String) async throws(ServerError) {
+    var request = authorized(URLRequest(url: url.appending(path: "account")), token)
     request.httpMethod = "DELETE"
     _ = try await transport.answer(request, expecting: [204])
   }
@@ -173,7 +278,17 @@ public struct AccountServer: Sendable {
   private struct ReadAccount: Decodable {
     let plan: String
     let paidUntil: Int64
+    let lapsed: Bool
+    let gracePeriod: Bool
+    let deletesAt: Int64?
+    let usage: PlanUsage
     let ownKeyCheck: String?
+  }
+}
+
+extension Date {
+  init(millisecondsSince1970 milliseconds: Int64) {
+    self.init(timeIntervalSince1970: Double(milliseconds) / 1000)
   }
 }
 

@@ -260,6 +260,7 @@ describe("a plan's photo storage", () => {
     expect(refused.status).toBe(429);
     expect(await refused.json()).toEqual({
       error: "the plan's storage for photos has no room for this",
+      limit: "photo-storage",
     });
     expect(await photosBytes(account)).toBe(200);
     expect(await keysOf(account)).toHaveLength(1);
@@ -285,7 +286,10 @@ describe("a plan's photos for the day", () => {
     expect((await put(`/photos/${crypto.randomUUID()}`, token, sealed(10))).status).toBe(201);
     const refused = await put(`/photos/${crypto.randomUUID()}`, token, sealed(10));
     expect(refused.status).toBe(429);
-    expect(await refused.json()).toEqual({ error: "the plan's photos for today are used up" });
+    expect(await refused.json()).toEqual({
+      error: "the plan's photos for today are used up",
+      limit: "photos",
+    });
     expect((await put(`/photos/${id}/thumbnail`, token, sealed(10))).status).toBe(201);
     expect(await photosBytes(account)).toBe(30);
   });

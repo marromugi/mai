@@ -1,0 +1,5 @@
+id: expected-status-widened
+language: Swift
+rule:
+  pattern: "$T.answer($R, expecting: [204])"
+fix: "$T.answer($R, expecting: [200, 204])"
