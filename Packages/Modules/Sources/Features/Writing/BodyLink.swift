@@ -13,18 +13,38 @@ extension [BodyLink] {
   /// has nothing left is dropped.
   nonisolated func fitted(to body: String) -> [BodyLink] {
     guard !isEmpty else { return [] }
-    let text = body as NSString
+    let length = body.utf16.count
     var fitted: [BodyLink] = []
     for link in self
-    where !link.range.isEmpty && link.range.lowerBound >= 0 && link.range.upperBound <= text.length
-    {
-      let start = text.rangeOfComposedCharacterSequence(at: link.range.lowerBound).location
-      let end = NSMaxRange(text.rangeOfComposedCharacterSequence(at: link.range.upperBound - 1))
+    where !link.range.isEmpty && link.range.lowerBound >= 0 && link.range.upperBound <= length {
+      let start = body.characterBounds(around: link.range.lowerBound).lower
+      let end = body.characterBounds(around: link.range.upperBound).upper
       let lower = Swift.max(start, fitted.last?.range.upperBound ?? 0)
       guard lower < end else { continue }
       fitted.append(BodyLink(range: lower..<end, url: link.url))
     }
     return fitted
+  }
+}
+
+nonisolated extension String {
+  /// The edges of whole characters nearest `offset`, in UTF-16 offsets: the last at or before it
+  /// and the first at or after it. Found from the start of its line, since a character never spans
+  /// the start of a line, and not from the start of a long body.
+  func characterBounds(around offset: Int) -> (lower: Int, upper: Int) {
+    let text = self as NSString
+    let lineBreak = text.range(
+      of: "\n", options: .backwards, range: NSRange(location: 0, length: offset))
+    var edge = lineBreak.location == NSNotFound ? 0 : NSMaxRange(lineBreak)
+    var index = String.Index(utf16Offset: edge, in: self)
+    while edge < offset, index < endIndex {
+      let next = self.index(after: index)
+      let nextEdge = next.utf16Offset(in: self)
+      if nextEdge > offset { return (edge, nextEdge) }
+      edge = nextEdge
+      index = next
+    }
+    return (edge, edge)
   }
 }
 
