@@ -321,7 +321,6 @@ struct EdgeFade: View {
     )
     .frame(height: Self.height(scale))
     .allowsHitTesting(false)
-    .accessibilityHidden(true)
   }
 
   static func height(_ scale: TypeScale) -> CGFloat {
