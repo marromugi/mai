@@ -85,15 +85,14 @@ struct ReadModeSetUp {
     return (bytes, try #require(Data(hex: wrapped)))
   }
 
+  /// The agent with `token`, reading the same server.
+  func agent(token: String) -> AgentServer {
+    AgentServer(url: url, token: token, transport: transport)
+  }
+
   /// The IDs `GET /agent/writings` lists for the agent with `token`.
   func agentList(token: String) async throws -> Set<UUID> {
-    struct Listing: Decodable {
-      struct Entry: Decodable { let id: UUID }
-      let writings: [Entry]
-    }
-    let (bytes, response) = try await agentGet("agent/writings", token: token)
-    #expect(response.statusCode == 200)
-    return Set(try JSONDecoder().decode(Listing.self, from: bytes).writings.map(\.id))
+    Set(try await agent(token: token).list().map(\.id))
   }
 
   /// The status `GET /agent/writings` answers the agent with `token`.

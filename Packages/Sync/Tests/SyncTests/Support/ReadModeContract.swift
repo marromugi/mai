@@ -37,13 +37,15 @@ enum ReadModeContract {
     #expect(try await server.turnOn(until: until) == all)
     view = try await server.view()
     #expect(view.until == until)
-    #expect(try await device.agentList(token: approved.token) == [first.id, second.id])
+    let listed = try await device.agent(token: approved.token).list()
+    #expect(Set(listed.map(\.id)) == [first.id, second.id])
+    #expect(listed.allSatisfy { $0.expires == until })
     try await expectOpened(first, by: agent, token: approved.token, on: device)
 
     // Excluding deletes the copy; including sends it again.
     try await server.exclude(first.id)
     #expect(try await server.view().excluded == [first.id])
-    #expect(try await device.agentRead(first.id, token: approved.token) == nil)
+    #expect(try await device.agent(token: approved.token).copy(of: first.id) == nil)
     var one = CopiesSent()
     one.kept = 1
     #expect(try await server.include(first.id) == one)
@@ -63,6 +65,12 @@ enum ReadModeContract {
     #expect(try await server.revoke(approved.id))
     #expect(try await server.revoke(UUID()) == false)
     #expect(try await device.agentStatus(token: approved.token) == 401)
+    await #expect {
+      _ = try await device.agent(token: approved.token).list()
+    } throws: {
+      guard case .refused(status: 401, _) = $0 as? ServerError else { return false }
+      return true
+    }
     view = try await server.view()
     #expect(view.agents.map(\.revoked) == [true])
     #expect(view.trustedAgents(ownKey).isEmpty)
@@ -81,9 +89,8 @@ enum ReadModeContract {
     _ writing: PlainWriting, by agent: P256.KeyAgreement.PrivateKey, token: String,
     on device: ReadModeSetUp
   ) async throws {
-    let read = try #require(try await device.agentRead(writing.id, token: token))
-    let opened = try AgentCopy(id: writing.id, bytes: read.bytes, wrapped: read.wrapped)
-      .open(with: agent)
+    let copy = try #require(try await device.agent(token: token).copy(of: writing.id))
+    let opened = try copy.open(with: agent)
     #expect(opened == writing)
   }
 }
