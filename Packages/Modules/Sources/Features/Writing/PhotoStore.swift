@@ -78,6 +78,25 @@ nonisolated struct PhotoStore: Sendable {
       contentsOfFile: folder(of: id).appending(path: Self.thumbnail).path(percentEncoded: false))
   }
 
+  /// The photo with `id` and its thumbnail as kept, JPEG, or nil when the device has no such
+  /// photo.
+  @concurrent func files(of id: UUID) async throws -> (photo: Data, thumbnail: Data)? {
+    let folder = folder(of: id)
+    do {
+      return (
+        try Data(contentsOf: folder.appending(path: Self.photo)),
+        try Data(contentsOf: folder.appending(path: Self.thumbnail))
+      )
+    } catch CocoaError.fileReadNoSuchFile {
+      return nil
+    }
+  }
+
+  /// Whether the device has the photo with `id`.
+  func has(_ id: UUID) -> Bool {
+    FileManager.default.fileExists(atPath: folder(of: id).path(percentEncoded: false))
+  }
+
   func folder(of id: UUID) -> URL {
     directory.appending(path: id.uuidString, directoryHint: .isDirectory)
   }

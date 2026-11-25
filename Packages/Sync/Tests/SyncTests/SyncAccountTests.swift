@@ -343,7 +343,7 @@ struct SyncAccountTests {
       PlainWriting(id: UUID(), updated: .init(timeIntervalSince1970: 1_000), contents: Data()))
 
     let synchronizer = account.synchronizer(
-      writings: writings, stateDirectory: directory, keys: keys)
+      writings: writings, photos: MemoryPhotoStore(), stateDirectory: directory, keys: keys)
     #expect(try await synchronizer.sync().sent.count == 1)
     #expect(
       try FileManager.default.contentsOfDirectory(atPath: directory.path())

@@ -93,6 +93,12 @@ public enum SaveOutcome: Sendable, Equatable {
   case conflict(current: Revision?)
 }
 
+public enum PhotoSent: Sendable, Equatable {
+  case sent
+  /// The server has this part already, or is taking it now (409).
+  case alreadyThere
+}
+
 /// The client of the Worker in `Server/`. `save` is the read mode model's `Save` for the writing
 /// itself (`Specs/ReadMode`); the model has no refused save. `list` and `read` take the writings,
 /// which the model leaves out; its `Sync` takes the settings #26 adds.
@@ -159,8 +165,46 @@ public struct WritingServer: Sendable {
     }
   }
 
+  /// Sends one part of a sealed photo. A part the server has already, or is taking now (409), is
+  /// left as it is.
+  public func send(_ sealed: SealedPhoto) async throws(ServerError) -> PhotoSent {
+    var request = request(for: path(of: sealed.id, sealed.part))
+    request.httpMethod = "PUT"
+    request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+    request.httpBody = sealed.bytes
+    let (_, response) = try await transport.answer(request, expecting: [201, 409])
+    return response.statusCode == 201 ? .sent : .alreadyThere
+  }
+
+  /// One part of the photo with `id`, or nil when the server has none.
+  public func readPhoto(_ id: UUID, _ part: PhotoPart) async throws(ServerError) -> PhotoEnvelope? {
+    let (data, response) = try await transport.answer(
+      request(for: path(of: id, part)), expecting: [200, 404])
+    guard response.statusCode == 200 else { return nil }
+    let envelope: PhotoEnvelope
+    do {
+      envelope = try PhotoEnvelope(bytes: data)
+    } catch {
+      throw .unexpectedAnswer(error.localizedDescription)
+    }
+    guard envelope.id == id, envelope.part == part else {
+      throw .unexpectedAnswer(
+        "the server gave the \(envelope.part) of photo \(envelope.id.uuidString) for the \(part) of \(id.uuidString)"
+      )
+    }
+    return envelope
+  }
+
   private func path(of id: UUID) -> String {
     "writings/\(id.uuidString.lowercased())"
+  }
+
+  private func path(of photo: UUID, _ part: PhotoPart) -> String {
+    let path = "photos/\(photo.uuidString.lowercased())"
+    switch part {
+    case .photo: return path
+    case .thumbnail: return path + "/thumbnail"
+    }
   }
 
   private func request(for path: String) -> URLRequest {
@@ -209,7 +253,7 @@ public enum ServerError: LocalizedError {
     case .limitReached(.storage?):
       "文書の容量か本数がプランの上限に達したため、同期を止めました。文書を減らすか、上のプランに変えてください。文書はこの端末に残っています。"
     case .limitReached(.photoStorage?):
-      "写真の容量がプランの上限に達したため、同期を止めました。写真を減らすか、上のプランに変えてください。文書はこの端末に残っています。"
+      "写真の容量がプランの上限に達したため、同期を止めました。上のプランに変えると、また送れます。文書と写真はこの端末に残っています。"
     case .limitReached(nil):
       "プランの上限に達したため、同期を止めました。1 日の回数の上限なら、日付が変わると（協定世界時の 0 時、日本時間の 9 時）また同期できます。容量の上限なら、文書を減らすか、上のプランに変えてください。文書はこの端末に残っています。"
     case .refused(let status, _):

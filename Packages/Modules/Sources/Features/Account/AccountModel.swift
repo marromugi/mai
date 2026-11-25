@@ -345,9 +345,12 @@ enum AccountPhase: Equatable {
     return try account.syncKeys()
   }
 
-  /// Syncs `writings` with the account's, sealed with `keys.ownKey`.
-  func synchronizer(for writings: any PlainWritingStore, keys: SyncKeys) -> Synchronizer {
-    account.synchronizer(writings: writings, stateDirectory: syncState, keys: keys)
+  /// Syncs `writings` and their `photos` with the account's, sealed with `keys.ownKey`.
+  func synchronizer(
+    for writings: any PlainWritingStore, photos: any PlainPhotoStore, keys: SyncKeys
+  ) -> Synchronizer {
+    account.synchronizer(
+      writings: writings, photos: photos, stateDirectory: syncState, keys: keys)
   }
 
   /// The account as read with `session`, and which read it was.

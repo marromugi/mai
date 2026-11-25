@@ -56,7 +56,7 @@ struct AccountSyncContractTests {
     return Device(
       writings: writings,
       synchronizer: syncAccount.synchronizer(
-        writings: writings, stateDirectory: directory, keys: keys),
+        writings: writings, photos: MemoryPhotoStore(), stateDirectory: directory, keys: keys),
       sent: sent, keys: keys)
   }
 

@@ -38,7 +38,8 @@ public struct RootView: View {
     _photos = State(initialValue: WritingPhotos(store: photoStore))
     let library = WritingLibrary(store: store)
     _library = State(initialValue: library)
-    _sync = State(initialValue: account.map { WritingSync(account: $0, library: library) })
+    _sync = State(
+      initialValue: account.map { WritingSync(account: $0, library: library, photos: photoStore) })
     _path = State(initialValue: path)
   }
 
