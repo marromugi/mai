@@ -171,15 +171,20 @@ struct StyledTextView: UIViewRepresentable {
 
     @objc func tapped(_ tap: UITapGestureRecognizer) {
       guard let view = tap.view as? PlaceholderTextView,
-        let url = view.link(at: tap.location(in: view))
+        let url = link(openedAt: tap.location(in: view), in: view)
       else { return }
       view.open(url)
     }
 
-    /// Taken only on a link or a mention, and only while the text view has no caret.
+    /// Taken only where a tap opens a link.
     func gestureRecognizerShouldBegin(_ tap: UIGestureRecognizer) -> Bool {
-      guard let view = tap.view as? UITextView, !view.isFirstResponder else { return false }
-      return view.link(at: tap.location(in: view)) != nil
+      guard let view = tap.view as? UITextView else { return false }
+      return link(openedAt: tap.location(in: view), in: view) != nil
+    }
+
+    /// The link or mention a tap at `point` opens: the one drawn there, while `view` has no caret.
+    func link(openedAt point: CGPoint, in view: UITextView) -> URL? {
+      view.isFirstResponder ? nil : view.link(at: point)
     }
 
     /// The text view's own taps, which put the caret in, wait for this one to fail.
@@ -267,6 +272,10 @@ struct StyledTextView: UIViewRepresentable {
       view.textStorage.replaceCharacters(in: range, with: styled)
       view.undoManager?.registerUndo(withTarget: view) { [weak self] view in
         self?.restyle(range, in: view, as: before)
+      }
+      // A mention a link now overlaps is left out whole, as the page leaves it out.
+      if let found, found.body == view.text {
+        view.mark(found)
       }
       Self.linkTypingOnlyInsideALink(in: view)
       changed(view.text, view.links)
@@ -384,10 +393,13 @@ extension UITextView {
     guard let position = closestPosition(to: point) else { return nil }
     let offset = self.offset(from: beginningOfDocument, to: position)
     let storage = textStorage
-    // The closest position is between two characters; the one under the point is either.
+    let string = storage.string as NSString
+    // The closest position is between two characters; the one under the point is either. Each is
+    // measured whole: half of a character stored as two UTF-16 units has no place of its own.
     for index in [offset - 1, offset] where index >= 0 && index < storage.length {
-      guard let start = self.position(from: beginningOfDocument, offset: index),
-        let end = self.position(from: start, offset: 1),
+      let character = string.rangeOfComposedCharacterSequence(at: index)
+      guard let start = self.position(from: beginningOfDocument, offset: character.location),
+        let end = self.position(from: start, offset: character.length),
         let range = textRange(from: start, to: end),
         firstRect(for: range).contains(point)
       else { continue }

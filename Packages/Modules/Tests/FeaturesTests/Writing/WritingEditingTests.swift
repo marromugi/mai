@@ -289,6 +289,87 @@ struct WritingEditingTests {
     #expect(handedOn == [bread])
   }
 
+  /// A tap on a link or mention opens it while the body has no caret; with the caret in the body,
+  /// the text view's own taps take it, and they wait for this one to fail first.
+  @Test func aTapOpensALinkOnlyWhileTheBodyHasNoCaret() async throws {
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "小さなパンと夜の机に向かう", links: [BodyLink(range: 0..<5, url: bread)]))
+    let page = HostedPage(mentioning(edits))
+    let body = try #require(bodyEditor(in: page))
+    try await page.settle(within: mentionsFound) { body.linkedText.count == 2 }
+    let tap = try #require(
+      body.gestureRecognizers?.first { $0.delegate is StyledTextView.Coordinator })
+    let coordinator = try #require(tap.delegate as? StyledTextView.Coordinator)
+    #expect(coordinator.link(openedAt: centre(of: 1, in: body), in: body) == bread)
+    #expect(coordinator.link(openedAt: centre(of: 8, in: body), in: body) == nightDesk.link)
+    #expect(coordinator.link(openedAt: centre(of: 5, in: body), in: body) == nil)
+    let others = (body.gestureRecognizers ?? []).filter { $0 !== tap }
+    #expect(others.contains { coordinator.gestureRecognizer(tap, shouldBeRequiredToFailBy: $0) })
+    #expect(
+      !others.contains {
+        !($0 is UITapGestureRecognizer)
+          && coordinator.gestureRecognizer(tap, shouldBeRequiredToFailBy: $0)
+      })
+    body.becomeFirstResponder()
+    page.settle()
+    #expect(coordinator.link(openedAt: centre(of: 1, in: body), in: body) == nil)
+    #expect(coordinator.link(openedAt: centre(of: 8, in: body), in: body) == nil)
+  }
+
+  /// A link on a character stored as more than one UTF-16 unit is found under any part of it.
+  @Test(arguments: ["🍞", "🇯🇵", "か\u{3099}"])
+  func aLinkOnACharacterOfManyUnitsIsFoundUnderAnyPartOfIt(character: String) throws {
+    let length = (character as NSString).length
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "前\(character)後", links: [BodyLink(range: 1..<1 + length, url: bread)]))
+    let page = HostedPage(screen(edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    let rect = try rect(of: NSRange(location: 1, length: length), in: body)
+    for fraction in [0.25, 0.75] {
+      let point = CGPoint(x: rect.minX + rect.width * fraction, y: rect.midY)
+      #expect(body.link(at: point) == bread, "at \(fraction)")
+    }
+  }
+
+  /// A web address pasted over part of a mention leaves the whole mention out, as a page opened
+  /// with that link does.
+  @Test func pastingAWebAddressOverPartOfAMentionLeavesTheMentionOut() async throws {
+    let edits = Edits(writing: Writing(title: "朝", body: "本文と夜の机に向かう"))
+    let page = HostedPage(mentioning(edits))
+    let body = try #require(bodyEditor(in: page))
+    try await page.settle(within: mentionsFound) { !body.linkedText.isEmpty }
+    body.selectedRange = NSRange(location: 3, length: 2)
+    try paste("https://example.com/bread", into: body)
+    page.show(mentioning(edits))
+    page.settle()
+    #expect(body.linkedText.map(\.text) == ["夜の"])
+    #expect(body.textStorage.attribute(.mention, at: 7, effectiveRange: nil) == nil)
+    #expect(body.textStorage.attribute(.underlineStyle, at: 7, effectiveRange: nil) == nil)
+    let opened = HostedPage(mentioning(edits))
+    let openedBody = try #require(bodyEditor(in: opened))
+    try await opened.settle { false }
+    #expect(openedBody.linkedText.map(\.text) == body.linkedText.map(\.text))
+  }
+
+  /// A change of the body's setting keeps its mentions, and marks none found in text since changed.
+  @Test func aSettingChangeKeepsMentionsFoundInTheText() async throws {
+    let edits = Edits(writing: Writing(title: "朝", body: "本文と夜の机に向かう"))
+    let page = HostedPage(mentioning(edits))
+    let body = try #require(bodyEditor(in: page))
+    try await page.settle(within: mentionsFound) { !body.linkedText.isEmpty }
+    let larger = try #require(BodySetting(base: 20, lineHeight: 36, tracking: -50))
+    page.show(mentioning(edits, setting: larger))
+    try await page.settle(within: mentionsFound) { !body.linkedText.isEmpty }
+    #expect(body.linkedText.map(\.text) == ["夜の机に向かう"])
+    body.becomeFirstResponder()
+    body.selectedRange = NSRange(location: 5, length: 0)
+    type("い", into: body)
+    page.show(mentioning(edits))
+    #expect(body.linkedText.isEmpty)
+  }
+
   /// A web address pasted over selected body text links that text, and the text stays.
   @Test func pastingAWebAddressOverASelectionLinksIt() throws {
     let edits = Edits()
@@ -805,11 +886,21 @@ private let nightDesk = Writing(
   id: UUID(sample: 4), title: "夜の机に向かう", body: "", updated: Date(timeIntervalSince1970: 0))
 
 /// The edited writing's page, with `nightDesk` among the others.
-private func mentioning(_ edits: Edits, open: @escaping (Writing) -> Void = { _ in }) -> some View {
+private func mentioning(
+  _ edits: Edits, setting: BodySetting = .standard, open: @escaping (Writing) -> Void = { _ in }
+) -> some View {
   WritingScreen(
     writing: edits.writing, others: [nightDesk], open: open, edit: { edits.writing.apply($0) },
-    photos: [], setting: .constant(.standard), typesetting: .constant(false),
+    photos: [], setting: .constant(setting), typesetting: .constant(false),
     takingPhoto: .constant(false), camera: .standIn(taking: nil), photoTaken: { _ in })
+}
+
+/// Where `range` of `view`'s text is drawn, in its own coordinates.
+@MainActor
+private func rect(of range: NSRange, in view: UITextView) throws -> CGRect {
+  let start = try #require(view.position(from: view.beginningOfDocument, offset: range.location))
+  let end = try #require(view.position(from: start, offset: range.length))
+  return view.firstRect(for: try #require(view.textRange(from: start, to: end)))
 }
 
 /// The centre of the character at `offset` in `view`, in its own coordinates.
