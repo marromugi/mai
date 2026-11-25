@@ -88,5 +88,32 @@ struct SealedPhotoTests {
         bytes: Data([0x6d, 0x61, 0x70, 0x01]) + Data(count: 16) + Data([2])
           + Data(count: PhotoPart.thumbnail.largest))
     }
+    // A sealed writing's magic, with a part byte where a photo's would be.
+    #expect(throws: PhotoEnvelopeError.self) {
+      try PhotoEnvelope(
+        bytes: Data([0x6d, 0x61, 0x69, 0x01]) + Data(count: 16) + Data([1]) + Data(count: 88))
+    }
+    // One byte short of the smallest sealed part.
+    #expect(throws: PhotoEnvelopeError.self) {
+      try PhotoEnvelope(
+        bytes: Data([0x6d, 0x61, 0x70, 0x01]) + Data(count: 16) + Data([1]) + Data(count: 87))
+    }
+  }
+
+  /// The smallest part (nothing sealed, 109 bytes) and the largest the server takes are read.
+  @Test func aPartOfTheSmallestOrLargestSizeIsRead() async throws {
+    let (photo, _) = try await sent(PlainPhoto(id: UUID(), photo: Data(), thumbnail: Data()))
+    #expect(photo.count == 109)
+    #expect(try ownKey.open(PhotoEnvelope(bytes: photo)) == Data())
+    let largest =
+      Data([0x6d, 0x61, 0x70, 0x01]) + Data(count: 16) + Data([2])
+      + Data(count: PhotoPart.thumbnail.largest - 21)
+    #expect(try PhotoEnvelope(bytes: largest).part == .thumbnail)
+  }
+
+  /// The Worker's limits (`Server/README.md` 「写真」).
+  @Test func thePartsLimitsAreTheServers() {
+    #expect(PhotoPart.photo.largest == 50_000_000)
+    #expect(PhotoPart.thumbnail.largest == 1_000_000)
   }
 }

@@ -113,6 +113,48 @@ struct PhotoSyncTests {
     #expect(try devices.second.photos.read(photo.id) == photo)
   }
 
+  /// A device taking a photo in asks for the thumbnail, then the photo.
+  @Test func aPhotoIsTakenInThumbnailFirst() async throws {
+    let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
+    let photo = photo()
+    try devices.first.photos.keep(photo)
+    try devices.first.writings.save(writing(pointingAt: [photo.id]))
+    _ = try await devices.first.synchronizer.sync()
+
+    _ = try await devices.second.synchronizer.sync()
+
+    let gets = await fake.requests.filter {
+      ($0.httpMethod ?? "GET") == "GET" && $0.url?.path.hasPrefix("/photos/") == true
+    }.compactMap(\.url?.path)
+    let id = photo.id.uuidString.lowercased()
+    #expect(gets == ["/photos/\(id)/thumbnail", "/photos/\(id)"])
+  }
+
+  /// A part the server gives for another photo, or the other part, is not taken as asked for.
+  @Test(arguments: [true, false])
+  func aPartGivenForAnotherIsRefused(otherPhoto: Bool) async throws {
+    let asked = photo()
+    let given = photo()
+    for photo in [asked, given] {
+      let sealed = try ownKey.seal(photo)
+      _ = try await server().send(sealed.thumbnail)
+      _ = try await server().send(sealed.photo)
+    }
+    let lying = server(
+      transport: GivesInstead(
+        fake, asked: "/photos/\(asked.id.uuidString.lowercased())/thumbnail",
+        given: otherPhoto
+          ? "/photos/\(given.id.uuidString.lowercased())/thumbnail"
+          : "/photos/\(asked.id.uuidString.lowercased())"))
+
+    await #expect {
+      try await lying.readPhoto(asked.id, .thumbnail)
+    } throws: { error in
+      guard case ServerError.unexpectedAnswer = error else { return false }
+      return true
+    }
+  }
+
   /// A part the server has already (409) counts as sent.
   @Test func aPhotoTheServerHasAlreadyCountsAsSent() async throws {
     let device = try TwoDevices.Device(server: server(), ownKey: ownKey)
@@ -242,6 +284,29 @@ struct PhotoSyncTests {
         && error.report.received == [written.id, other.id]
     }
     #expect(try devices.second.photos.read(photo.id) == nil)
+  }
+}
+
+/// Answers a read of the path `asked` with what the server has at `given`.
+private struct GivesInstead: HTTPTransport {
+  let next: any HTTPTransport
+  let asked: String
+  let given: String
+
+  init(_ next: any HTTPTransport, asked: String, given: String) {
+    self.next = next
+    self.asked = asked
+    self.given = given
+  }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    var request = request
+    if let url = request.url, url.path == asked,
+      let instead = URL(string: given, relativeTo: url)?.absoluteURL
+    {
+      request.url = instead
+    }
+    return try await next.send(request)
   }
 }
 

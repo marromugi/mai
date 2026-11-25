@@ -351,15 +351,18 @@ struct SyncAccountTests {
   }
 
   /// A sync state directory holding a state file for the signed-in account and for another one.
-  private func syncStates() throws -> (directory: URL, mine: URL, other: URL) {
+  private func syncStates() throws -> (directory: URL, mine: URL, myPhotos: URL, other: URL) {
     let directory = FileManager.default.temporaryDirectory.appending(
       path: "mai-sync-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let mine = directory.appending(path: "\(session.account.uuidString.lowercased()).json")
+    let myPhotos = directory.appending(
+      path: "\(session.account.uuidString.lowercased()).photos.json")
     let other = directory.appending(path: "\(UUID().uuidString.lowercased()).json")
     try Data("{}".utf8).write(to: mine)
+    try Data("{}".utf8).write(to: myPhotos)
     try Data("{}".utf8).write(to: other)
-    return (directory, mine, other)
+    return (directory, mine, myPhotos, other)
   }
 
   @Test func deletingTheAccountForgetsItsSessionAndSyncState() async throws {
@@ -376,6 +379,7 @@ struct SyncAccountTests {
         == "Bearer \(session.token)")
     #expect(try sessions.load() == nil)
     #expect(!FileManager.default.fileExists(atPath: states.mine.path()))
+    #expect(!FileManager.default.fileExists(atPath: states.myPhotos.path()))
     #expect(FileManager.default.fileExists(atPath: states.other.path()))
   }
 

@@ -28,7 +28,8 @@ nonisolated struct PhotoStore: Sendable {
   }
 
   /// Writes `photo` and `thumbnail`, both JPEG, as the photo with `id`: there with both files, or
-  /// not at all. A write of the same ID cut off before is cleared first.
+  /// not at all. A write of the same ID cut off before is cleared first, and a photo with `id` kept
+  /// already stays as it is.
   func write(photo: Data, thumbnail: Data, as id: UUID) throws(UnkeptPhoto) {
     let partial = directory.appending(
       path: ".\(id.uuidString).partial", directoryHint: .isDirectory)
@@ -46,17 +47,23 @@ nonisolated struct PhotoStore: Sendable {
     } catch {
       throw UnkeptPhoto(reason: error)
     }
+    let removePartial = {
+      do {
+        try FileManager.default.removeItem(at: partial)
+      } catch {
+        photoLogger.error("A photo not kept left \(partial.lastPathComponent): \(error)")
+      }
+    }
     do {
       try photo.write(to: partial.appending(path: Self.photo), options: .completeFileProtection)
       try thumbnail.write(
         to: partial.appending(path: Self.thumbnail), options: .completeFileProtection)
       try FileManager.default.moveItem(at: partial, to: folder(of: id))
+    } catch CocoaError.fileWriteFileExists {
+      // Kept already; it stays as it is.
+      removePartial()
     } catch {
-      do {
-        try FileManager.default.removeItem(at: partial)
-      } catch let removal {
-        photoLogger.error("A photo not kept left \(partial.lastPathComponent): \(removal)")
-      }
+      removePartial()
       throw UnkeptPhoto(reason: error)
     }
   }

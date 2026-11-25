@@ -18,8 +18,6 @@ nonisolated struct SyncedPhotos: PlainPhotoStore {
   func keep(_ photo: PlainPhoto) async throws {
     do {
       try store.write(photo: photo.photo, thumbnail: photo.thumbnail, as: photo.id)
-    } catch  where (error.reason as? CocoaError)?.code == .fileWriteFileExists {
-      // Kept already.
     } catch {
       throw UnkeptReceivedPhoto(id: photo.id, reason: error.reason)
     }

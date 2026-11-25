@@ -33,6 +33,26 @@ struct SyncedPhotosTests {
     }
   }
 
+  /// A photo the device has but can't read fails its writing alone, with what to do.
+  @Test func aPhotoThatCantBeReadFailsItsWritingAlone() async throws {
+    try await withEmptyStore { photos in
+      let unreadable = photos.store.folder(of: photo.id).appending(path: "photo.jpg")
+      try FileManager.default.createDirectory(at: unreadable, withIntermediateDirectories: true)
+      await #expect(throws: UnreadablePhoto.self) { try await photos.read(photo.id) }
+    }
+  }
+
+  /// A photo received that can't be kept fails its writing alone, with what to do.
+  @Test func aPhotoThatCantBeKeptFailsItsWritingAlone() async throws {
+    try await withEmptyStore { photos in
+      let directory = photos.store.directory
+      try Data("ファイル".utf8).write(
+        to: directory.deletingLastPathComponent().appending(
+          path: directory.lastPathComponent, directoryHint: .notDirectory))
+      await #expect(throws: UnkeptReceivedPhoto.self) { try await photos.keep(photo) }
+    }
+  }
+
   /// A keep of the same photo cut off before (the app quit mid-write) leaves its partial
   /// directory; the next keep clears it.
   @Test func aPhotoWhoseKeepWasCutOffIsKeptTheNextTime() async throws {
