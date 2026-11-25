@@ -40,7 +40,7 @@ enum Base32 {
   private static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
   /// Hyphens and the dashes a hyphen is typed or pasted as; whitespace of any kind is skipped too.
   private static let hyphens: Set<Character> = [
-    "-", "\u{2010}", "\u{2011}", "\u{2012}", "\u{2013}", "\u{2212}", "\u{30FC}", "\u{FF70}",
+    "-", "\u{2010}", "\u{2011}", "\u{2012}", "\u{2013}", "\u{2212}", "\u{FF70}",
   ]
 
   private static func digit(of character: Character) -> UInt8? {

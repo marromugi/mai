@@ -25,14 +25,13 @@ public struct ReadModeView: Sendable, Equatable {
     }
   }
 
-  /// The copies a device sends of `writings` (`DeviceWraps`): each one's key wrapped for each
-  /// trusted agent, while read mode is on and the writing isn't excluded. Whether it is on is
-  /// the server's answer, by its clock: the device's clock decides nothing (`IsOn(s.mode, clock[d])`
-  /// of `DeviceWraps` holds whenever the server says it is on, as no device's clock is ahead of it).
+  /// The copies of `writings`, which aren't excluded and are sent while read mode is on
+  /// (`DeviceWraps`): each one's key wrapped for each trusted agent. Whether it is on is the
+  /// server's answer, by its clock: the device's clock decides nothing (`IsOn(s.mode, clock[d])` of
+  /// `DeviceWraps` holds whenever the server says it is on, as no device's clock is ahead of it).
   func copies(of writings: [KeyedRevision], ownKey: OwnKey) -> [CopyToSend] {
-    guard until != nil else { return [] }
     let agents = trustedAgents(ownKey)
-    return writings.filter { !excluded.contains($0.id) }.flatMap { writing in
+    return writings.flatMap { writing in
       agents.map { agent in
         CopyToSend(
           writing: writing.id, agent: agent.id, revision: writing.revision,
@@ -180,6 +179,7 @@ public struct ReadMode: Sendable {
         try await writingServer.list().map { ($0.id, $0.revision) }
       }
     var keyed: [KeyedRevision] = []
+    // An excluded writing is neither read from the server nor wrapped (`DeviceWraps`).
     for (id, revision) in wanted where !view.excluded.contains(id) {
       if let entry = synced[id], let key = entry.writingKey,
         revision ?? entry.revision == entry.revision
@@ -190,7 +190,6 @@ public struct ReadMode: Sendable {
       }
     }
     let copies = view.copies(of: keyed, ownKey: ownKey)
-    guard !copies.isEmpty else { return (CopiesSent(), []) }
     var sent = CopiesSent()
     var refusedForMode: Set<UUID> = []
     for (copy, refusal) in zip(copies, try await server.send(copies, expires: until)) {

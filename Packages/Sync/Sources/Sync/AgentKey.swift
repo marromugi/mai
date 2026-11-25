@@ -111,7 +111,6 @@ public struct AgentCopy: Sendable {
     let bytes = envelope.bytes
     let header = bytes.prefix(Layout.header)
     do {
-      guard wrapped.count > Wrapping.encapsulatedKey else { throw OpeningError(id: id) }
       var recipient = try HPKE.Recipient(
         privateKey: privateKey, ciphersuite: Wrapping.suite, info: Wrapping.info,
         encapsulatedKey: wrapped.prefix(Wrapping.encapsulatedKey))
