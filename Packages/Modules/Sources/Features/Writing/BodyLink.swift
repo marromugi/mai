@@ -12,12 +12,14 @@ extension [BodyLink] {
   /// after the one before it. One that is empty, starts before the body or runs past its end, or
   /// has nothing left is dropped.
   nonisolated func fitted(to body: String) -> [BodyLink] {
-    var boundaries = body.indices.map { $0.utf16Offset(in: body) }
-    boundaries.append(body.utf16.count)
+    guard !isEmpty else { return [] }
+    let text = body as NSString
     var fitted: [BodyLink] = []
-    for link in self where !link.range.isEmpty && link.range.lowerBound >= 0 {
-      guard let end = boundaries.first(where: { $0 >= link.range.upperBound }) else { continue }
-      let start = boundaries.last { $0 <= link.range.lowerBound } ?? 0
+    for link in self
+    where !link.range.isEmpty && link.range.lowerBound >= 0 && link.range.upperBound <= text.length
+    {
+      let start = text.rangeOfComposedCharacterSequence(at: link.range.lowerBound).location
+      let end = NSMaxRange(text.rangeOfComposedCharacterSequence(at: link.range.upperBound - 1))
       let lower = Swift.max(start, fitted.last?.range.upperBound ?? 0)
       guard lower < end else { continue }
       fitted.append(BodyLink(range: lower..<end, url: link.url))

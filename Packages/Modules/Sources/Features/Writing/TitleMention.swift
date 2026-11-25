@@ -1,33 +1,36 @@
 import Foundation
 
 /// A place in a body where another writing's title appears, and the writing it names.
-struct TitleMention: Equatable {
+nonisolated struct TitleMention: Equatable, Sendable {
   let range: Range<String.Index>
   let writing: Writing
 }
 
-extension String {
+nonisolated extension String {
   /// Every place one of `writings`' titles appears, left to right and never overlapping. Where
   /// titles start at the same place, the longest is taken; where writings share a title, the first
   /// in `writings`. An untitled writing appears nowhere.
   func titleMentions(of writings: [Writing]) -> [TitleMention] {
+    // Each character's titles that start with it, the longest first, then in `writings`' order.
+    var startingWith: [Character: [(length: Int, order: Int, writing: Writing)]] = [:]
+    for (order, writing) in writings.enumerated() {
+      guard let first = writing.title.first else { continue }
+      startingWith[first, default: []].append((writing.title.count, order, writing))
+    }
+    for first in startingWith.keys {
+      startingWith[first]?.sort { ($0.length, $1.order) > ($1.length, $0.order) }
+    }
     var mentions: [TitleMention] = []
     var index = startIndex
     while index < endIndex {
-      let rest = self[index...]
-      var found: Writing?
-      for writing in writings
-      where !writing.title.isEmpty && writing.title.count > (found?.title.count ?? 0)
-        && rest.hasPrefix(writing.title)
-      {
-        found = writing
-      }
-      guard let found else {
+      guard let titles = startingWith[self[index]],
+        let found = titles.first(where: { self[index...].hasPrefix($0.writing.title) })
+      else {
         formIndex(after: &index)
         continue
       }
-      let end = self.index(index, offsetBy: found.title.count)
-      mentions.append(TitleMention(range: index..<end, writing: found))
+      let end = self.index(index, offsetBy: found.length)
+      mentions.append(TitleMention(range: index..<end, writing: found.writing))
       index = end
     }
     return mentions
