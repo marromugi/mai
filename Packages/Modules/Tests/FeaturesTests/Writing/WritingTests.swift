@@ -298,41 +298,6 @@ struct WritingTests {
     #expect(writings.edit(UUID(), at: .now) { $0.title = "夜" } == nil)
     #expect(writings == [writing])
   }
-
-  /// A title-only edit is saved, updated, and read back by the next launch.
-  @Test func anEditIsSavedAndReadBackByTheNextLaunch() throws {
-    try withEmptyStore { store throws in
-      let writing = Writing(title: "朝", body: "本文", updated: Date(timeIntervalSince1970: 1))
-      try store.save(writing)
-      var writings = [writing]
-      #expect(
-        try store.edit(writing.id, in: &writings, at: Date(timeIntervalSince1970: 2)) {
-          $0.title = "夜"
-        })
-      let expected = Writing(
-        id: writing.id, title: "夜", body: "本文", updated: Date(timeIntervalSince1970: 2))
-      #expect(writings == [expected])
-      #expect(try FileWritingStore(directory: store.directory).all() == [expected])
-    }
-  }
-
-  @Test func anEditThatChangesNothingIsNotSaved() throws {
-    let store = RefusingStore()
-    var writings = [Writing(title: "朝", body: "本文")]
-    #expect(try !store.edit(writings[0].id, in: &writings, at: .now) { $0.body = "本文" })
-  }
-
-  /// A save that fails throws, and the writings still hold the edit.
-  @Test func anEditWhoseSaveFailsIsKeptInTheWritings() {
-    var writings = [Writing(title: "朝", body: "本文", updated: Date(timeIntervalSince1970: 1))]
-    #expect(throws: RefusingStore.Refused.self) {
-      try RefusingStore().edit(writings[0].id, in: &writings, at: Date(timeIntervalSince1970: 2)) {
-        $0.body = "本文と追記"
-      }
-    }
-    #expect(writings[0].body == "本文と追記")
-    #expect(writings[0].updated == Date(timeIntervalSince1970: 2))
-  }
 }
 
 nonisolated private let bread = URL(string: "https://example.com/bread") ?? URL(filePath: "/")
@@ -341,14 +306,3 @@ nonisolated private let photoA = "0B6E2F7A-3C1D-4E59-8A2B-6D4C3B2A1F00"
 nonisolated private let photoB = "9C8D7E6F-5A4B-4C3D-9E2F-1A0B9C8D7E6F"
 /// A saved link that can be read: 「です」 of 「本文です」 linked to `flour`.
 nonisolated private let good = #"{"range":[2,4],"url":"https://example.com/flour"}"#
-
-/// A store whose every save fails.
-private struct RefusingStore: WritingStore {
-  struct Refused: Error {}
-
-  func all() throws -> [Writing] { [] }
-
-  func save(_ writing: Writing) throws {
-    throw Refused()
-  }
-}

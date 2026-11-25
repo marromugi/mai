@@ -1,7 +1,7 @@
 import Foundation
 
 /// One writing in the list.
-public struct WritingRow: Identifiable, Hashable, Sendable {
+nonisolated public struct WritingRow: Identifiable, Hashable, Sendable {
   public let id: UUID
   public let title: String
   public let characterCount: Int
@@ -36,7 +36,7 @@ public struct WritingRow: Identifiable, Hashable, Sendable {
   }
 }
 
-extension WritingRow {
+nonisolated extension WritingRow {
   /// The row for `writing`, counting every character of its body.
   init(_ writing: Writing) {
     self.init(

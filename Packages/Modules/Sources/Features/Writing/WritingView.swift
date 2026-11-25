@@ -67,7 +67,10 @@ struct WritingScreen: View {
             return
           }
         }
-        found = FoundMentions(body: writing.body, mentions: writing.body.titleMentions(of: others))
+        let mentions = await FoundMentions.find(in: writing.body, of: others)
+        // Found in a body that has changed since.
+        guard !Task.isCancelled else { return }
+        found = mentions
       }
       .scrollDisabled(typesetting)
       .scrollDismissesKeyboard(.interactively)
@@ -313,9 +316,15 @@ struct WritingHeader: View {
 }
 
 /// The mentions of other writings' titles found in `body`.
-struct FoundMentions: Equatable {
+nonisolated struct FoundMentions: Equatable, Sendable {
   let body: String
   let mentions: [TitleMention]
+
+  /// The mentions of `others`' titles in `body`, found off the main actor.
+  @concurrent
+  static func find(in body: String, of others: [Writing]) async -> FoundMentions {
+    FoundMentions(body: body, mentions: body.titleMentions(of: others))
+  }
 
   /// How long the body rests unchanged before its mentions are found again.
   static let rest = Duration.milliseconds(400)
