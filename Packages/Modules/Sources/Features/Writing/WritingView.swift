@@ -71,6 +71,7 @@ struct WritingScreen: View {
       }
       .scrollDisabled(typesetting)
       .scrollDismissesKeyboard(.interactively)
+      .modifier(BottomEdgeFade(shown: !typesetting))
       .clipShape(pageShape)
       .background {
         pageShape
@@ -318,9 +319,30 @@ struct EdgeFade: View {
       colors: [Color(.systemBackground), Color(.systemBackground).opacity(0)],
       startPoint: edge == .top ? .top : .bottom, endPoint: edge == .top ? .bottom : .top
     )
-    .frame(height: scale.space(.l))
+    .frame(height: Self.height(scale))
     .allowsHitTesting(false)
     .accessibilityHidden(true)
+  }
+
+  static func height(_ scale: TypeScale) -> CGFloat {
+    scale.space(.l)
+  }
+}
+
+/// An `EdgeFade` over the scroll view's bottom edge while `shown`, with a content margin as tall
+/// either way, so the end of the content and the caret stop above it and the scroll offset holds.
+private struct BottomEdgeFade: ViewModifier {
+  let shown: Bool
+  @EnvironmentTypeScale private var scale
+
+  func body(content: Content) -> some View {
+    content
+      .contentMargins(.bottom, EdgeFade.height(scale), for: .scrollContent)
+      .overlay(alignment: .bottom) {
+        if shown {
+          EdgeFade(edge: .bottom)
+        }
+      }
   }
 }
 

@@ -94,6 +94,15 @@ struct WritingPageTests {
     assertHeader("ものすごく長すぎて入りきらない名前ですよものすごく長すぎて", .light)
   }
 
+  /// The body fades as it reaches the bottom edge, as it does under the header, the other way up.
+  @Test func bottomFade() {
+    assertBottomFade(.light)
+  }
+
+  @Test func bottomFadeInDarkMode() {
+    assertBottomFade(.dark)
+  }
+
   /// The shrunk page set from the writing's body setting.
   @Test func typesettingModeWithABodySetting() throws {
     let setting = try #require(BodySetting(base: 20, lineHeight: 40, tracking: 50))
@@ -148,6 +157,37 @@ private func assertHeader(
     .clipped()
     .background(Color(.systemBackground))
     .dynamicTypeSize(size)
+    .environment(\.colorScheme, colorScheme),
+    as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
+    fileID: fileID,
+    file: file,
+    testName: testName,
+    line: line,
+    column: column)
+}
+
+/// The bottom fade over the body it fades, at the bottom of a 402-wide screen.
+private func assertBottomFade(
+  _ colorScheme: ColorScheme,
+  fileID: StaticString = #fileID,
+  file: StaticString = #filePath,
+  testName: String = #function,
+  line: UInt = #line,
+  column: UInt = #column
+) {
+  let margin = TypeScale.standard.typeArea(width: 402).margin
+  assertSnapshot(
+    of: ZStack(alignment: .bottom) {
+      Text(body: Writing.sampleBody)
+        .textStyle(.body)
+        .padding(.horizontal, margin)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxHeight: .infinity, alignment: .bottom)
+      EdgeFade(edge: .bottom)
+    }
+    .frame(width: 402, height: 200)
+    .clipped()
+    .background(Color(.systemBackground))
     .environment(\.colorScheme, colorScheme),
     as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
     fileID: fileID,
