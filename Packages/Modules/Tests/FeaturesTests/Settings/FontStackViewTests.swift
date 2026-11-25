@@ -104,14 +104,14 @@ struct FontStackViewTests {
       as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
   }
 
-  /// The mixed passage set in Inter, then the bundled family, read, edited, and typeset.
-  @Test(arguments: ["reading", "editing", "typesetting"])
+  /// The mixed passage set in Inter, then the bundled family, on the page and typeset.
+  @Test(arguments: ["reading", "typesetting"])
   func aLatinFamilyFirst(_ mode: String) {
     let page = HostedPage(
       WritingScreen(
         writing: Writing(title: "Morning Pages と朝の光", body: Writing.mixedBody), others: [],
         open: { _ in }, edit: { _ in }, photos: [], setting: .constant(.standard),
-        editing: .constant(mode == "editing"), typesetting: .constant(mode == "typesetting"),
+        typesetting: .constant(mode == "typesetting"),
         takingPhoto: .constant(false), camera: .standIn(taking: nil), photoTaken: { _ in }
       )
       .environment(\.fontFamilies, [.inter, .notoSansJP])
