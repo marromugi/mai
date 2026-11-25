@@ -1261,6 +1261,7 @@ extension EditorViewTests {
   @Test func aLineBreakOnTheLastLineShownKeepsThePageInPlace() throws {
     let page = HostedPage(screen(edits: Edits(writing: long)))
     let editor = try focusedEditor(in: page)
+    let lineHeight = try #require(editor.lines).scale.lineHeight(.body)
     let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
     scroll.contentOffset.y = 2_000
     page.settle()
@@ -1274,7 +1275,8 @@ extension EditorViewTests {
       let before = scroll.contentOffset.y
       type("\n", into: editor)
       page.settle()
-      #expect(abs(scroll.contentOffset.y - before) < 100)
+      // A line or a few, to bring the new line out from under the bottom row; never a jump.
+      #expect(abs(scroll.contentOffset.y - before) <= lineHeight * 4)
       let caret = try #require(editor.selectedTextRange)
       #expect(shown.contains(editor.convert(editor.caretRect(for: caret.start), to: nil)))
     }
@@ -1296,45 +1298,49 @@ extension EditorViewTests {
   }
 }
 
+@MainActor
+struct EditorHeightTests {
+  /// Wherever the page is scrolled on a body of 100,000 characters, text is drawn on screen, and
+  /// at the page's end, the body's last line is.
+  @Test func textIsShownAllTheWayToTheEnd() async throws {
+    let page = HostedPage(
+      screen(edits: Edits(writing: Writing(title: "朝", body: hundredThousand))))
+    let editor = try #require(editorView(in: page))
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    func bottom() -> CGFloat {
+      scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom
+    }
+    for part in [0.25, 0.5, 0.75] {
+      scroll.contentOffset.y = bottom() * part
+      page.settle()
+      // A point on the text a third of the way down the screen falls on a line drawn there.
+      let point = editor.convert(
+        CGPoint(x: 60, y: scroll.bounds.height / 3), from: scroll.superview)
+      let position = try #require(editor.closestPosition(to: point))
+      #expect(abs(editor.caretRect(for: position).midY - point.y) < 40, "at \(part)")
+    }
+    // Scrolled to the end, as often as TextKit's height for the text changes on the way.
+    let shown = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: nil)
+    func lastLineShown() -> Bool {
+      shown.contains(editor.convert(editor.caretRect(for: editor.endOfDocument), to: nil))
+    }
+    // Scrolled to the end as the editor's height follows TextKit's, which changes as TextKit
+    // lays out the lines it had estimated.
+    // As long as a full run's snapshot suites can hold the main actor.
+    try await page.settle(within: 60) {
+      scroll.contentOffset.y = bottom()
+      page.settle()
+      return lastLineShown()
+    }
+    #expect(lastLineShown())
+  }
+}
+
+private let hundredThousand: String = {
+  let paragraph = Writing.sampleBody + "\n" + Writing.sampleMention + "\n"
+  return String(String(repeating: paragraph, count: 100_000 / paragraph.count + 1).prefix(100_000))
+}()
+
 /// A writing whose body is many screens long.
 private let long = Writing(
   title: "朝", body: Array(repeating: Writing.sampleBody, count: 12).joined(separator: "\n"))
-
-@MainActor
-struct EditorHeightTests {
-  /// However the text is edited, the editor is as tall as the whole text laid out again, though it
-  /// lays out again only the paragraphs an edit touches.
-  @Test func theEditorKeepsTheWholeTextsHeightThroughEdits() throws {
-    let edits = Edits(writing: Writing(title: "朝", body: Writing.sampleBody))
-    let page = HostedPage(screen(edits: edits))
-    let editor = try focusedEditor(in: page)
-    let container = try #require(editor.editor)
-    let ends = { (editor.text as NSString).length }
-    let steps: [(NSRange, String)] = [
-      (NSRange(location: 10, length: 0), "書き足した"),
-      (NSRange(location: ends(), length: 0), "\n"),
-      (NSRange(location: ends() + 1, length: 0), "最後の行"),
-      (NSRange(location: 3, length: 0), "\n"),
-      (NSRange(location: 3, length: 1), ""),
-      (NSRange(location: 20, length: 30), "置き換えた\n二行に"),
-      // The title wraps, and the space below it changes.
-      (NSRange(location: 1, length: 0), "の机に向かって、間合いの調整をする日の覚え書き"),
-    ]
-    for (range, text) in steps {
-      editor.selectedRange = NSRange(location: min(range.location, ends()), length: range.length)
-      type(text, into: editor)
-      page.settle()
-      let wholeLayouts = container.wholeLayouts
-      let kept = container.textHeight(within: editor.frame.width)
-      // Only the paragraphs the edit touched were laid out again.
-      #expect(container.wholeLayouts == wholeLayouts)
-      container.paragraphs = nil
-      #expect(abs(container.textHeight(within: editor.frame.width) - kept) < 0.01)
-    }
-    // At another width, every line is set again.
-    let narrower = editor.frame.width - 40
-    let atNarrower = container.textHeight(within: narrower)
-    container.paragraphs = nil
-    #expect(abs(container.textHeight(within: narrower) - atNarrower) < 0.01)
-  }
-}
