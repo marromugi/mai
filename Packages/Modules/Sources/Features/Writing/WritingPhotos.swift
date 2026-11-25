@@ -23,6 +23,15 @@ final class WritingPhotos {
     }
     return found
   }
+
+  /// Keeps `image` in the store, then makes `edit` add it last to the writing with `id`.
+  func add(
+    _ image: UIImage, to id: Writing.ID,
+    edit: (Writing.ID, (inout Writing) -> Void) -> Void
+  ) async throws(UnkeptPhoto) {
+    let photo = try await store.keep(image)
+    edit(id) { $0.photos.append(photo) }
+  }
 }
 
 /// A photo as a writing's page shows it: its thumbnail in the stack, and the photo itself in the

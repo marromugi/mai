@@ -48,6 +48,19 @@ struct PhotoViewerTests {
       of: page.image(), as: .image(precision: 1, perceptualPrecision: 0.995))
   }
 
+  /// Each page is the photo itself, not its thumbnail.
+  @Test func thePagesAreThePhotos() throws {
+    let photoOnly = PagePhoto(id: UUID(), thumbnail: .landscape, photo: .portrait)
+    let drawn = try #require(
+      HostedPage(PhotoViewer(photos: [photoOnly], shown: .constant(photoOnly.id), close: {}))
+        .image().pngData())
+    let photo = PagePhoto(.portrait)
+    #expect(
+      drawn
+        == HostedPage(PhotoViewer(photos: [photo], shown: .constant(photo.id), close: {}))
+        .image().pngData())
+  }
+
   @Test func voiceOverReadsWhichPhoto() {
     #expect(PhotoViewer.label(index: 0, count: 1) == "写真")
     #expect(PhotoViewer.label(index: 1, count: 3) == "写真 2/3")

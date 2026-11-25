@@ -125,12 +125,22 @@ struct PhotoStoreTests {
   /// A photo is read for a page with its thumbnail, and not when the device doesn't have it.
   @Test func aPhotoIsReadForAPage() async throws {
     try await withEmptyStore { store in
-      let id = try await store.keep(.landscape)
+      let id = try await store.keep(photo(CGSize(width: 2400, height: 1800)))
       let read = try #require(await store.read(id))
       #expect(read.id == id)
-      #expect(pixels(read.thumbnail) == CGSize(width: 400, height: 300))
-      #expect(pixels(read.photo) == CGSize(width: 400, height: 300))
+      #expect(pixels(read.thumbnail) == CGSize(width: 1200, height: 900))
+      #expect(pixels(read.photo) == CGSize(width: 2400, height: 1800))
       #expect(await store.read(UUID()) == nil)
+    }
+  }
+
+  /// A keep leaves the photo's directory and nothing else.
+  @Test func aKeepLeavesOnlyThePhoto() async throws {
+    try await withEmptyStore { store in
+      let id = try await store.keep(.portrait)
+      let entries = try FileManager.default.contentsOfDirectory(
+        at: store.directory, includingPropertiesForKeys: nil)
+      #expect(entries.map(\.lastPathComponent) == [id.uuidString])
     }
   }
 }
@@ -159,6 +169,34 @@ struct WritingPhotosTests {
     }
   }
 
+  /// A photo already read keeps its place among those read now.
+  @Test func aPhotoReadBeforeKeepsItsPlace() async throws {
+    try await withEmptyStore { store in
+      let first = try await store.keep(.portrait)
+      let second = try await store.keep(.landscape)
+      let photos = WritingPhotos(store: store)
+      _ = await photos.read([first])
+      #expect(await photos.read([second, first]).map(\.id) == [second, first])
+    }
+  }
+
+  /// A photo taken is kept, then added last to its writing.
+  @Test func aPhotoTakenIsAddedLast() async throws {
+    try await withEmptyStore { store in
+      let earlier = UUID()
+      let writing = Writing(title: "写真", body: "", photos: [earlier])
+      var writings = [Writing(title: "ほか", body: ""), writing]
+      let photos = WritingPhotos(store: store)
+      try await photos.add(.portrait, to: writing.id) { id, change in
+        _ = writings.edit(id, at: .now, change)
+      }
+      let added = try #require(writings.last?.photos.last)
+      #expect(writings.last?.photos == [earlier, added])
+      #expect(writings.first?.photos == [])
+      #expect(store.photo(added) != nil)
+    }
+  }
+
   /// The view is given the photos once they are read, and read again when the IDs change.
   @Test func theViewIsGivenThePhotosRead() async throws {
     try await withEmptyStore { store in
@@ -184,5 +222,34 @@ struct WritingPhotosTests {
 
   private final class Given {
     var ids: [UUID] = []
+  }
+}
+
+@MainActor
+struct RootPhotosTests {
+  /// A writing opened from the app's root shows the photos it points at, from the photo store the
+  /// root is given.
+  @Test func aWritingOpenedShowsItsPhotos() async throws {
+    try await withEmptyStore { photos in
+      let photo = try await photos.keep(.portrait)
+      let writings = FileWritingStore(directory: photos.directory.appending(path: "Writings"))
+      let with = Writing(title: "写真", body: Writing.sampleBody, photos: [photo])
+      let without = Writing(title: "写真なし", body: Writing.sampleBody)
+      try writings.save(with)
+      try writings.save(without)
+
+      @MainActor func height(_ writing: Writing) async throws -> CGFloat {
+        let page = HostedPage(
+          RootView(store: writings, photoStore: photos, path: [writing.id])
+            .defaultAppStorage(UserDefaults(suiteName: "RootPhotosTests") ?? .standard))
+        // Long enough for the writings and the photos to be read.
+        try await Task.sleep(for: .seconds(1))
+        page.settle()
+        // The list's and the page's, whichever comes first.
+        return page.scrollViews.map { $0.contentSize.height }.reduce(0, +)
+      }
+      let withoutHeight = try await height(without)
+      #expect(try await height(with) > withoutHeight)
+    }
   }
 }

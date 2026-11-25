@@ -40,8 +40,15 @@ struct WritingPhotoStackTests {
   @Test func theStackDrawsTheNewestThree() throws {
     let older: [UIImage] = [.landscape, .landscape]
     let newest: [UIImage] = [.portrait, .landscape, .dusk]
-    let all = try #require(pageImage(older + newest)?.pngData())
-    #expect(all == pageImage(newest)?.pngData())
+    let all = try #require(pageImage((older + newest).map(PagePhoto.init))?.pngData())
+    #expect(all == pageImage(newest.map(PagePhoto.init))?.pngData())
+  }
+
+  /// Each print is the photo's thumbnail, not the photo itself.
+  @Test func thePrintsAreTheThumbnails() throws {
+    let thumbnailOnly = PagePhoto(id: UUID(), thumbnail: .portrait, photo: .landscape)
+    let drawn = try #require(pageImage([thumbnailOnly])?.pngData())
+    #expect(drawn == pageImage([PagePhoto(.portrait)])?.pngData())
   }
 
   /// The photos handed to the writing's view reach its page.
@@ -60,11 +67,10 @@ struct WritingPhotoStackTests {
 }
 
 private func page(
-  _ photos: [UIImage], _ colorScheme: ColorScheme, _ size: DynamicTypeSize
+  _ photos: [PagePhoto], _ colorScheme: ColorScheme, _ size: DynamicTypeSize
 ) -> some View {
   WritingPage(
-    writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: photos.map(PagePhoto.init),
-    width: 402,
+    writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: photos, width: 402,
     back: {}, titleCutOff: { _ in }
   )
   .fixedSize(horizontal: false, vertical: true)
@@ -74,7 +80,7 @@ private func page(
   .environment(\.colorScheme, colorScheme)
 }
 
-private func pageImage(_ photos: [UIImage]) -> UIImage? {
+private func pageImage(_ photos: [PagePhoto]) -> UIImage? {
   let renderer = ImageRenderer(content: page(photos, .light, .large))
   renderer.scale = 1
   return renderer.uiImage
@@ -92,7 +98,7 @@ private func assertPage(
   column: UInt = #column
 ) {
   assertSnapshot(
-    of: page(photos, colorScheme, size),
+    of: page(photos.map(PagePhoto.init), colorScheme, size),
     as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
     fileID: fileID,
     file: file,

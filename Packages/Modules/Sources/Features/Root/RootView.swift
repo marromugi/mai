@@ -119,15 +119,12 @@ public struct RootView: View {
 
   /// Keeps `image` in the photo store, then adds it to the writing with `id`.
   private func add(_ image: UIImage, to id: Writing.ID) async {
-    let photo: UUID
     do {
-      photo = try await photos.store.keep(image)
+      try await photos.add(image, to: id, edit: edit)
     } catch {
       photoLogger.error("A photo taken wasn't kept: \(error.reason)")
       unsaved = .photo(error)
-      return
     }
-    edit(id) { $0.photos.append(photo) }
   }
 }
 
