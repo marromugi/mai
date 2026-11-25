@@ -195,7 +195,7 @@ struct Answer {
   }
 
   private static func cantOpen(_ id: UUID) -> String {
-    "文書 \(self.id(id)) の写しはありますが、この Mac の鍵では開けませんでした。iPhone でこのエージェントを承認し直すと、新しい写しが届きます。"
+    "文書 \(self.id(id)) の写しはありますが、この Mac の鍵では開けませんでした。ターミナルで `mai-mcp pair` を実行して新しい鍵を作り、出たコードを iPhone の Cotoma で承認すると、新しい写しが届きます。"
   }
 
   private static func title(_ writing: OpenedWriting) -> String {
@@ -229,7 +229,7 @@ enum Problem: Error {
     case .unreadablePairing(let error):
       error.localizedDescription
     case .server(.refused(status: 401, _)):
-      "このエージェントは iPhone で取り消されたか、トークンが違います。iPhone の Cotoma で新しく承認し、ターミナルで `mai-mcp pair` をやり直してください。"
+      "このエージェントは iPhone で取り消されたか、トークンが違います。ターミナルで `mai-mcp pair` を実行し、出たコードを iPhone の Cotoma で承認してください。"
     case .server(.unreachable):
       "Cotoma のサーバーにつながりませんでした。ネットワークを確かめて、もう一度試してください。"
     case .server(.limitReached):
