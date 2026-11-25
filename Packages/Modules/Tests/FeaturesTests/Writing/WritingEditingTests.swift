@@ -63,6 +63,7 @@ struct WritingEditingTests {
     let editor = try focusedEditor(in: page)
     editor.selectedRange = NSRange(location: 2, length: 0)
     editor.deleteBackward()
+    page.settle()
     #expect(edits.writing.title == "朝本文")
     #expect(edits.writing.body == "二行目")
     #expect(try role(at: 1, in: editor) == .heading)
@@ -1008,22 +1009,22 @@ nonisolated private func inBody(_ location: Int, _ length: Int = 0) -> NSRange {
   NSRange(location: 2 + location, length: length)
 }
 
-/// Whether the character at `location` in `view` is set as the title or the body, by its lines.
+/// Whether the character at `location` in `view` is drawn as the title or the body, by its font's
+/// size.
 @MainActor
 private func role(at location: Int, in view: UITextView) throws -> TextRole {
-  let paragraph = try #require(
-    view.attributedText.attribute(.paragraphStyle, at: location, effectiveRange: nil)
-      as? NSParagraphStyle)
+  let font = try #require(
+    view.attributedText.attribute(.font, at: location, effectiveRange: nil) as? UIFont)
   let scale = TypeScale.standard
-  switch paragraph.minimumLineHeight {
-  case scale.lineHeight(.heading): return .heading
-  case scale.lineHeight(.body): return .body
-  default: throw Unexpected.lineHeight(paragraph.minimumLineHeight)
+  switch font.pointSize {
+  case scale.size(.heading): return .heading
+  case scale.size(.body): return .body
+  default: throw Unexpected.size(font.pointSize)
   }
 }
 
 private enum Unexpected: Error {
-  case lineHeight(CGFloat)
+  case size(CGFloat)
 }
 
 /// Puts `text` in place of `view`'s selection as the keyboard or a paste does: only if its

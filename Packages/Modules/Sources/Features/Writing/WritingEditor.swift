@@ -77,6 +77,7 @@ struct EditorLines: Equatable {
   /// The title paragraph's attributes, with `spacing` below it.
   func title(spacing: CGFloat) -> [NSAttributedString.Key: Any] {
     var attributes = scale.attributes(.heading, in: families)
+    attributes[.lineRole] = LineRole.title.rawValue
     if let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle,
       let spaced = paragraph.mutableCopy() as? NSMutableParagraphStyle
     {
@@ -94,8 +95,16 @@ struct EditorLines: Equatable {
   }
 
   var body: [NSAttributedString.Key: Any] {
-    scale.attributes(.body, in: families)
+    var attributes = scale.attributes(.body, in: families)
+    attributes[.lineRole] = LineRole.body.rawValue
+    return attributes
   }
+}
+
+/// Which of the editor's lines a character is set as, kept on it as `.lineRole`.
+enum LineRole: String {
+  case title
+  case body
 }
 
 /// A pasted web address waiting for the title it goes in under; `answer` hears the title, or nil
@@ -339,7 +348,8 @@ struct WritingTextView: UIViewRepresentable {
 
     /// Sets the first line as the title and the rest as the body, where an edit has carried one's
     /// type onto the other: a line break typed in the title, or the one after it taken out. The
-    /// title loses any link that has come into it.
+    /// title loses any link that has come into it. Told by `.lineRole`: the text storage gives a
+    /// paragraph joined to another the other's paragraph style, but keeps the fonts.
     static func keepTheLinesRoles(in view: PlaceholderTextView) {
       guard let lines = view.lines else { return }
       let storage = view.textStorage
@@ -348,9 +358,8 @@ struct WritingTextView: UIViewRepresentable {
       let body = NSRange(location: bodyStart, length: storage.length - bodyStart)
       storage.beginEditing()
       for (range, attributes) in [(title, view.titleAttributes), (body, lines.body)] {
-        storage.enumerateAttribute(.paragraphStyle, in: range) { value, run, _ in
-          guard (value as? NSParagraphStyle) != attributes[.paragraphStyle] as? NSParagraphStyle
-          else { return }
+        storage.enumerateAttribute(.lineRole, in: range) { value, run, _ in
+          guard value as? String != attributes[.lineRole] as? String else { return }
           storage.addAttributes(attributes, range: run)
         }
       }
@@ -396,6 +405,8 @@ extension NSAttributedString.Key {
   static let bodyLink = NSAttributedString.Key("MaiBodyLink")
   /// Where the editor keeps the link of a mention of another writing's title.
   static let mention = NSAttributedString.Key("MaiMention")
+  /// Where the editor keeps which line a character is set as, a `LineRole`'s raw value.
+  static let lineRole = NSAttributedString.Key("MaiLineRole")
 }
 
 extension [NSAttributedString.Key: Any] {
