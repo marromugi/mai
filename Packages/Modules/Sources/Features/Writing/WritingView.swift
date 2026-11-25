@@ -111,8 +111,7 @@ struct WritingScreen: View {
           width: proxy.size.width, cameraAvailable: camera.isAvailable,
           takePhoto: { takingPhoto = true },
           adjustTypesetting: {
-            UIApplication.shared.sendAction(
-              #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            closeKeyboard()
             withAnimation { typesetting = true }
           })
         Group {
@@ -142,6 +141,11 @@ struct WritingScreen: View {
     }
     .environment(\.bodySetting, setting)
     .toolbar(.hidden, for: .navigationBar)
+  }
+
+  private func closeKeyboard() {
+    UIApplication.shared.sendAction(
+      #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
   }
 
   /// The page's outline: in the typesetting mode its bottom lifts off the desk with rounded corners,
