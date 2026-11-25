@@ -214,10 +214,8 @@ struct WritingPage: View {
       .padding(.leading, max(0, area.margin - max(markWidth, TextButtonStyle.minimumSide) / 2))
       .padding(.bottom, scale.space(.l))
       VStack(alignment: .leading, spacing: 0) {
-        WritingEditor(
-          writing: WritingText(title: writing.title, body: writing.body, links: writing.links),
-          found: found
-        ) { text in
+        let text = WritingText(title: writing.title, body: writing.body, links: writing.links)
+        WritingEditor(writing: text, found: found) { text in
           edit {
             $0.title = text.title
             $0.body = text.body
@@ -226,7 +224,7 @@ struct WritingPage: View {
         }
         .background(alignment: .topLeading) {
           // The title's lines as the editor sets them, to measure how far they have scrolled off.
-          Text(verbatim: writing.title.isEmpty ? "タイトル" : writing.title)
+          Text(verbatim: text.title.isEmpty ? "タイトル" : text.title)
             .textStyle(.heading)
             .hidden()
             .accessibilityHidden(true)

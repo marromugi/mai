@@ -1,15 +1,18 @@
 import Foundation
 
 /// A writing's title, body, and the body's links, read from the one text the editor holds: the
-/// first line is the title, and the lines after the first line break are the body.
+/// first line is the title, and the lines after the first line break are the body. The editor's
+/// line breaks are all `"\n"` (`String.withLineBreaks`), so the title never holds another.
 nonisolated struct WritingText: Equatable {
   var title: String
   var body: String
   /// In the body's UTF-16 offsets, as `Writing.links` keeps them.
   var links: [BodyLink]
 
+  /// A line break that came in with `title` from elsewhere is taken as a space: the title is one
+  /// line.
   init(title: String, body: String, links: [BodyLink]) {
-    self.title = title
+    self.title = String(title.map { $0.isNewline ? " " : $0 })
     self.body = body
     self.links = links
   }
@@ -18,7 +21,7 @@ nonisolated struct WritingText: Equatable {
   /// part in the body: the title has none.
   init(text: String, links: [BodyLink]) {
     let string = text as NSString
-    let lineBreak = string.range(of: "\n")
+    let lineBreak = Self.firstLineBreak(in: string)
     guard lineBreak.location != NSNotFound else {
       self.init(title: text, body: "", links: [])
       return
@@ -34,6 +37,11 @@ nonisolated struct WritingText: Equatable {
     self.init(
       title: string.substring(to: lineBreak.location), body: body,
       links: shifted.fitted(to: body))
+  }
+
+  /// Where `text` splits into the title and the body.
+  static func firstLineBreak(in text: NSString) -> NSRange {
+    text.range(of: "\n")
   }
 
   /// The title, then the body on the lines after it. A writing with no body is its title alone.
@@ -52,5 +60,13 @@ nonisolated struct WritingText: Equatable {
       BodyLink(
         range: $0.range.lowerBound + bodyStart..<$0.range.upperBound + bodyStart, url: $0.url)
     }
+  }
+}
+
+extension String {
+  /// With each line break, `"\r\n"`, `"\r"`, and the line and paragraph separators included, as
+  /// `"\n"`: the one the editor splits the title from the body at.
+  nonisolated var withLineBreaks: String {
+    String(map { $0.isNewline ? "\n" : $0 })
   }
 }

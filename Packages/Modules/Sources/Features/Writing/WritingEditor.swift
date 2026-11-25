@@ -33,7 +33,7 @@ struct WritingEditor: View {
       writing: writing, found: found, askTitle: { asking = $0 }, changed: changed,
       open: { openURL($0) }, lines: lines
     )
-    .offset(y: lines.viewOffset)
+    .offset(y: lines.placement.viewOffset)
     .sheet(item: $asking) { request in
       LinkTitleSheet(url: request.url) { title in
         asking = nil
@@ -45,9 +45,7 @@ struct WritingEditor: View {
 
 /// Where the editor's lines go: a fixed line box puts the baseline `-descender` above its bottom,
 /// and `offset(_:)` moves it to where `textStyle(role)` puts it. Not `baselineOffset`, which
-/// TextKit 2 takes off the line box. TextKit sets lines on whole pixels of the text view, so the
-/// body starts on one there and the view is moved by the rest of the body's offset, `viewOffset`;
-/// the title is moved down from there by `titleInset`, within a pixel of where it goes.
+/// TextKit 2 takes off the line box. `placement` sets the lines on the text view's pixels.
 struct EditorLines: Equatable {
   let scale: TypeScale
   let families: [FontFamily]
@@ -59,19 +57,10 @@ struct EditorLines: Equatable {
     return baseline - scale.lineHeight(role) - scale.font(role, in: families).descender
   }
 
-  var viewOffset: CGFloat {
-    let higher = min(offset(.heading), offset(.body))
-    return offset(.body) - ((offset(.body) - higher) / pixel).rounded(.up) * pixel
-  }
-
-  var titleInset: CGFloat {
-    ((offset(.heading) - viewOffset) / pixel).rounded() * pixel
-  }
-
-  /// How much taller than the title's and the body's lines `scale.space(.m)` apart the text view
-  /// is: the body's move down.
-  var excess: CGFloat {
-    offset(.body) - viewOffset
+  var placement: TitleAndBodyLines {
+    TitleAndBodyLines(
+      titleOffset: offset(.heading), bodyOffset: offset(.body), gap: scale.space(.m),
+      pixel: pixel)
   }
 
   /// The title paragraph's attributes, with `spacing` below it.
@@ -85,13 +74,6 @@ struct EditorLines: Equatable {
       attributes[.paragraphStyle] = spaced
     }
     return attributes
-  }
-
-  /// The space below a title `height` tall that sets the body's lines where they fall
-  /// `scale.space(.m)` below the title's, on the pixel a view placed there starts on.
-  func spacing(belowTitleOf height: CGFloat) -> CGFloat {
-    let apart = ((height + scale.space(.m)) / pixel).rounded(.up) * pixel
-    return apart - height + offset(.body) - viewOffset - titleInset
   }
 
   var body: [NSAttributedString.Key: Any] {
@@ -152,12 +134,13 @@ struct WritingTextView: UIViewRepresentable {
 
   /// Sets the text and its links again, when they or the type have changed.
   private func restyle(_ view: PlaceholderTextView, context: Context) {
-    guard context.coordinator.lines != lines || view.writing != writing else { return }
+    guard view.lines != lines || view.writing != writing else { return }
     context.coordinator.found = nil
-    context.coordinator.lines = lines
     view.lines = lines
-    view.titleSpacing = lines.spacing(belowTitleOf: lines.scale.lineHeight(.heading))
-    view.textContainerInset = UIEdgeInsets(top: lines.titleInset, left: 0, bottom: 0, right: 0)
+    // For one line, until `sizeThatFits` measures the title at the editor's width.
+    view.titleSpacing = lines.placement.spacing(belowTitleOf: lines.scale.lineHeight(.heading))
+    view.textContainerInset = UIEdgeInsets(
+      top: lines.placement.titleInset, left: 0, bottom: 0, right: 0)
     let selection = view.selectedRange
     let text = writing.text
     let styled = NSMutableAttributedString(string: text)
@@ -198,7 +181,7 @@ struct WritingTextView: UIViewRepresentable {
     view.spaceTheTitle(within: width)
     let fitted = view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
     // As tall as the title's and the body's lines apart, so what follows on the page stays put.
-    return CGSize(width: width, height: fitted.height - lines.excess)
+    return CGSize(width: width, height: fitted.height - lines.placement.excess)
   }
 
   func makeCoordinator() -> Coordinator {
@@ -215,8 +198,6 @@ struct WritingTextView: UIViewRepresentable {
     var askTitle: (TitleRequest) -> Void
     /// The mentions last marked in the text, until the text is set again.
     var found: FoundMentions?
-    /// The lines the text was last set in, so a change of the type restyles it.
-    var lines: EditorLines?
 
     init(changed: @escaping (WritingText) -> Void, askTitle: @escaping (TitleRequest) -> Void) {
       self.changed = changed
@@ -257,6 +238,7 @@ struct WritingTextView: UIViewRepresentable {
       performPasteOf attributedString: NSAttributedString, to textRange: UITextRange
     ) -> UITextRange {
       guard let view = supporting as? PlaceholderTextView else { return textRange }
+      let attributedString = attributedString.withLineBreaks
       let start = view.offset(from: view.beginningOfDocument, to: textRange.start)
       if start >= view.bodyStart, let url = URL(pastedLink: attributedString.string) {
         let length = view.offset(from: textRange.start, to: textRange.end)
@@ -333,6 +315,22 @@ struct WritingTextView: UIViewRepresentable {
       changed(view.writing)
     }
 
+    /// Text with another kind of line break goes in with `"\n"` in its place, through the text
+    /// input system, so undo takes it back as typed.
+    func textView(
+      _ view: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String
+    ) -> Bool {
+      let lineBreaks = text.withLineBreaks
+      guard lineBreaks != text, let view = view as? PlaceholderTextView else { return true }
+      let begin = view.beginningOfDocument
+      guard let from = view.position(from: begin, offset: range.location),
+        let to = view.position(from: from, offset: range.length),
+        let replaced = view.textRange(from: from, to: to)
+      else { return false }
+      view.replace(replaced, withText: lineBreaks)
+      return false
+    }
+
     func textViewDidChange(_ view: UITextView) {
       guard let view = view as? PlaceholderTextView else { return }
       view.showPlaceholderIfUntitled()
@@ -407,6 +405,20 @@ extension NSAttributedString.Key {
   static let mention = NSAttributedString.Key("MaiMention")
   /// Where the editor keeps which line a character is set as, a `LineRole`'s raw value.
   static let lineRole = NSAttributedString.Key("MaiLineRole")
+}
+
+extension NSAttributedString {
+  /// With each line break as `"\n"`, as `String.withLineBreaks` has it, keeping the attributes.
+  var withLineBreaks: NSAttributedString {
+    let copy = NSMutableAttributedString(attributedString: self)
+    let others = string.indices.filter { string[$0].isNewline && string[$0] != "\n" }
+    // From the end, so each range still points at its character.
+    for index in others.reversed() {
+      let character = index..<string.index(after: index)
+      copy.replaceCharacters(in: NSRange(character, in: string), with: "\n")
+    }
+    return copy
+  }
 }
 
 extension [NSAttributedString.Key: Any] {
@@ -523,7 +535,7 @@ final class PlaceholderTextView: UITextView {
         with: CGSize(width: width, height: .greatestFiniteMagnitude),
         options: .usesLineFragmentOrigin, context: nil
       ).height
-    let spacing = lines.spacing(belowTitleOf: height)
+    let spacing = lines.placement.spacing(belowTitleOf: height)
     guard spacing != titleSpacing else { return }
     titleSpacing = spacing
     let end = min(bodyStart, textStorage.length)
@@ -541,7 +553,7 @@ final class PlaceholderTextView: UITextView {
   /// Where the body starts: after the first line break, or past the end when there is none.
   var bodyStart: Int {
     let string = text as NSString
-    let lineBreak = string.range(of: "\n")
+    let lineBreak = WritingText.firstLineBreak(in: string)
     return lineBreak.location == NSNotFound ? string.length + 1 : NSMaxRange(lineBreak)
   }
 

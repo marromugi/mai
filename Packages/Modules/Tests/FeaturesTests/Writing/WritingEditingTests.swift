@@ -111,6 +111,146 @@ struct WritingEditingTests {
     #expect(editor.attributedText.attribute(.underlineStyle, at: 2, effectiveRange: nil) == nil)
   }
 
+  /// Another kind of line break typed into the title starts the body there, as Return does.
+  @Test(arguments: ["\r", "\r\n", "\u{2028}", "\u{2029}"])
+  func otherLineBreaksTypedIntoTheTitleStartTheBody(_ lineBreak: String) throws {
+    let edits = Edits(writing: Writing(title: "朝", body: "本文"))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    editor.selectedRange = NSRange(location: 1, length: 0)
+    type("夜" + lineBreak + "机", into: editor)
+    #expect(editor.text == "朝夜\n机\n本文")
+    #expect(edits.writing.title == "朝夜")
+    #expect(edits.writing.body == "机\n本文")
+    #expect(try role(at: 3, in: editor) == .body)
+    editor.undoManager?.undo()
+    #expect(edits.writing.title == "朝")
+  }
+
+  /// Another kind of line break pasted or dropped into the title starts the body there, and the
+  /// links that came with the text keep their characters.
+  @Test(arguments: ["\r", "\r\n", "\u{2028}"])
+  func otherLineBreaksPastedIntoTheTitleStartTheBody(_ lineBreak: String) throws {
+    let edits = Edits(writing: Writing(title: "朝", body: "本文"))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let dragged = NSMutableAttributedString(string: "夜" + lineBreak + "粉の店")
+    let shop = ("夜" + lineBreak + "粉" as NSString).length
+    dragged.addAttributes(.bodyLink(flour), range: NSRange(location: shop, length: 2))
+    _ = try pasted(dragged, into: editor, at: NSRange(location: 1, length: 0))
+    #expect(edits.writing.title == "朝夜")
+    #expect(edits.writing.body == "粉の店\n本文")
+    #expect(edits.writing.links == [BodyLink(range: 1..<3, url: flour)])
+  }
+
+  /// A title that came with a line break from elsewhere is shown as one line, the break as a space,
+  /// and is set once, not at every update.
+  @Test func aTitleHoldingALineBreakIsOneLine() throws {
+    let edits = Edits(writing: Writing(title: "朝\n昼", body: "本文"))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try #require(editorView(in: page))
+    #expect(editor.text == "朝 昼\n本文")
+    let marker = NSAttributedString.Key("TestMarker")
+    editor.textStorage.addAttribute(marker, value: true, range: NSRange(location: 0, length: 1))
+    page.show(screen(edits: edits))
+    #expect(editor.textStorage.attribute(marker, at: 0, effectiveRange: nil) as? Bool == true)
+    editor.selectedRange = NSRange(location: (editor.text as NSString).length, length: 0)
+    editor.insertText("。")
+    #expect(edits.writing.title == "朝 昼")
+    #expect(edits.writing.body == "本文。")
+  }
+
+  /// Text typed goes in in the type of the line the caret is on: the title's at a title-only
+  /// writing's end and at the title's end, the body's at the body's start.
+  @Test func typingGoesInInTheTypeOfTheCaretsLine() throws {
+    let alone = HostedPage(screen(edits: Edits(writing: Writing(title: "朝", body: ""))))
+    let titleOnly = try focusedEditor(in: alone)
+    titleOnly.selectedRange = NSRange(location: 1, length: 0)
+    #expect(try typedRole(in: titleOnly) == .heading)
+    let page = HostedPage(screen(edits: Edits()))
+    let editor = try focusedEditor(in: page)
+    editor.selectedRange = NSRange(location: 1, length: 0)
+    #expect(try typedRole(in: editor) == .heading)
+    editor.selectedRange = inBody(0)
+    #expect(try typedRole(in: editor) == .body)
+  }
+
+  /// Text dragged with a link into the title goes in without it: the title holds none.
+  @Test func textDraggedWithALinkIntoTheTitleLosesIt() throws {
+    let edits = Edits()
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let dragged = NSMutableAttributedString(string: "粉の店")
+    dragged.addAttributes(.bodyLink(flour), range: NSRange(location: 0, length: 3))
+    _ = try pasted(dragged, into: editor, at: NSRange(location: 1, length: 0))
+    #expect(edits.writing.title == "朝粉の店")
+    #expect(edits.writing.links.isEmpty)
+    #expect(editor.linkedText.isEmpty)
+    #expect(editor.attributedText.attribute(.underlineStyle, at: 1, effectiveRange: nil) == nil)
+  }
+
+  /// A title that wraps with no body after it has the space below it measured for its lines.
+  @Test func aWrappedTitleWithNoBodyIsSpacedForItsLines() throws {
+    let title = String(repeating: "間合いの調整", count: 4)
+    let edits = Edits(writing: Writing(title: title, body: ""))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try #require(editorView(in: page))
+    let lines = try #require(editor.lines)
+    #expect(editor.text == title)
+    let measured = editor.titleSpacing
+    #expect(measured > 0)
+    editor.titleSpacing = 0
+    editor.spaceTheTitle(within: editor.bounds.width)
+    let paragraph = try #require(
+      editor.attributedText.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
+        as? NSParagraphStyle)
+    #expect(paragraph.paragraphSpacing == measured)
+    #expect(lines.scale.lineHeight(.heading) * 2 <= editor.bounds.height)
+  }
+
+  /// The header bar fades in as the title's line scrolls above the page's top: half of the line
+  /// off is half faded in, and a line wholly off shows it whole.
+  @Test func theHeaderFadesInAsTheTitleScrollsOff() throws {
+    let cutOff = CutOff()
+    let page = HostedPage(
+      ScrollView {
+        WritingPage(
+          writing: sampled, photos: [], width: 402, back: {}, titleCutOff: { cutOff.last = $0 })
+      })
+    let editor = try #require(editorView(in: page))
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    let lines = try #require(editor.lines)
+    let lineHeight = lines.scale.lineHeight(.heading)
+    // Where the title's line starts, from the page's top below the safe area.
+    let top =
+      editor.convert(CGPoint.zero, to: scroll).y - lines.placement.viewOffset
+      - scroll.adjustedContentInset.top
+    #expect(cutOff.last ?? 0 == 0)
+    scroll.contentOffset.y = top + lineHeight / 2
+    page.settle()
+    #expect(abs((cutOff.last ?? 0) - 0.5) < 0.05)
+    scroll.contentOffset.y = top + lineHeight * 3
+    page.settle()
+    #expect(cutOff.last == 1)
+  }
+
+  /// What measures the title for the header bar is not drawn: on an untitled page only the
+  /// placeholder is, in the tertiary colour.
+  @Test func theTitleMeasuredForTheHeaderIsNotDrawn() throws {
+    let page = HostedPage(
+      screen(edits: Edits(writing: Writing(title: "", body: "本文")))
+        .background(Color(.systemBackground))
+        .environment(\.colorScheme, .light))
+    let editor = try #require(editorView(in: page))
+    let lines = try #require(editor.lines)
+    let titleLine = editor.convert(
+      CGRect(
+        x: 0, y: editor.textContainerInset.top, width: editor.bounds.width,
+        height: lines.scale.lineHeight(.heading)), to: nil)
+    #expect(try inkPixels(in: page.image(), within: titleLine) == 0)
+    #expect(try darkPixels(in: page.image(), within: titleLine) > 0)
+  }
+
   /// Return in the body starts a new paragraph.
   @Test func returnInTheBodyStartsANewLine() throws {
     let edits = Edits()
@@ -353,9 +493,9 @@ struct WritingEditingTests {
     #expect(handedOn == [bread])
   }
 
-  /// A tap on a link or mention opens it while the body has no caret; with the caret in the body,
-  /// the text view's own taps take it, and they wait for this one to fail first.
-  @Test func aTapOpensALinkOnlyWhileTheBodyHasNoCaret() async throws {
+  /// A tap on a link or mention opens it while the editor has no caret; with a caret anywhere in
+  /// it, the text view's own taps take it, and they wait for this one to fail first.
+  @Test func aTapOpensALinkOnlyWhileTheEditorHasNoCaret() async throws {
     let edits = Edits(
       writing: Writing(
         title: "朝", body: "小さなパンと夜の机に向かう", links: [BodyLink(range: 0..<5, url: bread)]))
@@ -878,6 +1018,8 @@ private struct TitleAndBody: View {
         Text(verbatim: writing.title).textStyle(.heading)
         Text(body: writing.body).textStyle(.body)
       }
+      // A line after them, where what follows on the page starts.
+      Rectangle().fill(.black).frame(height: 1)
     }
     .frame(width: area.lineLength, alignment: .leading)
     .padding(.horizontal, area.margin)
@@ -1015,11 +1157,15 @@ nonisolated private func inBody(_ location: Int, _ length: Int = 0) -> NSRange {
 private func role(at location: Int, in view: UITextView) throws -> TextRole {
   let font = try #require(
     view.attributedText.attribute(.font, at: location, effectiveRange: nil) as? UIFont)
+  return try role(ofSize: font.pointSize)
+}
+
+private func role(ofSize size: CGFloat) throws -> TextRole {
   let scale = TypeScale.standard
-  switch font.pointSize {
+  switch size {
   case scale.size(.heading): return .heading
   case scale.size(.body): return .body
-  default: throw Unexpected.size(font.pointSize)
+  default: throw Unexpected.size(size)
   }
 }
 
@@ -1035,6 +1181,31 @@ private func type(_ text: String, into view: UITextView) {
     ?? true
   {
     view.insertText(text)
+  }
+}
+
+/// Whether text typed at `view`'s caret goes in as the title or the body, by its font's size.
+@MainActor
+private func typedRole(in view: UITextView) throws -> TextRole {
+  let font = try #require(view.typingAttributes[.font] as? UIFont)
+  return try role(ofSize: font.pointSize)
+}
+
+/// What `titleCutOff` heard last.
+@MainActor
+private final class CutOff {
+  var last: CGFloat?
+}
+
+/// How many pixels in `rect` (in points) are drawn in ink, the text's own colour: darker than the
+/// tertiary colour.
+private func inkPixels(in image: UIImage, within rect: CGRect) throws -> Int {
+  let (pixels, width, height) = try greyPixels(image)
+  let scale = image.scale
+  let columns = max(0, Int(rect.minX * scale))..<min(width, Int(rect.maxX * scale))
+  let rows = max(0, Int(rect.minY * scale))..<min(height, Int(rect.maxY * scale))
+  return rows.reduce(0) { count, row in
+    count + columns.count { pixels[row * width + $0] < 128 }
   }
 }
 
