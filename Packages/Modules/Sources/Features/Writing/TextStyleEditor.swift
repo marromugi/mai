@@ -10,12 +10,16 @@ import UIKit
 /// takes no line break: one typed is refused, and those in pasted text are dropped.
 ///
 /// `links` are drawn as `Text(body:links:)` draws them, and `changed` hears them with the text.
-/// Where `pastesLinks`, pasting a web address over selected text links it; with nothing selected,
+/// The mentions `found` in the text it holds are drawn as `Text(body:mentions:)` draws them, those
+/// on a link left out. A tap on a link or a mention while the editor has no caret hands its address
+/// to the environment's `openURL`; with a caret, a tap moves it as on any text. VoiceOver offers
+/// each as an action. Where `pastesLinks`, pasting a web address over selected text links it; with nothing selected,
 /// a sheet asks for a title, and the title goes in at the caret, linked.
 struct TextStyleEditor: View {
   let role: TextRole
   let text: String
   var links: [BodyLink] = []
+  var found: FoundMentions?
   var placeholder = ""
   var oneLine = false
   var pastesLinks = false
@@ -23,14 +27,16 @@ struct TextStyleEditor: View {
   @State private var asking: TitleRequest?
   @EnvironmentTypeScale private var scale
   @Environment(\.fontFamilies) private var families
+  @Environment(\.openURL) private var openURL
 
   var body: some View {
     // A fixed line box puts the baseline `-descender` above its bottom; this moves it to where
     // `textStyle(role)` puts it. Not `baselineOffset`, which TextKit 2 takes off the line box.
     let baseline = scale.size(role) + scale.emBoxShift(role, in: families)
     StyledTextView(
-      role: role, text: text, links: links, placeholder: placeholder, oneLine: oneLine,
-      askTitle: pastesLinks ? { asking = $0 } : nil, changed: changed, scale: scale,
+      role: role, text: text, links: links, found: found, placeholder: placeholder,
+      oneLine: oneLine, askTitle: pastesLinks ? { asking = $0 } : nil, changed: changed,
+      open: { openURL($0) }, scale: scale,
       families: families
     )
     .offset(y: baseline - scale.lineHeight(role) - scale.font(role, in: families).descender)
@@ -55,10 +61,12 @@ struct StyledTextView: UIViewRepresentable {
   let role: TextRole
   let text: String
   let links: [BodyLink]
+  let found: FoundMentions?
   let placeholder: String
   let oneLine: Bool
   let askTitle: ((TitleRequest) -> Void)?
   let changed: (String, [BodyLink]) -> Void
+  let open: (URL) -> Void
   let scale: TypeScale
   let families: [FontFamily]
 
@@ -69,18 +77,34 @@ struct StyledTextView: UIViewRepresentable {
     view.textContainerInset = .zero
     view.textContainer.lineFragmentPadding = 0
     view.delegate = context.coordinator
+    let tap = UITapGestureRecognizer(
+      target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
+    tap.delegate = context.coordinator
+    view.addGestureRecognizer(tap)
     return view
   }
 
   func updateUIView(_ view: PlaceholderTextView, context: Context) {
     context.coordinator.changed = changed
     context.coordinator.askTitle = askTitle
+    view.open = open
     view.pasteDelegate = askTitle == nil ? nil : context.coordinator
     // Never while composing: replacing the text ends the input method's composition.
-    guard view.markedTextRange == nil,
+    guard view.markedTextRange == nil else { return }
+    restyle(view, context: context)
+    if let found, found.body == view.text, context.coordinator.found != found {
+      context.coordinator.found = found
+      view.mark(found)
+    }
+  }
+
+  /// Sets the text and its links again, when they or the type have changed.
+  private func restyle(_ view: PlaceholderTextView, context: Context) {
+    guard
       context.coordinator.scale != scale || context.coordinator.families != families
         || view.text != text || view.links != links
     else { return }
+    context.coordinator.found = nil
     context.coordinator.scale = scale
     context.coordinator.families = families
     let attributes = scale.attributes(role, in: families)
@@ -125,11 +149,15 @@ struct StyledTextView: UIViewRepresentable {
     Coordinator(changed: changed, oneLine: oneLine)
   }
 
-  /// The text view's delegate, and, where links are pasted, its paste delegate: the system hands a
-  /// paste to it, not the pasteboard to the app.
-  final class Coordinator: NSObject, UITextViewDelegate, UITextPasteDelegate {
+  /// The text view's delegate, the delegate of its tap on links, and, where links are pasted, its
+  /// paste delegate: the system hands a paste to it, not the pasteboard to the app.
+  final class Coordinator: NSObject, UITextViewDelegate, UITextPasteDelegate,
+    UIGestureRecognizerDelegate
+  {
     var changed: (String, [BodyLink]) -> Void
     let oneLine: Bool
+    /// The mentions last marked in the text, until the text is set again.
+    var found: FoundMentions?
     /// The scale and families the text was last set in, so a change of either restyles it.
     var scale: TypeScale?
     var families: [FontFamily]?
@@ -139,6 +167,31 @@ struct StyledTextView: UIViewRepresentable {
     init(changed: @escaping (String, [BodyLink]) -> Void, oneLine: Bool) {
       self.changed = changed
       self.oneLine = oneLine
+    }
+
+    @objc func tapped(_ tap: UITapGestureRecognizer) {
+      guard let view = tap.view as? PlaceholderTextView,
+        let url = link(openedAt: tap.location(in: view), in: view)
+      else { return }
+      view.open(url)
+    }
+
+    /// Taken only where a tap opens a link.
+    func gestureRecognizerShouldBegin(_ tap: UIGestureRecognizer) -> Bool {
+      guard let view = tap.view as? UITextView else { return false }
+      return link(openedAt: tap.location(in: view), in: view) != nil
+    }
+
+    /// The link or mention a tap at `point` opens: the one drawn there, while `view` has no caret.
+    func link(openedAt point: CGPoint, in view: UITextView) -> URL? {
+      view.isFirstResponder ? nil : view.link(at: point)
+    }
+
+    /// The text view's own taps, which put the caret in, wait for this one to fail.
+    func gestureRecognizer(
+      _ tap: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer
+    ) -> Bool {
+      other.view === tap.view && other is UITapGestureRecognizer
     }
 
     /// A web address pasted or dropped, and nothing else, goes to `paste(_:into:askingTitle:)`
@@ -190,6 +243,7 @@ struct StyledTextView: UIViewRepresentable {
       guard selection.length == 0 else {
         let linked = NSMutableAttributedString(
           attributedString: view.textStorage.attributedSubstring(from: selection))
+        linked.removeAttribute(.mention, range: NSRange(location: 0, length: linked.length))
         linked.addAttributes(.bodyLink(url), range: NSRange(location: 0, length: linked.length))
         restyle(selection, in: view, as: linked)
         return
@@ -219,6 +273,10 @@ struct StyledTextView: UIViewRepresentable {
       view.undoManager?.registerUndo(withTarget: view) { [weak self] view in
         self?.restyle(range, in: view, as: before)
       }
+      // A mention a link now overlaps is left out whole, as the page leaves it out.
+      if let found, found.body == view.text {
+        view.mark(found)
+      }
       Self.linkTypingOnlyInsideALink(in: view)
       changed(view.text, view.links)
     }
@@ -243,6 +301,7 @@ struct StyledTextView: UIViewRepresentable {
     }
 
     func textViewDidChangeSelection(_ view: UITextView) {
+      view.typingAttributes[.mention] = nil
       Self.linkTypingOnlyInsideALink(in: view)
     }
 
@@ -272,6 +331,8 @@ extension NSAttributedString.Key {
   /// Where the editor keeps a body link's address: not `.link`, which a text view opens on a tap
   /// even while it is being edited.
   static let bodyLink = NSAttributedString.Key("MaiBodyLink")
+  /// Where the editor keeps the link of a mention of another writing's title.
+  static let mention = NSAttributedString.Key("MaiMention")
 }
 
 extension [NSAttributedString.Key: Any] {
@@ -283,6 +344,71 @@ extension [NSAttributedString.Key: Any] {
 }
 
 extension UITextView {
+  /// Marks the mentions `found` in the text, as `Text(body:mentions:)` draws them, in place of those
+  /// marked before, leaving out any on a link. The text must be the body they were found in.
+  func mark(_ found: FoundMentions) {
+    let storage = textStorage
+    let whole = NSRange(location: 0, length: storage.length)
+    storage.beginEditing()
+    storage.enumerateAttribute(.mention, in: whole) { value, range, _ in
+      guard value != nil else { return }
+      storage.removeAttribute(.mention, range: range)
+      storage.enumerateAttribute(.bodyLink, in: range) { link, part, _ in
+        if link == nil { storage.removeAttribute(.underlineStyle, range: part) }
+      }
+    }
+    let linked = links.map { NSRange($0.range) }
+    for mention in found.mentions {
+      // Converted in the body they were found in: an index into another string, even one equal
+      // to it, may stand for another place.
+      let range = NSRange(mention.range, in: found.body)
+      guard NSMaxRange(range) <= storage.length,
+        !linked.contains(where: { NSIntersectionRange($0, range).length > 0 })
+      else { continue }
+      storage.addAttributes(
+        [
+          .mention: mention.writing.link,
+          .underlineStyle: NSUnderlineStyle([.single, .patternDot]).rawValue,
+        ], range: range)
+    }
+    storage.endEditing()
+  }
+
+  /// Each link's and mention's text and address, in order.
+  var linkedText: [(text: String, url: URL)] {
+    var found: [(location: Int, text: String, url: URL)] = []
+    let storage = textStorage
+    for key in [NSAttributedString.Key.bodyLink, .mention] {
+      storage.enumerateAttribute(key, in: NSRange(location: 0, length: storage.length)) {
+        value, range, _ in
+        guard let url = value as? URL else { return }
+        found.append((range.location, storage.attributedSubstring(from: range).string, url))
+      }
+    }
+    return found.sorted { $0.location < $1.location }.map { ($0.text, $0.url) }
+  }
+
+  /// The address of the link or mention drawn under `point`, if any.
+  func link(at point: CGPoint) -> URL? {
+    guard let position = closestPosition(to: point) else { return nil }
+    let offset = self.offset(from: beginningOfDocument, to: position)
+    let storage = textStorage
+    let string = storage.string as NSString
+    // The closest position is between two characters; the one under the point is either. Each is
+    // measured whole: half of a character stored as two UTF-16 units has no place of its own.
+    for index in [offset - 1, offset] where index >= 0 && index < storage.length {
+      let character = string.rangeOfComposedCharacterSequence(at: index)
+      guard let start = self.position(from: beginningOfDocument, offset: character.location),
+        let end = self.position(from: start, offset: character.length),
+        let range = textRange(from: start, to: end),
+        firstRect(for: range).contains(point)
+      else { continue }
+      return storage.attribute(.bodyLink, at: index, effectiveRange: nil) as? URL
+        ?? storage.attribute(.mention, at: index, effectiveRange: nil) as? URL
+    }
+    return nil
+  }
+
   /// The text's links, in order, as the body keeps them.
   var links: [BodyLink] {
     var links: [BodyLink] = []
@@ -297,8 +423,23 @@ extension UITextView {
 }
 
 /// A text view that shows `placeholder` over its first line while it holds no text, composed text
-/// included.
+/// included. VoiceOver offers each link and mention in it as an action that hands its address to
+/// `open`.
 final class PlaceholderTextView: UITextView {
+  var open: (URL) -> Void = { _ in }
+
+  override var accessibilityCustomActions: [UIAccessibilityCustomAction]? {
+    get {
+      linkedText.map { text, url in
+        UIAccessibilityCustomAction(name: "「\(text)」を開く") { [weak self] _ in
+          self?.open(url)
+          return self != nil
+        }
+      }
+    }
+    set {}
+  }
+
   private(set) lazy var placeholder: UILabel = {
     let label = UILabel()
     addSubview(label)

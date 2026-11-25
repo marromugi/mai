@@ -11,7 +11,8 @@ struct WritingModeTests {
   @Test(arguments: [false, true])
   func scrollingStopsOnlyInTheMode(_ typesetting: Bool) throws {
     let page = HostedPage(screen(typesetting: typesetting))
-    let scrollViews = page.scrollViews
+    // The page's own, not the editors', which never scroll.
+    let scrollViews = page.scrollViews.filter { !($0 is UITextView) }
     try #require(!scrollViews.isEmpty)
     #expect(scrollViews.allSatisfy { $0.isScrollEnabled != typesetting })
   }
@@ -70,7 +71,6 @@ private func screen(typesetting: Bool, setting: BodySetting = .standard) -> Writ
     edit: { _ in },
     photos: [],
     setting: .constant(setting),
-    editing: .constant(false),
     typesetting: .constant(typesetting),
     takingPhoto: .constant(false),
     camera: .standIn(taking: nil),

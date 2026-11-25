@@ -8,15 +8,17 @@ import UIKit
 
 @MainActor
 struct WritingEditingTests {
-  @Test func theBodyIsEditableOnlyWhileEditing() {
-    #expect(bodyEditor(in: HostedPage(screen(editing: false, edits: Edits()))) == nil)
-    #expect(bodyEditor(in: HostedPage(screen(editing: true, edits: Edits()))) != nil)
+  /// A page just opened can be typed into: the title and body are editors.
+  @Test func theTitleAndBodyAreEditableAsThePageOpens() {
+    let page = HostedPage(screen(edits: Edits()))
+    #expect(page.textViews.contains { $0.text == "朝" && $0.isEditable })
+    #expect(bodyEditor(in: page)?.isEditable == true)
   }
 
   /// Text typed into the body reaches `edit` as the writing's whole body.
   @Test func typingInTheBodyEditsTheWriting() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let editor = try #require(bodyEditor(in: page))
     editor.selectedRange = NSRange(location: (editor.text as NSString).length, length: 0)
     editor.insertText("追記")
@@ -26,7 +28,7 @@ struct WritingEditingTests {
   /// A line break typed into the title is refused, so the title on screen is the one saved.
   @Test func aLineBreakTypedIntoTheTitleIsRefused() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let title = try focusedTitle(in: page, holding: "朝")
     title.selectedRange = NSRange(location: 1, length: 0)
     type("\n", into: title)
@@ -38,7 +40,7 @@ struct WritingEditingTests {
   /// Text with line breaks replacing part of the title keeps its words and drops the breaks.
   @Test func aLineBreakInTextPutIntoTheTitleIsDropped() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let title = try focusedTitle(in: page, holding: "朝")
     title.selectedRange = NSRange(location: 0, length: 1)
     type("夜の\n机", into: title)
@@ -49,7 +51,7 @@ struct WritingEditingTests {
   /// Return in the body starts a new paragraph.
   @Test func returnInTheBodyStartsANewLine() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.becomeFirstResponder()
     page.settle()
@@ -61,7 +63,7 @@ struct WritingEditingTests {
   /// Return over a selection in the title leaves the selected text in place.
   @Test func returnOverASelectionInTheTitleKeepsIt() throws {
     let edits = Edits(writing: Writing(title: "朝昼", body: "本文"))
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let title = try focusedTitle(in: page, holding: "朝昼")
     title.selectedRange = NSRange(location: 0, length: 2)
     type("\n", into: title)
@@ -73,11 +75,11 @@ struct WritingEditingTests {
   /// inside it.
   @Test func aBodyChangedFromElsewhereKeepsTheCaretInside() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.selectedRange = NSRange(location: (body.text as NSString).length, length: 0)
     edits.writing.body = "朝\n夜"
-    page.show(screen(editing: true, edits: edits))
+    page.show(screen(edits: edits))
     #expect(body.text == "朝\n夜")
     #expect(body.selectedRange == NSRange(location: 3, length: 0))
   }
@@ -85,10 +87,10 @@ struct WritingEditingTests {
   /// A new body setting while editing sets the body again in it.
   @Test func aNewBodySettingRestylesTheBody() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     let setting = try #require(BodySetting(base: 20, lineHeight: 40, tracking: 50))
-    page.show(screen(editing: true, edits: edits, setting: setting))
+    page.show(screen(edits: edits, setting: setting))
     let font = try #require(
       body.attributedText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
     #expect(font.pointSize == TypeScale(.large, body: setting).size(.body))
@@ -98,10 +100,10 @@ struct WritingEditingTests {
   @Test func aNewStackRestylesTheBody() throws {
     let edits = Edits()
     let page = HostedPage(
-      screen(editing: true, edits: edits).environment(\.fontFamilies, [.notoSansJP]))
+      screen(edits: edits).environment(\.fontFamilies, [.notoSansJP]))
     let body = try #require(bodyEditor(in: page))
     page.show(
-      screen(editing: true, edits: edits).environment(\.fontFamilies, [.inter, .notoSansJP]))
+      screen(edits: edits).environment(\.fontFamilies, [.inter, .notoSansJP]))
     #expect(bodyEditor(in: page) === body)
     let font = try #require(
       body.attributedText.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
@@ -112,7 +114,7 @@ struct WritingEditingTests {
   @Test(arguments: [0, 2])
   func undoAfterARefusedLineBreakTakesBackTheTyping(_ caret: Int) throws {
     let edits = Edits(writing: Writing(title: "朝昼", body: "本文"))
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let title = try focusedTitle(in: page, holding: "朝昼")
     title.selectedRange = NSRange(location: caret, length: 0)
     type("夕", into: title)
@@ -131,7 +133,7 @@ struct WritingEditingTests {
   /// The placeholder goes as soon as text is being composed into an empty title.
   @Test func composingIntoAnEmptyTitleHidesThePlaceholder() throws {
     let page = HostedPage(
-      screen(editing: true, edits: Edits(writing: Writing(title: "", body: "本文"))))
+      screen(edits: Edits(writing: Writing(title: "", body: "本文"))))
     let title = try focusedTitle(in: page, holding: "")
     let line = title.convert(title.bounds, to: nil)
     // Past the first character, where only the placeholder's later characters would be.
@@ -143,16 +145,16 @@ struct WritingEditingTests {
     #expect(try darkPixels(in: page.image(), within: pastFirst) == 0)
   }
 
-  /// Text still being composed when editing ends is kept.
-  @Test func textBeingComposedWhenEditingEndsIsKept() async throws {
+  /// Text still being composed when the page closes is kept.
+  @Test func textBeingComposedWhenThePageClosesIsKept() async throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.becomeFirstResponder()
     page.settle()
     body.selectedRange = NSRange(location: (body.text as NSString).length, length: 0)
     body.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0))
-    page.show(screen(editing: false, edits: edits))
+    page.show(Color.clear)
     try await page.settle { edits.writing.body.hasSuffix("かな") }
     #expect(edits.writing.body == "朝の机\n二行目かな")
   }
@@ -160,7 +162,7 @@ struct WritingEditingTests {
   /// While an input method composes text, nothing is edited; the text it settles on is.
   @Test func composedTextEditsTheWritingOnceSettled() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let editor = try #require(bodyEditor(in: page))
     editor.selectedRange = NSRange(location: (editor.text as NSString).length, length: 0)
     editor.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0))
@@ -169,18 +171,18 @@ struct WritingEditingTests {
     #expect(edits.writing.body == "朝の机\n二行目か")
   }
 
-  /// The title and body are drawn where they are when read, so entering the mode moves no text:
-  /// the same lines, each within a pixel. SwiftUI and TextKit may round a line whose position
+  /// The editors draw the title and body where `textStyle` sets them as text: the same lines, each
+  /// within a pixel. SwiftUI and TextKit may round a line whose position
   /// isn't a whole number of pixels to neighbouring pixels; none is further off, and none drifts.
   @Test(arguments: [
     (DynamicTypeSize.large, BodySetting?.some(.standard)), (.accessibility5, .standard),
     // Lines closer than the font's own, and the widest tracking.
     (.large, BodySetting(base: 16, lineHeight: 16, tracking: 200)),
   ])
-  func editingMovesNoLinePastAPixel(_ size: DynamicTypeSize, _ setting: BodySetting?) throws {
+  func theEditorsSetLinesAsTextDoes(_ size: DynamicTypeSize, _ setting: BodySetting?) throws {
     let setting = try #require(setting)
-    let read = try inkBands(drawn(editing: false, size, setting))
-    let edited = try inkBands(drawn(editing: true, size, setting))
+    let read = try inkBands(drawn(editors: false, size, setting))
+    let edited = try inkBands(drawn(editors: true, size, setting))
     try #require(read.count == edited.count)
     #expect(read.count > 3)
     for (line, (readBand, editedBand)) in zip(read, edited).enumerated() {
@@ -191,10 +193,10 @@ struct WritingEditingTests {
 
   /// With a Latin family first, the Latin sets the baseline and Japanese falls back: still no line
   /// moves.
-  @Test func editingMovesNoLinePastAPixelWithALatinFamilyFirst() throws {
+  @Test func theEditorsSetLinesAsTextDoesWithALatinFamilyFirst() throws {
     let families = [FontFamily.inter, .notoSansJP]
-    let read = try inkBands(drawn(editing: false, .large, writing: mixed, families: families))
-    let edited = try inkBands(drawn(editing: true, .large, writing: mixed, families: families))
+    let read = try inkBands(drawn(editors: false, .large, writing: mixed, families: families))
+    let edited = try inkBands(drawn(editors: true, .large, writing: mixed, families: families))
     try #require(read.count == edited.count)
     #expect(read.count > 3)
     for (line, (readBand, editedBand)) in zip(read, edited).enumerated() {
@@ -203,33 +205,175 @@ struct WritingEditingTests {
     }
   }
 
-  /// A title written into the body while editing is linked once editing ends, as on a page opened
-  /// with it.
-  @Test func leavingEditingLinksTitlesInTheEditedBody() async throws {
-    let nightDesk = Writing(title: "夜の机に向かう", body: "")
-    let edits = Edits(writing: Writing(title: "朝", body: "本文"))
-    func page(editing: Bool) -> some View {
-      WritingScreen(
-        writing: edits.writing, others: [nightDesk], open: { _ in },
-        edit: { edits.writing.apply($0) },
-        photos: [], setting: .constant(.standard), editing: .constant(editing),
-        typesetting: .constant(false), takingPhoto: .constant(false), camera: .standIn(taking: nil),
-        photoTaken: { _ in })
-    }
-    let hosted = HostedPage(page(editing: true))
-    edits.writing.body = "本文と夜の机に向かう"
-    hosted.show(page(editing: true))
-    hosted.show(page(editing: false))
-    let opened = HostedPage(page(editing: false))
+  /// A title typed into the body is linked once the typing rests, as on a page opened with it.
+  @Test func aTitleTypedIntoTheBodyIsLinkedOnceTypingRests() async throws {
+    let edits = Edits(writing: Writing(title: "朝", body: "本文と"))
+    let hosted = HostedPage(mentioning(edits))
+    let body = try #require(bodyEditor(in: hosted))
+    body.selectedRange = NSRange(location: 3, length: 0)
+    type("夜の机に向かう", into: body)
+    hosted.show(mentioning(edits))
+    #expect(body.linkedText.isEmpty)
+    try await hosted.settle(within: mentionsFound) { !body.linkedText.isEmpty }
+    #expect(body.linkedText.map(\.text) == ["夜の机に向かう"])
+    let opened = HostedPage(mentioning(edits))
     try await opened.settle { false }
-    try await hosted.settle { false }
     #expect(hosted.image().pngData() == opened.image().pngData())
+  }
+
+  /// Text typed right after a mention is not part of it, and a mention typed into stops being one.
+  @Test func typingAtAndIntoAMention() async throws {
+    let edits = Edits(writing: Writing(title: "朝", body: "本文と夜の机に向かう"))
+    let page = HostedPage(mentioning(edits))
+    let body = try #require(bodyEditor(in: page))
+    try await page.settle(within: mentionsFound) { !body.linkedText.isEmpty }
+    body.becomeFirstResponder()
+    body.selectedRange = NSRange(location: 10, length: 0)
+    type("。", into: body)
+    #expect(body.textStorage.attribute(.mention, at: 10, effectiveRange: nil) == nil)
+    #expect(body.textStorage.attribute(.underlineStyle, at: 10, effectiveRange: nil) == nil)
+    body.selectedRange = NSRange(location: 5, length: 0)
+    type("い", into: body)
+    page.show(mentioning(edits))
+    try await page.settle(within: mentionsFound) { body.linkedText.isEmpty }
+    #expect(body.linkedText.isEmpty)
+    #expect(body.textStorage.attribute(.underlineStyle, at: 4, effectiveRange: nil) == nil)
+  }
+
+  /// A mention and a link are found under a point on their text, and nothing past a line's end.
+  @Test func aLinkOrMentionIsFoundUnderAPointOnIt() async throws {
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "小さなパンと\n夜の机に向かう", links: [BodyLink(range: 0..<5, url: bread)]))
+    let page = HostedPage(mentioning(edits))
+    let body = try #require(bodyEditor(in: page))
+    try await page.settle(within: mentionsFound) { body.linkedText.count == 2 }
+    #expect(body.link(at: centre(of: 1, in: body)) == bread)
+    #expect(body.link(at: centre(of: 5, in: body)) == nil)
+    #expect(body.link(at: centre(of: 9, in: body)) == nightDesk.link)
+    let pastTheEnd = centre(of: 5, in: body).applying(.init(translationX: 120, y: 0))
+    #expect(body.link(at: pastTheEnd) == nil)
+  }
+
+  /// VoiceOver offers each link and mention as an action; on a mention it opens its writing.
+  @Test func voiceOverOpensAMention() async throws {
+    var opened: [Writing] = []
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "小さなパンと夜の机に向かう", links: [BodyLink(range: 0..<5, url: bread)]))
+    let page = HostedPage(mentioning(edits, open: { opened.append($0) }))
+    let body = try #require(bodyEditor(in: page))
+    try await page.settle(within: mentionsFound) { body.linkedText.count == 2 }
+    let actions = try #require(body.accessibilityCustomActions)
+    #expect(actions.map(\.name) == ["「小さなパン」を開く", "「夜の机に向かう」を開く"])
+    _ = actions[1].actionHandler?(actions[1])
+    #expect(opened.map(\.id) == [nightDesk.id])
+  }
+
+  /// VoiceOver's action on a link hands its address to the environment's `openURL`.
+  @Test func voiceOverOpensALink() throws {
+    var handedOn: [URL] = []
+    let page = HostedPage(
+      TextStyleEditor(role: .body, text: "小さなパン", links: [BodyLink(range: 0..<5, url: bread)]) {
+        _, _ in
+      }
+      .environment(
+        \.openURL,
+        OpenURLAction {
+          handedOn.append($0)
+          return .handled
+        }))
+    let editor = try #require(page.textViews.first)
+    let action = try #require(editor.accessibilityCustomActions?.first)
+    _ = action.actionHandler?(action)
+    #expect(handedOn == [bread])
+  }
+
+  /// A tap on a link or mention opens it while the body has no caret; with the caret in the body,
+  /// the text view's own taps take it, and they wait for this one to fail first.
+  @Test func aTapOpensALinkOnlyWhileTheBodyHasNoCaret() async throws {
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "小さなパンと夜の机に向かう", links: [BodyLink(range: 0..<5, url: bread)]))
+    let page = HostedPage(mentioning(edits))
+    let body = try #require(bodyEditor(in: page))
+    try await page.settle(within: mentionsFound) { body.linkedText.count == 2 }
+    let tap = try #require(
+      body.gestureRecognizers?.first { $0.delegate is StyledTextView.Coordinator })
+    let coordinator = try #require(tap.delegate as? StyledTextView.Coordinator)
+    #expect(coordinator.link(openedAt: centre(of: 1, in: body), in: body) == bread)
+    #expect(coordinator.link(openedAt: centre(of: 8, in: body), in: body) == nightDesk.link)
+    #expect(coordinator.link(openedAt: centre(of: 5, in: body), in: body) == nil)
+    let others = (body.gestureRecognizers ?? []).filter { $0 !== tap }
+    #expect(others.contains { coordinator.gestureRecognizer(tap, shouldBeRequiredToFailBy: $0) })
+    #expect(
+      !others.contains {
+        !($0 is UITapGestureRecognizer)
+          && coordinator.gestureRecognizer(tap, shouldBeRequiredToFailBy: $0)
+      })
+    body.becomeFirstResponder()
+    page.settle()
+    #expect(coordinator.link(openedAt: centre(of: 1, in: body), in: body) == nil)
+    #expect(coordinator.link(openedAt: centre(of: 8, in: body), in: body) == nil)
+  }
+
+  /// A link on a character stored as more than one UTF-16 unit is found under any part of it.
+  @Test(arguments: ["🍞", "🇯🇵", "か\u{3099}"])
+  func aLinkOnACharacterOfManyUnitsIsFoundUnderAnyPartOfIt(character: String) throws {
+    let length = (character as NSString).length
+    let edits = Edits(
+      writing: Writing(
+        title: "朝", body: "前\(character)後", links: [BodyLink(range: 1..<1 + length, url: bread)]))
+    let page = HostedPage(screen(edits: edits))
+    let body = try #require(bodyEditor(in: page))
+    let rect = try rect(of: NSRange(location: 1, length: length), in: body)
+    for fraction in [0.25, 0.75] {
+      let point = CGPoint(x: rect.minX + rect.width * fraction, y: rect.midY)
+      #expect(body.link(at: point) == bread, "at \(fraction)")
+    }
+  }
+
+  /// A web address pasted over part of a mention leaves the whole mention out, as a page opened
+  /// with that link does.
+  @Test func pastingAWebAddressOverPartOfAMentionLeavesTheMentionOut() async throws {
+    let edits = Edits(writing: Writing(title: "朝", body: "本文と夜の机に向かう"))
+    let page = HostedPage(mentioning(edits))
+    let body = try #require(bodyEditor(in: page))
+    try await page.settle(within: mentionsFound) { !body.linkedText.isEmpty }
+    body.selectedRange = NSRange(location: 3, length: 2)
+    try paste("https://example.com/bread", into: body)
+    page.show(mentioning(edits))
+    page.settle()
+    #expect(body.linkedText.map(\.text) == ["夜の"])
+    #expect(body.textStorage.attribute(.mention, at: 7, effectiveRange: nil) == nil)
+    #expect(body.textStorage.attribute(.underlineStyle, at: 7, effectiveRange: nil) == nil)
+    let opened = HostedPage(mentioning(edits))
+    let openedBody = try #require(bodyEditor(in: opened))
+    try await opened.settle { false }
+    #expect(openedBody.linkedText.map(\.text) == body.linkedText.map(\.text))
+  }
+
+  /// A change of the body's setting keeps its mentions, and marks none found in text since changed.
+  @Test func aSettingChangeKeepsMentionsFoundInTheText() async throws {
+    let edits = Edits(writing: Writing(title: "朝", body: "本文と夜の机に向かう"))
+    let page = HostedPage(mentioning(edits))
+    let body = try #require(bodyEditor(in: page))
+    try await page.settle(within: mentionsFound) { !body.linkedText.isEmpty }
+    let larger = try #require(BodySetting(base: 20, lineHeight: 36, tracking: -50))
+    page.show(mentioning(edits, setting: larger))
+    try await page.settle(within: mentionsFound) { !body.linkedText.isEmpty }
+    #expect(body.linkedText.map(\.text) == ["夜の机に向かう"])
+    body.becomeFirstResponder()
+    body.selectedRange = NSRange(location: 5, length: 0)
+    type("い", into: body)
+    page.show(mentioning(edits))
+    #expect(body.linkedText.isEmpty)
   }
 
   /// A web address pasted over selected body text links that text, and the text stays.
   @Test func pastingAWebAddressOverASelectionLinksIt() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.selectedRange = NSRange(location: 0, length: 2)
     try paste("https://example.com/bread", into: body)
@@ -246,7 +390,7 @@ struct WritingEditingTests {
   ])
   func otherTextIsNotLinked(_ selection: NSRange, _ pasted: String) throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.selectedRange = selection
     try paste("example.com", into: body)
@@ -260,7 +404,7 @@ struct WritingEditingTests {
   @Test(arguments: [NSRange(location: 0, length: 1), NSRange(location: 1, length: 0)])
   func aWebAddressPastedIntoTheTitleIsNotLinked(_ selection: NSRange) throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let title = try focusedTitle(in: page, holding: "朝")
     title.selectedRange = selection
     #expect(title.pasteDelegate == nil)
@@ -273,7 +417,7 @@ struct WritingEditingTests {
   /// puts nothing in yet.
   @Test func pastingAWebAddressWithNothingSelectedOpensTheSheet() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.selectedRange = NSRange(location: 3, length: 0)
     try paste("https://example.com/bread", into: body)
@@ -333,7 +477,7 @@ struct WritingEditingTests {
   /// Undo after linking a selection takes the link off, and only that.
   @Test func undoAfterLinkingASelectionTakesTheLinkOff() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.becomeFirstResponder()
     page.settle()
@@ -361,7 +505,7 @@ struct WritingEditingTests {
     let edits = Edits(
       writing: Writing(
         title: "朝", body: "粉の店へ\n二行目", links: [BodyLink(range: 0..<3, url: flour)]))
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.becomeFirstResponder()
     page.settle()
@@ -374,7 +518,7 @@ struct WritingEditingTests {
   /// Text typed over a selection just linked replaces the link.
   @Test func typingOverASelectionJustLinkedIsNotLinked() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.becomeFirstResponder()
     page.settle()
@@ -390,7 +534,7 @@ struct WritingEditingTests {
   /// the range the text now covers.
   @Test func aPasteLandsWhereTheSystemSays() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.selectedRange = NSRange(location: 5, length: 0)
     let linked = try pasted(
@@ -405,7 +549,7 @@ struct WritingEditingTests {
   /// Text dragged with its links within the body keeps them where it lands.
   @Test func textDraggedWithALinkKeepsIt() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     let dragged = NSMutableAttributedString(string: "粉の店")
     dragged.addAttributes(.bodyLink(flour), range: NSRange(location: 1, length: 2))
@@ -417,7 +561,7 @@ struct WritingEditingTests {
   /// A web address with space around it links the selection.
   @Test func aWebAddressWithSpaceAroundItLinksTheSelection() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.selectedRange = NSRange(location: 0, length: 2)
     try paste("  https://example.com/bread\n", into: body)
@@ -425,11 +569,11 @@ struct WritingEditingTests {
     #expect(edits.writing.links == [BodyLink(range: 0..<2, url: bread)])
   }
 
-  /// While editing, a link is drawn under a line but is no link the text view would open on a tap,
-  /// so a tap on it puts the caret there.
+  /// A link is drawn under a line but is no link the text view itself opens on a tap, which would
+  /// open it while typing.
   @Test func aLinkWhileEditingIsNotOpenedOnATap() throws {
     let edits = Edits(writing: linked)
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(page.textViews.first { $0.text.hasPrefix("週末") })
     #expect(body.links == [BodyLink(range: 3..<8, url: bread)])
     var opened = 0
@@ -442,25 +586,25 @@ struct WritingEditingTests {
   /// Links changed from elsewhere while editing are drawn in the editor.
   @Test func linksChangedFromElsewhereAreShown() throws {
     let edits = Edits()
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     edits.writing.links = [BodyLink(range: 0..<2, url: bread)]
-    page.show(screen(editing: true, edits: edits))
+    page.show(screen(edits: edits))
     #expect(body.links == [BodyLink(range: 0..<2, url: bread)])
   }
 
-  /// Links are kept when text still being composed is kept as editing ends.
-  @Test func linksAreKeptWithTextBeingComposedWhenEditingEnds() async throws {
+  /// Links are kept when text still being composed is kept as the page closes.
+  @Test func linksAreKeptWithTextBeingComposedWhenThePageCloses() async throws {
     let edits = Edits(
       writing: Writing(
         title: "朝", body: "朝の机\n二行目", links: [BodyLink(range: 0..<2, url: bread)]))
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.becomeFirstResponder()
     page.settle()
     body.selectedRange = NSRange(location: (body.text as NSString).length, length: 0)
     body.setMarkedText("かな", selectedRange: NSRange(location: 2, length: 0))
-    page.show(screen(editing: false, edits: edits))
+    page.show(Color.clear)
     try await page.settle { edits.writing.body.hasSuffix("かな") }
     #expect(edits.writing.links == [BodyLink(range: 0..<2, url: bread)])
   }
@@ -478,7 +622,7 @@ struct WritingEditingTests {
     let edits = Edits(
       writing: Writing(
         title: "朝", body: "粉の店へ\n二行目", links: [BodyLink(range: 0..<3, url: flour)]))
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.becomeFirstResponder()
     page.settle()
@@ -505,7 +649,7 @@ struct WritingEditingTests {
     _ text: String, _ links: [BodyLink], _ caret: Int, _ after: [BodyLink]
   ) throws {
     let edits = Edits(writing: Writing(title: "朝", body: text, links: links))
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.becomeFirstResponder()
     page.settle()
@@ -521,7 +665,7 @@ struct WritingEditingTests {
     let edits = Edits(
       writing: Writing(
         title: "朝", body: "cafe\n二行目", links: [BodyLink(range: 0..<4, url: flour)]))
-    let page = HostedPage(screen(editing: true, edits: edits))
+    let page = HostedPage(screen(edits: edits))
     let body = try #require(bodyEditor(in: page))
     body.becomeFirstResponder()
     page.settle()
@@ -529,14 +673,6 @@ struct WritingEditingTests {
     type("\u{0301}", into: body)
     #expect(edits.writing.body == "cafe\u{0301}\n二行目")
     #expect(edits.writing.links == [BodyLink(range: 0..<5, url: flour)])
-  }
-
-  @Test func editingABodyWithALink() {
-    assertSnapshot(
-      of: screen(editing: true, edits: Edits(writing: linked))
-        .frame(width: 402, height: 874)
-        .background(Color(.systemBackground)),
-      as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
   }
 
   @Test func theLinkSheet() {
@@ -547,31 +683,10 @@ struct WritingEditingTests {
       as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
   }
 
-  @Test func editingMode() {
+  /// An untitled writing shows the title's placeholder on the title's line.
+  @Test func anUntitledWriting() {
     assertSnapshot(
-      of: screen(editing: true, edits: Edits(writing: sampled))
-        .frame(width: 402, height: 874)
-        .background(Color(.systemBackground)),
-      as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
-  }
-
-  /// An empty title keeps its line while being edited, as it does when read.
-  @Test func anUntitledWritingKeepsTheTitleLineWhileEdited() throws {
-    func height(_ title: String) throws -> CGFloat {
-      let page = HostedPage(
-        ScrollView {
-          WritingPage(
-            writing: Writing(title: title, body: "本文"), editing: true, photos: [], width: 402,
-            back: {}, titleCutOff: { _ in })
-        })
-      return try #require(page.scrollViews.first).contentSize.height
-    }
-    #expect(try height("") == height("朝"))
-  }
-
-  @Test func editingAnUntitledWriting() {
-    assertSnapshot(
-      of: screen(editing: true, edits: Edits(writing: Writing(title: "", body: "本文")))
+      of: screen(edits: Edits(writing: Writing(title: "", body: "本文")))
         .frame(width: 402, height: 874)
         .background(Color(.systemBackground)),
       as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
@@ -653,17 +768,16 @@ private final class AskedForATitle {
   }
 }
 
-/// `writing`'s page at the top of a 402 × 874 window, read or being edited.
+/// `writing`'s title and body at the top of a 402 × 874 window, in editors or as text set by
+/// `textStyle`.
 @MainActor
 private func drawn(
-  editing: Bool, _ size: DynamicTypeSize, _ setting: BodySetting = .standard,
+  editors: Bool, _ size: DynamicTypeSize, _ setting: BodySetting = .standard,
   writing: Writing = sampled, families: [FontFamily] = FontStack.standard.families()
 ) -> UIImage {
   HostedPage(
     ScrollView {
-      WritingPage(
-        writing: writing, editing: editing, photos: [], width: 402, back: {},
-        titleCutOff: { _ in })
+      TitleAndBody(writing: writing, editors: editors)
     }
     .background(Color(.systemBackground))
     .dynamicTypeSize(size)
@@ -671,6 +785,31 @@ private func drawn(
     .environment(\.fontFamilies, families)
     .environment(\.colorScheme, .light)
   ).image()
+}
+
+/// A writing's title and body on the type area of a 402-wide screen, as the page sets them.
+private struct TitleAndBody: View {
+  let writing: Writing
+  let editors: Bool
+  @EnvironmentTypeScale private var scale
+
+  var body: some View {
+    let area = scale.typeArea(width: 402)
+    // Apart by the page's own space, so the title's line and the body's first are not one band.
+    VStack(alignment: .leading, spacing: scale.space(.m)) {
+      if editors {
+        TextStyleEditor(role: .heading, text: writing.title) { _, _ in }
+        TextStyleEditor(role: .body, text: writing.body) { _, _ in }
+      } else {
+        Text(verbatim: writing.title).textStyle(.heading)
+        Text(body: writing.body).textStyle(.body)
+      }
+    }
+    .frame(width: area.lineLength, alignment: .leading)
+    .padding(.horizontal, area.margin)
+    // Where the page's back mark leaves them, so their lines fall on the same pixels.
+    .padding(.top, max(17 * scale.scale, TextButtonStyle.minimumSide) + scale.space(.l))
+  }
 }
 
 /// `image` in grey, one byte a pixel, top row first.
@@ -727,16 +866,52 @@ private final class Edits {
   }
 }
 
-private func screen(editing: Bool, edits: Edits, setting: BodySetting = .standard) -> some View {
+private func screen(edits: Edits, setting: BodySetting = .standard) -> some View {
   WritingScreen(
     writing: edits.writing, others: [], open: { _ in }, edit: { edits.writing.apply($0) },
     photos: [],
     setting: .constant(setting),
-    editing: .constant(editing),
     typesetting: .constant(false),
     takingPhoto: .constant(false),
     camera: .standIn(taking: nil),
     photoTaken: { _ in })
+}
+
+/// How long the mention tests wait for mentions to be found: the main actor they are found on is
+/// shared with the snapshot tests running beside them, which can hold it for tens of seconds.
+private let mentionsFound: TimeInterval = 60
+
+/// A writing whose title the bodies in the mention tests name.
+private let nightDesk = Writing(
+  id: UUID(sample: 4), title: "夜の机に向かう", body: "", updated: Date(timeIntervalSince1970: 0))
+
+/// The edited writing's page, with `nightDesk` among the others.
+private func mentioning(
+  _ edits: Edits, setting: BodySetting = .standard, open: @escaping (Writing) -> Void = { _ in }
+) -> some View {
+  WritingScreen(
+    writing: edits.writing, others: [nightDesk], open: open, edit: { edits.writing.apply($0) },
+    photos: [], setting: .constant(setting), typesetting: .constant(false),
+    takingPhoto: .constant(false), camera: .standIn(taking: nil), photoTaken: { _ in })
+}
+
+/// Where `range` of `view`'s text is drawn, in its own coordinates.
+@MainActor
+private func rect(of range: NSRange, in view: UITextView) throws -> CGRect {
+  let start = try #require(view.position(from: view.beginningOfDocument, offset: range.location))
+  let end = try #require(view.position(from: start, offset: range.length))
+  return view.firstRect(for: try #require(view.textRange(from: start, to: end)))
+}
+
+/// The centre of the character at `offset` in `view`, in its own coordinates.
+@MainActor
+private func centre(of offset: Int, in view: UITextView) -> CGPoint {
+  guard let start = view.position(from: view.beginningOfDocument, offset: offset),
+    let end = view.position(from: start, offset: 1),
+    let range = view.textRange(from: start, to: end)
+  else { preconditionFailure("No character at \(offset).") }
+  let rect = view.firstRect(for: range)
+  return CGPoint(x: rect.midX, y: rect.midY)
 }
 
 extension Writing {
@@ -765,8 +940,8 @@ private func type(_ text: String, into view: UITextView) {
   }
 }
 
-/// The text view holding the body, found by its text.
+/// The text view holding the body: the lower of the page's two.
 @MainActor
 private func bodyEditor(in page: HostedPage) -> UITextView? {
-  page.textViews.first { $0.text.contains("\n") || $0.text == "本文" }
+  page.textViews.max { $0.convert(CGPoint.zero, to: nil).y < $1.convert(CGPoint.zero, to: nil).y }
 }
