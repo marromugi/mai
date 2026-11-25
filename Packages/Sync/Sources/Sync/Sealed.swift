@@ -127,6 +127,8 @@ enum Layout {
 public enum SealingError: LocalizedError, Equatable {
   case updatedOutOfRange(Date)
   case tooLarge(Int)
+  /// A photo's part sealed to this many bytes, more than the server takes of it.
+  case photoTooLarge(Int, largest: Int)
 
   public var errorDescription: String? {
     switch self {
@@ -134,6 +136,8 @@ public enum SealingError: LocalizedError, Equatable {
       "更新時刻 \(date.formatted(.iso8601)) はサーバーに置けません。1970 年より後の時刻にしてください。"
     case .tooLarge(let count):
       "暗号化した文書が \(count) バイトになり、サーバーに置ける \(Layout.largest) バイトを超えました。"
+    case .photoTooLarge(let count, let largest):
+      "暗号化した写真が \(count) バイトになり、サーバーに置ける \(largest) バイトを超えました。この写真のある文書は、ほかの端末に送れません。"
     }
   }
 }

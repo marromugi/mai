@@ -11,6 +11,16 @@ public protocol PlainWritingStore: Sendable {
   /// Saves `copy`, the device's edit as a new writing, then `received` in place of that edit. A
   /// store that can refuse `received` refuses before saving either, so a refusal leaves no copy.
   func keepBoth(_ received: PlainWriting, copy: PlainWriting) async throws
+  /// The IDs of the photos `writing` points at; none when its contents can't be read.
+  func photos(of writing: PlainWriting) -> [UUID]
+}
+
+/// Where the device keeps its photos in plain bytes.
+public protocol PlainPhotoStore: Sendable {
+  /// The photo with `id`, or nil when the device has none.
+  func read(_ id: UUID) async throws -> PlainPhoto?
+  /// Keeps `photo`. A photo kept already with its ID stays as it is.
+  func keep(_ photo: PlainPhoto) async throws
 }
 
 extension PlainWritingStore {
@@ -35,26 +45,40 @@ public struct SyncReport: Sendable, Equatable {
   public var keptBoth: [UUID: UUID] = [:]
   /// Changed on the server while this sync ran; the next sync takes them.
   public var left: Set<UUID> = []
+  /// Photos sent to the server, by photo ID.
+  public var photosSent: Set<UUID> = []
+  /// Photos taken from the server into the device's photo store, by photo ID.
+  public var photosReceived: Set<UUID> = []
 
   public init() {}
 }
 
 /// Brings the device's writings and the server's to the same saves, sealing what it sends.
 /// A writing changed on both sides since the last sync is kept twice, so neither edit is lost.
+///
+/// The photos a writing points at are sent before the writing, so no device takes in a writing
+/// whose photos the server can't give yet, and taken from the server for a writing the device has
+/// without them. Each is sent once, sealed with this own key.
 public actor Synchronizer {
   private let writings: any PlainWritingStore
+  private let photos: any PlainPhotoStore
   private let state: SyncState
+  private let photoState: PhotoSyncState
   private let server: WritingServer
   private let ownKey: OwnKey
   private var running: Task<SyncReport, any Error>?
 
   /// `stateFile` keeps, for each writing, the server's revision and the device's updated time when
-  /// they last matched; it is made on the first sync.
+  /// they last matched; it is made on the first sync. The photos on the server are kept beside it
+  /// (`PhotoSyncState.file(beside:)`).
   public init(
-    writings: any PlainWritingStore, stateFile: URL, server: WritingServer, ownKey: OwnKey
+    writings: any PlainWritingStore, photos: any PlainPhotoStore, stateFile: URL,
+    server: WritingServer, ownKey: OwnKey
   ) {
     self.writings = writings
+    self.photos = photos
     state = SyncState(file: stateFile)
+    photoState = PhotoSyncState(file: PhotoSyncState.file(beside: stateFile))
     self.server = server
     self.ownKey = ownKey
   }
@@ -72,6 +96,7 @@ public actor Synchronizer {
 
   private func syncOnce() async throws -> SyncReport {
     var synced = try state.load()
+    var onServer = try photoState.load(sealedWith: ownKey)
     let mine = Dictionary(try await writings.all().map { ($0.id, $0) }) { first, _ in
       preconditionFailure("The device's store keeps one writing per ID, but gave \(first.id) twice")
     }
@@ -87,10 +112,13 @@ public actor Synchronizer {
     for id in Set(mine.keys).union(theirs.keys) {
       do {
         try await sync(
-          id, mine: mine[id], theirs: theirs[id], synced: &synced, reporting: &report)
+          id, mine: mine[id], theirs: theirs[id], synced: &synced, onServer: &onServer,
+          reporting: &report)
       } catch let error as SealingError {
         failures[id] = error
       } catch let error as OpeningError {
+        failures[id] = error
+      } catch let error as PhotoOpeningError {
         failures[id] = error
       } catch let error as ServerError where error.concernsOneWriting {
         failures[id] = error
@@ -104,21 +132,27 @@ public actor Synchronizer {
     return report
   }
 
-  /// Syncs one writing. A failure that concerns this writing alone leaves the others to go on.
+  /// Syncs one writing and its photos. A failure that concerns this writing alone leaves the
+  /// others to go on.
   private func sync(
     _ id: UUID, mine writing: PlainWriting?, theirs entry: ServerEntry?,
-    synced: inout [UUID: SyncState.Entry], reporting report: inout SyncReport
+    synced: inout [UUID: SyncState.Entry], onServer: inout Set<UUID>,
+    reporting report: inout SyncReport
   ) async throws {
     let last = synced[id]
     let deviceChanged = writing.map { Layout.milliseconds(of: $0.updated) != last?.updated }
     guard let entry else {
       guard let writing else { preconditionFailure("Each ID is the device's or the server's") }
-      try await send(writing, over: nil, into: &synced, reporting: &report)
+      try await send(writing, over: nil, into: &synced, onServer: &onServer, reporting: &report)
       return
     }
     guard entry.revision != last?.revision || writing == nil else {
-      if let writing, deviceChanged == true {
-        try await send(writing, over: entry.revision, into: &synced, reporting: &report)
+      guard let writing else { return }
+      if deviceChanged == true {
+        try await send(
+          writing, over: entry.revision, into: &synced, onServer: &onServer, reporting: &report)
+      } else {
+        try await settlePhotos(of: writing, onServer: &onServer, reporting: &report)
       }
       return
     }
@@ -142,15 +176,18 @@ public actor Synchronizer {
       revision: revision, updated: Layout.milliseconds(of: received.updated))
     try state.save(synced)
     report.received.insert(id)
+    try await settlePhotos(of: received, onServer: &onServer, reporting: &report)
     if let copy {
-      try await send(copy, over: nil, into: &synced, reporting: &report)
+      try await send(copy, over: nil, into: &synced, onServer: &onServer, reporting: &report)
     }
   }
 
+  /// Sends `writing` once the photos it points at are on the server.
   private func send(
     _ writing: PlainWriting, over base: Revision?, into synced: inout [UUID: SyncState.Entry],
-    reporting report: inout SyncReport
+    onServer: inout Set<UUID>, reporting report: inout SyncReport
   ) async throws {
+    try await settlePhotos(of: writing, onServer: &onServer, reporting: &report)
     switch try await server.save(ownKey.seal(writing), over: base) {
     case .saved(let revision):
       synced[writing.id] = SyncState.Entry(
@@ -159,6 +196,39 @@ public actor Synchronizer {
       report.sent.insert(writing.id)
     case .conflict:
       report.left.insert(writing.id)
+    }
+  }
+
+  /// Brings each photo `writing` points at that isn't known to be on the server to both sides:
+  /// sent when the device has it, taken from the server when the device hasn't. A photo neither
+  /// side has yet, or whose part the server is still taking (409 but not readable), is left for
+  /// the next sync.
+  private func settlePhotos(
+    of writing: PlainWriting, onServer: inout Set<UUID>, reporting report: inout SyncReport
+  ) async throws {
+    for id in writings.photos(of: writing) where !onServer.contains(id) {
+      if let photo = try await photos.read(id) {
+        let sealed = try ownKey.seal(photo)
+        var stored = true
+        // The thumbnail first, as a device taking the photo in asks for it first.
+        for part in [sealed.thumbnail, sealed.photo] {
+          guard try await server.send(part) == .alreadyThere else { continue }
+          // A 409 is also an upload the server holds but may yet release; only one it gives back
+          // is there.
+          if try await server.readPhoto(id, part.part) == nil { stored = false }
+        }
+        guard stored else { continue }
+        report.photosSent.insert(id)
+      } else {
+        guard let thumbnail = try await server.readPhoto(id, .thumbnail),
+          let photo = try await server.readPhoto(id, .photo)
+        else { continue }
+        try await photos.keep(
+          PlainPhoto(id: id, photo: ownKey.open(photo), thumbnail: ownKey.open(thumbnail)))
+        report.photosReceived.insert(id)
+      }
+      onServer.insert(id)
+      try photoState.save(onServer, sealedWith: ownKey)
     }
   }
 
@@ -219,6 +289,40 @@ extension PlainWriting {
   fileprivate func matches(_ other: PlainWriting) -> Bool {
     contents == other.contents
       && Layout.milliseconds(of: updated) == Layout.milliseconds(of: other.updated)
+  }
+}
+
+/// The photos known to be on the server, as sealed with one own key. Read with another key, as
+/// after the account starts over (which removes the server's photos), it holds none.
+struct PhotoSyncState {
+  let file: URL
+
+  /// Where the photos synced beside the writings' `stateFile` are kept.
+  static func file(beside stateFile: URL) -> URL {
+    stateFile.deletingPathExtension().appendingPathExtension("photos.json")
+  }
+
+  private struct Saved: Codable {
+    let ownKeyCheck: Data
+    let onServer: Set<UUID>
+  }
+
+  func load(sealedWith ownKey: OwnKey) throws -> Set<UUID> {
+    let data: Data
+    do {
+      data = try Data(contentsOf: file)
+    } catch CocoaError.fileReadNoSuchFile {
+      return []
+    }
+    let saved = try JSONDecoder().decode(Saved.self, from: data)
+    return saved.ownKeyCheck == ownKey.check ? saved.onServer : []
+  }
+
+  func save(_ onServer: Set<UUID>, sealedWith ownKey: OwnKey) throws {
+    try FileManager.default.createDirectory(
+      at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try JSONEncoder().encode(Saved(ownKeyCheck: ownKey.check, onServer: onServer))
+      .write(to: file, options: .atomic)
   }
 }
 

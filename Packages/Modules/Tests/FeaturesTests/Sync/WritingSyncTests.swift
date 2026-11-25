@@ -20,6 +20,7 @@ struct WritingSyncTests {
   private struct Device {
     let account: AccountModel
     let library: WritingLibrary
+    let photos: PhotoStore
     let sync: WritingSync
     let sent: Requests
     let ownKeys: MemoryOwnKeys
@@ -30,7 +31,7 @@ struct WritingSyncTests {
     deviceKey: OwnKey? = nil, refusingWritings: Int? = nil, holdingFirstListing: Bool = false,
     pause: Duration = .zero,
     interval: Duration = .zero, deletion: ScriptedWorker.Answer? = nil,
-    startOver: ScriptedWorker.Answer? = nil
+    startOver: ScriptedWorker.Answer? = nil, photos: PhotoStore? = nil
   ) throws -> Device {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defaults.removePersistentDomain(forName: suite)
@@ -65,10 +66,19 @@ struct WritingSyncTests {
         path: "WritingSyncTests-\(UUID().uuidString)", directoryHint: .isDirectory))
     let library = WritingLibrary(store: MemoryWritingStore(kept))
     library.load(seedingWhenEmpty: [])
+    let photos = photos ?? Self.photoStore()
     return Device(
-      account: account, library: library,
-      sync: WritingSync(account: account, library: library, pause: pause, interval: interval),
+      account: account, library: library, photos: photos,
+      sync: WritingSync(
+        account: account, library: library, photos: photos, pause: pause, interval: interval),
       sent: sent, ownKeys: ownKeys)
+  }
+
+  /// An empty photo store of its own.
+  private static func photoStore() -> PhotoStore {
+    PhotoStore(
+      directory: FileManager.default.temporaryDirectory.appending(
+        path: "WritingSyncTests-\(UUID().uuidString)/Photos", directoryHint: .isDirectory))
   }
 
   /// The account ID a plan was bought for, kept.
@@ -136,6 +146,33 @@ struct WritingSyncTests {
     #expect(shown.contains(theirs))
     #expect(try second.library.forSync().contains(mine))
     #expect(try second.library.store.all().contains(mine))
+  }
+
+  /// A photo taken on one device is sent with its writing, and the other device keeps the same
+  /// photo and thumbnail under the same ID.
+  @Test func aPhotoTakenOnOneDeviceReachesTheOther() async throws {
+    let server = FakeWritingServer(accepting: token)
+    let taken = Self.photoStore()
+    let photo = try await taken.keep(.portrait)
+    var written = writing("朝", at: 1_000)
+    written.photos = [photo]
+    let first = try device([written], server: server, photos: taken)
+    let second = try device([], server: server)
+    await first.account.checkAtLaunch()
+    await second.account.checkAtLaunch()
+
+    await first.sync.syncNow()
+    await second.sync.syncNow()
+
+    guard case .synced = first.sync.status, case .synced = second.sync.status else {
+      Issue.record("both devices synced: \(first.sync.status), \(second.sync.status)")
+      return
+    }
+    #expect(try second.library.forSync().map(\.photos) == [[photo]])
+    let sent = try #require(try await first.photos.files(of: photo))
+    let kept = try #require(try await second.photos.files(of: photo))
+    #expect(kept.photo == sent.photo)
+    #expect(kept.thumbnail == sent.thumbnail)
   }
 
   /// An edit made while a sync runs is kept: the writing the sync brings is not saved over it.
@@ -554,8 +591,8 @@ nonisolated final class MemoryWritingStore: WritingStore {
   }
 }
 
-/// Sends the writings routes to `writings` and the rest to `account`, keeping every request. With
-/// `refusing`, the writings routes answer that status instead (402 only the saves, as for a lapsed
+/// Sends the writings and photos routes to `writings` and the rest to `account`, keeping every
+/// request. With `refusing`, those routes answer that status instead (402 only the saves, as for a lapsed
 /// plan), or fail as an unreachable server does when it is 0.
 nonisolated final class Requests: HTTPTransport {
   private let writings: FakeWritingServer
@@ -602,7 +639,7 @@ nonisolated final class Requests: HTTPTransport {
     if holds {
       await withCheckedContinuation { gate in held.withLock { $0.gate = gate } }
     }
-    guard request.url?.pathComponents.dropFirst().first == "writings" else {
+    guard ["writings", "photos"].contains(request.url?.pathComponents.dropFirst().first) else {
       return try await account.send(request)
     }
     guard let refusing, refusing != 402 || request.httpMethod == "PUT" else {

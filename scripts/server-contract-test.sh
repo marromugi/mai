@@ -1,5 +1,6 @@
 #!/bin/bash
-# Runs the server contract (Packages/Sync, ServerContract), two devices syncing, signing in
+# Runs the server contract (Packages/Sync, ServerContract), two devices syncing a writing and a
+# photo, signing in
 # (AccountContractTests), and two signed-in devices of one account syncing
 # (AccountSyncContractTests) on the Worker in Server/ under wrangler dev, against a local libSQL
 # server (turso dev) on a new database. The Worker is the one with the stand-in Apple
@@ -37,6 +38,7 @@ wait_for() {
 sqlite3 "$directory/mai.db" <"$root/Server/schema.sql"
 contract_token="$("$root/Server/scripts/new-session.sh" "$directory/mai.db")"
 two_devices_token="$("$root/Server/scripts/new-session.sh" "$directory/mai.db")"
+photo_token="$("$root/Server/scripts/new-session.sh" "$directory/mai.db")"
 
 turso dev --db-file "$directory/mai.db" --port "$database_port" >"$directory/turso.log" 2>&1 &
 servers+=($!)
@@ -58,5 +60,6 @@ run_as() {
 
 run_as "$contract_token" "ContractTests/workerKeepsTheContract"
 run_as "$two_devices_token" "ContractTests/twoDevicesSyncThroughTheWorker"
+run_as "$photo_token" "ContractTests/aPhotoTravelsWithItsWritingThroughTheWorker"
 MAI_SERVER_URL="http://127.0.0.1:$port" swift test --package-path "$root/Packages/Sync" \
   --filter "AccountContractTests|AccountSyncContractTests"

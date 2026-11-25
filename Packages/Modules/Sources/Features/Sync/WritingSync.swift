@@ -2,9 +2,9 @@ import Foundation
 import Observation
 internal import Sync
 
-/// Syncs the writings on the device with the account's on the server, while signed in with the
-/// account's own key: when the app comes to the front, when the person asks, and after edits
-/// settle. Nothing is sent while signed out.
+/// Syncs the writings on the device, and the photos they point at, with the account's on the
+/// server, while signed in with the account's own key: when the app comes to the front, when the
+/// person asks, and after edits settle. Nothing is sent while signed out.
 ///
 /// Edits are saved on the device at every settled keystroke, but reach the server only through a
 /// sync, which sends each changed writing once: a sync runs once edits have paused for `pause`,
@@ -26,6 +26,7 @@ internal import Sync
 
   private let account: AccountModel
   private let writings: SyncedWritings
+  private let photos: SyncedPhotos
   private let pause: Duration
   private let interval: Duration
   private(set) var status = Status.notYet
@@ -36,12 +37,14 @@ internal import Sync
   /// file and the library's take-in.
   @ObservationIgnored private var running: Task<Void, Never>?
 
+  /// Syncs the writings in `library` and the photos in `photos` that they point at.
   init(
-    account: AccountModel, library: WritingLibrary, pause: Duration = .seconds(30),
-    interval: Duration = .seconds(300)
+    account: AccountModel, library: WritingLibrary, photos: PhotoStore,
+    pause: Duration = .seconds(30), interval: Duration = .seconds(300)
   ) {
     self.account = account
     writings = SyncedWritings(library: library)
+    self.photos = SyncedPhotos(store: photos)
     self.pause = pause
     self.interval = interval
   }
@@ -70,7 +73,7 @@ internal import Sync
     lastStarted = .now
     status = .syncing
     do {
-      _ = try await account.synchronizer(for: writings, keys: keys).sync()
+      _ = try await account.synchronizer(for: writings, photos: photos, keys: keys).sync()
       status = .synced(.now)
     } catch let error as SyncFailures
       where error.failures.values.allSatisfy({ $0 is EditedDuringSync })

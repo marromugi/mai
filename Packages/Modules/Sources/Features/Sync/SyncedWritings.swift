@@ -32,6 +32,10 @@ nonisolated final class SyncedWritings: PlainWritingStore {
     try await takeIn(received, keeping: copy)
   }
 
+  func photos(of writing: PlainWriting) -> [UUID] {
+    (try? Self.writing(writing))?.photos ?? []
+  }
+
   private func takeIn(_ received: PlainWriting, keeping copy: PlainWriting?) async throws {
     let writing = try Self.writing(received)
     let kept = try copy.map(Self.writing)

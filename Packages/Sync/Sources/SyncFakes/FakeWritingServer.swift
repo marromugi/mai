@@ -7,6 +7,8 @@ import Sync
 public actor FakeWritingServer: HTTPTransport {
   private let tokenAccepted: String
   private var writings: [String: (revision: String, updated: Int64, bytes: Data)] = [:]
+  /// Each photo's parts by `<ID>` and `<ID>/thumbnail`, as sent.
+  private var photos: [String: Data] = [:]
   public private(set) var requests: [URLRequest] = []
 
   public init(accepting token: String) {
@@ -19,6 +21,9 @@ public actor FakeWritingServer: HTTPTransport {
       return answer(request, 401, json: ["error": "wrong token"])
     }
     let path = request.url?.pathComponents.dropFirst() ?? []
+    if path.first == "photos" {
+      return photo(request, Array(path))
+    }
     switch (request.httpMethod ?? "GET", path.count) {
     case ("GET", 1):
       let listed = writings.sorted { $0.key < $1.key }.map { id, writing in
@@ -53,6 +58,36 @@ public actor FakeWritingServer: HTTPTransport {
       let revision = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
       writings[id] = (revision, updated, body)
       return answer(request, 200, json: ["revision": revision])
+    default:
+      return answer(request, 405, json: ["error": "no such route"])
+    }
+  }
+
+  /// `PUT` and `GET` of `/photos/<ID>` and `/photos/<ID>/thumbnail`. A part is kept as sent, and
+  /// one sent again is refused with 409.
+  private func photo(_ request: URLRequest, _ path: [String]) -> (Data, HTTPURLResponse) {
+    guard path.count == 2 || (path.count == 3 && path[2] == "thumbnail") else {
+      return answer(request, 404, json: ["error": "no such route"])
+    }
+    let key = path.dropFirst().joined(separator: "/")
+    switch request.httpMethod ?? "GET" {
+    case "GET":
+      guard let bytes = photos[key] else {
+        return answer(request, 404, json: ["error": "no photo"])
+      }
+      return answer(request, 200, body: bytes)
+    case "PUT":
+      guard request.value(forHTTPHeaderField: "Content-Type") == "application/octet-stream" else {
+        return answer(request, 415, json: ["error": "not application/octet-stream"])
+      }
+      guard let body = request.httpBody, !body.isEmpty else {
+        return answer(request, 400, json: ["error": "a sealed photo has bytes"])
+      }
+      guard photos[key] == nil else {
+        return answer(request, 409, json: ["error": "the server has this part already"])
+      }
+      photos[key] = body
+      return answer(request, 201, body: Data())
     default:
       return answer(request, 405, json: ["error": "no such route"])
     }
