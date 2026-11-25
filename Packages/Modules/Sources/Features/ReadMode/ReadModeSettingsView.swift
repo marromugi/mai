@@ -28,16 +28,16 @@ private struct ReadModePage: View {
     Group {
       if let model {
         ReadModeSettingsView(model: model, library: library)
+          .id(ObjectIdentifier(model))
       } else {
         ContentUnavailableView(
           "サインインしていません", systemImage: "person.crop.circle.badge.exclamationmark",
           description: Text("読み取りモードは、同期のアカウントにサインインしているときに使えます。"))
       }
     }
-    .onAppear {
-      if model == nil {
-        model = account.readMode().map(ReadModeModel.init)
-      }
+    // A sign-out or another sign-in while the page is open brings another session.
+    .task(id: account.phase) {
+      model = account.readMode().map(ReadModeModel.init)
     }
   }
 }

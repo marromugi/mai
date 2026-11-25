@@ -218,9 +218,12 @@ private struct Run {
     let revisions = await fake.heldRevisions()
     let now = Int64((server.now.timeIntervalSince1970 * 1000).rounded())
     for copy in copies {
-      #expect(!excluded.contains(UUID(uuidString: copy.writing)!), "NoCopyOfExcluded: \(context)")
       #expect(
-        !revoked.contains(UUID(uuidString: copy.agent)!), "NoCopyForRevokedKey: \(context)")
+        !excluded.contains { $0.uuidString.lowercased() == copy.writing },
+        "NoCopyOfExcluded: \(context)")
+      #expect(
+        !revoked.contains { $0.uuidString.lowercased() == copy.agent },
+        "NoCopyForRevokedKey: \(context)")
       #expect(revisions[copy.writing] == copy.revision, "CopyIsOfCurrentVersion: \(context)")
       #expect(mode == copy.expires, "NoCopyOutsideMode: \(context)")
       if swept {

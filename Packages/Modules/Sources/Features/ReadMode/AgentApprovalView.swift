@@ -12,8 +12,16 @@ struct AgentApprovalView: View {
   @State private var approving = false
   @State private var scanning = false
   /// The line to hand the agent, once approved.
-  @State var handoff: String?
+  @State private var handoff: String?
   @Environment(\.dismiss) private var dismiss
+
+  /// Opened on `handoff`, as once approved, for a look at that page.
+  init(
+    approve: @escaping (String) async -> Result<String, ApprovalProblem>, handoff: String? = nil
+  ) {
+    self.approve = approve
+    _handoff = State(initialValue: handoff)
+  }
 
   var body: some View {
     Form {
@@ -136,7 +144,9 @@ struct QRCodeScanner: UIViewControllerRepresentable {
 
   func updateUIViewController(_ scanner: DataScannerViewController, context: Context) {
     context.coordinator.found = found
-    guard !scanner.isScanning else { return }
+    // Once: after a code is found, or the camera failed, the sheet is closing.
+    guard !context.coordinator.started else { return }
+    context.coordinator.started = true
     do {
       try scanner.startScanning()
     } catch {
@@ -151,6 +161,7 @@ struct QRCodeScanner: UIViewControllerRepresentable {
 
   final class Coordinator: NSObject, DataScannerViewControllerDelegate {
     var found: (String) -> Void
+    var started = false
 
     init(found: @escaping (String) -> Void) {
       self.found = found

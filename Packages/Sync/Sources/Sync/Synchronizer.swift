@@ -134,7 +134,12 @@ public actor Synchronizer {
     // One sending of copies a sync, after the saves: a sync sends each writing at most once, and
     // the server deletes the copies of a writing's earlier revision on each save it takes.
     if let readMode {
-      report.copies = try await readMode.sendCopies(of: report.sent)
+      do {
+        report.copies = try await readMode.sendCopies(of: report.sent)
+      } catch  where !failures.isEmpty {
+        // The writings that failed are what the person is told; the copies go with a later sync.
+        syncLogger.error("The read-mode copies weren't sent: \(error)")
+      }
     }
     guard failures.isEmpty else {
       throw SyncFailures(report: report, failures: failures)

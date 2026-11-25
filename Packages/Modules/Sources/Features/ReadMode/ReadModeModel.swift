@@ -42,7 +42,14 @@ struct AgentRow: Identifiable, Equatable {
 
   /// Reads the settings from the server.
   func load() async {
-    await act { () async throws in try await self.read() }
+    working = true
+    defer { working = false }
+    do {
+      try await read()
+    } catch {
+      readModeLogger.error("Read mode couldn't be read: \(error)")
+      problem = Self.message(for: error)
+    }
     unreadable = !loaded
   }
 
@@ -65,18 +72,17 @@ struct AgentRow: Identifiable, Equatable {
               "このエージェントは承認できません。同じ鍵のエージェントを前に承認したか、取り消していないエージェントが 10 あります。エージェントに新しい鍵を作らせるか、使っていないエージェントを取り消してください。"
           ))
       }
-      try await read()
+      await readAgain()
       return .success(readMode.handoff(approved))
     } catch {
       readModeLogger.error("An agent couldn't be approved: \(error)")
-      return .failure(ApprovalProblem(message: error.localizedDescription))
+      return .failure(ApprovalProblem(message: Self.message(for: error)))
     }
   }
 
   func revoke(_ agent: UUID) async {
     await act { () async throws in
       _ = try await self.readMode.revoke(agent)
-      try await self.read()
     }
   }
 
@@ -85,7 +91,6 @@ struct AgentRow: Identifiable, Equatable {
     await act { () async throws in
       let copies = try await self.readMode.turnOn(until: until)
       self.sent = Self.said(copies)
-      try await self.read()
     }
   }
 
@@ -93,7 +98,6 @@ struct AgentRow: Identifiable, Equatable {
     await act { () async throws in
       try await self.readMode.turnOff()
       self.sent = nil
-      try await self.read()
     }
   }
 
@@ -105,7 +109,6 @@ struct AgentRow: Identifiable, Equatable {
       } else {
         _ = try await self.readMode.include(id)
       }
-      try await self.read()
     }
   }
 
@@ -122,6 +125,8 @@ struct AgentRow: Identifiable, Equatable {
     loaded = true
   }
 
+  /// Runs `action`, then reads the settings again whether it went through or not, since a failure
+  /// part way, such as turning on with the copies not sent, leaves the server changed.
   private func act(_ action: () async throws -> Void) async {
     working = true
     defer { working = false }
@@ -129,7 +134,43 @@ struct AgentRow: Identifiable, Equatable {
       try await action()
     } catch {
       readModeLogger.error("Read mode couldn't be changed: \(error)")
-      problem = error.localizedDescription
+      problem = Self.message(for: error)
+    }
+    await readAgain()
+  }
+
+  /// Reads the settings, after a change; a failure is logged, and the page keeps what it showed.
+  private func readAgain() async {
+    do {
+      try await read()
+    } catch {
+      readModeLogger.error("Read mode couldn't be read again: \(error)")
+      if problem == nil {
+        problem = Self.message(for: error)
+      }
+    }
+  }
+
+  /// What went wrong with read mode, for a person, by the kind of failure.
+  static func message(for error: any Error) -> String {
+    guard let error = error as? ServerError else {
+      return "この端末の同期の記録が読めなかったため、読み取りモードを変えられませんでした。一度同期してから、もう一度お試しください。"
+    }
+    switch error {
+    case .unreachable:
+      return "サーバーにつながりませんでした。ネットワークを確かめて、もう一度お試しください。"
+    case .refused(status: 400, _):
+      return "終わる時刻がもう過ぎています。これから先の時刻を選んでください。"
+    case .refused(status: 401, _):
+      return "サインインが切れました。もう一度 Apple でサインインしてください。"
+    case .refused(status: 402, _):
+      return "プランの期限が切れているため、読み取りモードは変えられません。プランに入り直すと、また使えます。"
+    case .limitReached:
+      return "今日のリクエストの回数がプランの上限に達しました。日付が変わると（協定世界時の 0 時、日本時間の 9 時）また使えます。"
+    case .refused(let status, _):
+      return "サーバーが読み取りモードの変更を断りました（\(status)）。"
+    case .unexpectedAnswer:
+      return "サーバーの答えが読めませんでした。"
     }
   }
 

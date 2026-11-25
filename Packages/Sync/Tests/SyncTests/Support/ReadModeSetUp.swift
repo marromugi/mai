@@ -22,7 +22,12 @@ final class TestClock: Sendable {
 /// One device of an account, its sync and its read mode sharing one state file, and the agent's
 /// reads of the same server.
 struct ReadModeSetUp {
-  static let fakeURL = URL(string: "https://fake.test")!
+  static let fakeURL: URL = {
+    guard let url = URL(string: "https://fake.test") else {
+      preconditionFailure("https://fake.test is a URL")
+    }
+    return url
+  }()
   static let fakeToken = "s1.session.token"
 
   let url: URL

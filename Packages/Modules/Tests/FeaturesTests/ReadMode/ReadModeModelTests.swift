@@ -8,7 +8,12 @@ import Testing
 
 /// `ReadModeModel` over `FakeWritingServer`, with an empty sync state: no writing synced yet.
 struct ReadModeModelTests {
-  private let url = URL(string: "https://fake.test")!
+  private let url: URL = {
+    guard let url = URL(string: "https://fake.test") else {
+      preconditionFailure("https://fake.test is a URL")
+    }
+    return url
+  }()
   private let token = "s1.session.token"
   private let ownKey = OwnKey.generate()
   private let fake: FakeWritingServer
@@ -74,8 +79,48 @@ struct ReadModeModelTests {
 
   @Test func aTimePassedIsSaidAsAProblem() async {
     await model.turnOn(until: .now - 60)
-    #expect(model.problem != nil)
+    #expect(model.problem == "終わる時刻がもう過ぎています。これから先の時刻を選んでください。")
     #expect(model.until == nil)
+  }
+
+  /// A failure part way still reads the server again: turned on, with the copies not sent.
+  @Test func aFailureAfterTurningOnShowsItOn() async throws {
+    let failing = FailingAgents(fake: fake)
+    let model = ReadModeModel(
+      readMode: ReadMode(
+        server: ReadModeServer(url: url, token: token, transport: failing), ownKey: ownKey,
+        stateFile: FileManager.default.temporaryDirectory.appending(
+          path: "mai-read-mode-model-\(UUID().uuidString).json")))
+    let until = Date(timeIntervalSince1970: (Date.now.timeIntervalSince1970 + 3600).rounded())
+    await failing.failOnce()
+    await model.turnOn(until: until)
+    #expect(model.problem == "サーバーが読み取りモードの変更を断りました（500）。")
+    #expect(model.until == until)
+  }
+
+  @Test(arguments: [
+    (
+      ServerError.unreachable(URLError(.notConnectedToInternet)),
+      "サーバーにつながりませんでした。ネットワークを確かめて、もう一度お試しください。"
+    ),
+    (.refused(status: 401, reason: ""), "サインインが切れました。もう一度 Apple でサインインしてください。"),
+    (
+      .refused(status: 402, reason: ""),
+      "プランの期限が切れているため、読み取りモードは変えられません。プランに入り直すと、また使えます。"
+    ),
+    (
+      .limitReached(.requests),
+      "今日のリクエストの回数がプランの上限に達しました。日付が変わると（協定世界時の 0 時、日本時間の 9 時）また使えます。"
+    ),
+    (.unexpectedAnswer("x"), "サーバーの答えが読めませんでした。"),
+  ])
+  func aServerFailureIsSaidForReadMode(_ error: ServerError, _ said: String) {
+    #expect(ReadModeModel.message(for: error) == said)
+  }
+
+  @Test func aStateThatCantBeReadIsSaidAsTheDevices() {
+    #expect(
+      ReadModeModel.message(for: CocoaError(.fileReadCorruptFile)).hasPrefix("この端末の同期の記録"))
   }
 
   @Test func excludingAndIncludingAWriting() async {
@@ -120,5 +165,31 @@ struct ReadModeModelTests {
     copies.kept = kept
     copies.refused = refused
     #expect(ReadModeModel.said(copies) == said)
+  }
+}
+
+/// Passes requests on to the fake, answering the next `GET /agents` with a 500 once told to:
+/// turning on goes through, and reading the agents for its copies fails.
+private actor FailingAgents: HTTPTransport {
+  let fake: FakeWritingServer
+  private var failing = false
+
+  init(fake: FakeWritingServer) {
+    self.fake = fake
+  }
+
+  func failOnce() {
+    failing = true
+  }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    guard failing, request.httpMethod ?? "GET" == "GET",
+      request.url?.lastPathComponent == "agents", let url = request.url,
+      let response = HTTPURLResponse(url: url, statusCode: 500, httpVersion: nil, headerFields: nil)
+    else {
+      return try await fake.send(request)
+    }
+    failing = false
+    return (Data(#"{"error":"down"}"#.utf8), response)
   }
 }
