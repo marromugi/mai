@@ -1338,3 +1338,85 @@ struct EditorHeightTests {
     #expect(abs(container.textHeight(within: narrower) - atNarrower) < 0.01)
   }
 }
+
+@MainActor
+struct CaretTests {
+  /// The caret is drawn in the text's own colour, which follows light and dark.
+  @Test func theCaretIsTheTextsColour() throws {
+    let page = HostedPage(screen(edits: Edits()))
+    let editor = try #require(editorView(in: page))
+    for style in [UIUserInterfaceStyle.light, .dark] {
+      let traits = UITraitCollection(userInterfaceStyle: style)
+      #expect(
+        editor.tintColor.resolvedColor(with: traits) == UIColor.label.resolvedColor(with: traits))
+    }
+  }
+
+  /// In the title and in the body, on a wrapped line and on an empty one, the caret runs from the
+  /// ascender to the descender of the line's type.
+  @Test func theCaretIsAsTallAsTheTypeOnItsLine() throws {
+    let wrapped = String(repeating: "長い行が折り返す。", count: 6)
+    let edits = Edits(writing: Writing(title: "朝Ag", body: "本文Ag\n\n" + wrapped))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let length = (editor.text as NSString).length
+    for offset in 0...length {
+      let caret = try caretRect(at: offset, in: editor)
+      let font = try font(offset < editor.bodyStart ? .heading : .body, in: editor)
+      #expect(abs(caret.height - (font.ascender - font.descender)) < 0.01, "\(offset)")
+    }
+    #expect(try caretRect(at: 3, in: editor).height > caretRect(at: 4, in: editor).height)
+  }
+
+  /// Where no character is beside it — an empty writing, the line after a last line break — the
+  /// caret is where it is once a character is typed there.
+  @Test(arguments: [Writing(title: "", body: ""), Writing(title: "朝", body: "本文\n")])
+  func anEmptyLinesCaretStaysAsACharacterIsTyped(_ writing: Writing) throws {
+    let page = HostedPage(screen(edits: Edits(writing: writing)))
+    let editor = try focusedEditor(in: page)
+    let end = (editor.text as NSString).length
+    editor.selectedRange = NSRange(location: end, length: 0)
+    let empty = try caretRect(at: end, in: editor)
+    type("A", into: editor)
+    page.settle()
+    let typed = try caretRect(at: end, in: editor)
+    #expect(abs(empty.minY - typed.minY) < 0.01)
+    #expect(abs(empty.height - typed.height) < 0.01)
+  }
+
+  /// A selection's handles are as tall as the caret at each of its ends; its highlight is UIKit's.
+  @Test func theSelectionsEndsAreAsTallAsTheCaretThere() throws {
+    let edits = Edits(writing: Writing(title: "朝の机", body: "本文の一行目\n二行目"))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let start = try #require(editor.position(from: editor.beginningOfDocument, offset: 1))
+    let end = try #require(editor.position(from: editor.beginningOfDocument, offset: 8))
+    let range = try #require(editor.textRange(from: start, to: end))
+    let rects = editor.selectionRects(for: range)
+    let starts = rects.filter(\.containsStart)
+    let ends = rects.filter(\.containsEnd)
+    try #require(starts.count == 1 && ends.count == 1)
+    let startCaret = editor.caretRect(for: start)
+    let endCaret = editor.caretRect(for: end)
+    #expect(starts[0].rect.minY == startCaret.minY && starts[0].rect.height == startCaret.height)
+    #expect(ends[0].rect.minY == endCaret.minY && ends[0].rect.height == endCaret.height)
+    // UIKit centres the caret on the place between two characters.
+    #expect(abs(starts[0].rect.minX - startCaret.midX) < 0.01)
+    #expect(abs(ends[0].rect.minX - endCaret.midX) < 0.01)
+    let highlight = rects.filter { !$0.containsStart && !$0.containsEnd }.map(\.rect)
+    #expect(highlight.map(\.minY).min()! < startCaret.minY)
+    #expect(highlight.map(\.maxY).max()! > endCaret.maxY)
+  }
+}
+
+@MainActor
+private func caretRect(at offset: Int, in view: UITextView) throws -> CGRect {
+  view.caretRect(for: try #require(view.position(from: view.beginningOfDocument, offset: offset)))
+}
+
+@MainActor
+private func font(_ role: TextRole, in view: PlaceholderTextView) throws -> UIFont {
+  let lines = try #require(view.lines)
+  let attributes = role == .heading ? view.titleAttributes : lines.body
+  return try #require(attributes[.font] as? UIFont)
+}

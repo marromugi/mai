@@ -109,6 +109,8 @@ struct WritingTextView: UIViewRepresentable {
     let editor = EditorView()
     let view = editor.textView
     view.textContainer.lineFragmentPadding = 0
+    // The text's own colour, as `TypeScale.attributes` sets it.
+    view.tintColor = .label
     view.delegate = context.coordinator
     view.pasteDelegate = context.coordinator
     let tap = UITapGestureRecognizer(
@@ -855,6 +857,74 @@ final class PlaceholderTextView: UITextView {
     return label
   }()
 
+  /// As tall as the type on the caret's line, from its ascender to its descender, not the line's
+  /// whole box.
+  override func caretRect(for position: UITextPosition) -> CGRect {
+    let caret = super.caretRect(for: position)
+    guard let type = typeExtent(atHeightOf: caret) else { return caret }
+    return CGRect(
+      x: caret.minX, y: type.lowerBound, width: caret.width,
+      height: type.upperBound - type.lowerBound)
+  }
+
+  /// The highlight as UIKit draws it, with the selection's handles as tall as the type at each
+  /// end, as the caret is; as tall as UIKit's highlight at an end not laid out.
+  override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
+    let rects = super.selectionRects(for: range)
+    var ends: [UITextSelectionRect] = []
+    for rect in rects where rect.containsStart || rect.containsEnd {
+      for isStart in [true, false] where isStart ? rect.containsStart : rect.containsEnd {
+        let type = typeExtent(atHeightOf: rect.rect) ?? rect.rect.minY...rect.rect.maxY
+        let onTheLeft = isStart != (rect.writingDirection == .rightToLeft)
+        let x = onTheLeft ? rect.rect.minX : rect.rect.maxX
+        ends.append(
+          SelectionEnd(
+            rect: CGRect(
+              x: x, y: type.lowerBound, width: 0, height: type.upperBound - type.lowerBound),
+            writingDirection: rect.writingDirection, isStart: isStart))
+      }
+    }
+    return rects.map(Highlight.init) + ends
+  }
+
+  /// From the ascender to the descender of the type on the line laid out at `rect`'s middle, in
+  /// the view's coordinates; nil where no line is laid out there. A line with no characters, as
+  /// after a last line break, is in the body's type, or the title's in an empty text.
+  private func typeExtent(atHeightOf rect: CGRect) -> ClosedRange<CGFloat>? {
+    guard let lines else { return nil }
+    let inset = textContainerInset
+    guard textStorage.length > 0 else {
+      return typeExtent(of: titleAttributes, onLineAt: inset.top)
+    }
+    let point = CGPoint(x: rect.midX - inset.left, y: rect.midY - inset.top)
+    guard let fragment = textLayoutManager?.textLayoutFragment(for: point) else { return nil }
+    let origin = fragment.layoutFragmentFrame.origin
+    let found = fragment.textLineFragments.first { line in
+      let bounds = line.typographicBounds.offsetBy(dx: origin.x, dy: origin.y)
+      return bounds.minY <= point.y && point.y < bounds.maxY
+    }
+    guard let line = found ?? fragment.textLineFragments.last else { return nil }
+    let top = inset.top + origin.y + line.typographicBounds.minY
+    guard line.characterRange.length > 0,
+      let font = line.attributedString.attribute(
+        .font, at: line.characterRange.location, effectiveRange: nil) as? UIFont
+    else { return typeExtent(of: lines.body, onLineAt: top) }
+    let baseline = top + line.glyphOrigin.y
+    return (baseline - font.ascender)...(baseline - font.descender)
+  }
+
+  /// From the ascender to the descender of text set in `attributes` on a line whose box starts at
+  /// `top`, with its baseline placed as `EditorLines` says.
+  private func typeExtent(
+    of attributes: [NSAttributedString.Key: Any], onLineAt top: CGFloat
+  ) -> ClosedRange<CGFloat>? {
+    guard let font = attributes[.font] as? UIFont,
+      let paragraph = attributes[.paragraphStyle] as? NSParagraphStyle
+    else { return nil }
+    let baseline = top + paragraph.maximumLineHeight + font.descender
+    return (baseline - font.ascender)...(baseline - font.descender)
+  }
+
   override func layoutSubviews() {
     super.layoutSubviews()
     let fitted = placeholder.sizeThatFits(
@@ -889,4 +959,38 @@ extension TypeScale {
     }
     return attributes
   }
+}
+
+/// A part of a selection's highlight as UIKit laid it out, holding neither of its ends.
+private final class Highlight: UITextSelectionRect {
+  private let base: UITextSelectionRect
+
+  init(_ base: UITextSelectionRect) {
+    self.base = base
+  }
+
+  override var rect: CGRect { base.rect }
+  override var writingDirection: NSWritingDirection { base.writingDirection }
+  override var isVertical: Bool { base.isVertical }
+  override var containsStart: Bool { false }
+  override var containsEnd: Bool { false }
+}
+
+/// One end of a selection, where its handle stands, with no highlight of its own.
+private final class SelectionEnd: UITextSelectionRect {
+  private let edge: CGRect
+  private let direction: NSWritingDirection
+  private let isStart: Bool
+
+  init(rect: CGRect, writingDirection: NSWritingDirection, isStart: Bool) {
+    edge = rect
+    direction = writingDirection
+    self.isStart = isStart
+  }
+
+  override var rect: CGRect { edge }
+  override var writingDirection: NSWritingDirection { direction }
+  override var isVertical: Bool { false }
+  override var containsStart: Bool { isStart }
+  override var containsEnd: Bool { !isStart }
 }
