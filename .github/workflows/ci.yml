@@ -79,10 +79,13 @@ jobs:
           App scripts Packages/Modules/Package.swift Packages/Modules/Sources
           Packages/Typesetting/Package.swift Packages/Typesetting/Sources Packages/Typesetting/Tests
           Packages/Sync/Package.swift Packages/Sync/Sources Packages/Sync/Tests AppTests
+          Packages/Agent/Package.swift Packages/Agent/Sources Packages/Agent/Tests
       - name: Test the typesetting on the Mac
         run: swift test --package-path Packages/Typesetting
       - name: Test sealing and syncing on the Mac
         run: swift test --package-path Packages/Sync --skip Contract
+      - name: Test the Mac's MCP server
+        run: swift test --package-path Packages/Agent
       - name: Install XcodeGen
         run: |
           curl -fsSL -o xcodegen.zip https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
