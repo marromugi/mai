@@ -136,7 +136,7 @@ public struct RootView: View {
 
 /// The writing with `id` on its page, with its photos, while `library` holds it. Its own view, so
 /// an edit updates the page and not the list under it.
-private struct OpenWriting: View {
+struct OpenWriting: View {
   let id: Writing.ID
   let library: WritingLibrary
   let photos: WritingPhotos

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Synchronization
 import Testing
 
@@ -94,7 +95,7 @@ struct WritingLibraryTests {
   /// after it, so the store and the list hold what the sync took in.
   @Test func aWritingTakenInDuringASaveIsSavedAfterIt() async throws {
     let writing = Writing(title: "朝", body: "本文", updated: Date(timeIntervalSince1970: 1))
-    let store = CountingStore([writing], delay: 0.3)
+    let store = CountingStore([writing], delays: [0.3])
     let library = WritingLibrary(store: store, rest: .seconds(60))
     library.load(seedingWhenEmpty: [])
     library.edit(writing.id, at: Date(timeIntervalSince1970: 2)) { $0.body = "端末の追記" }
@@ -110,6 +111,45 @@ struct WritingLibraryTests {
 
     #expect(try store.all() == [fromServer])
     #expect(try library.rows?.get() == [WritingRow(fromServer)])
+  }
+
+  /// A save asked for while another is being written lands after it, so the store holds the
+  /// last edit.
+  @Test func savesLandInTheOrderTheyWereAskedFor() async throws {
+    let writing = Writing(title: "朝", body: "本文", updated: Date(timeIntervalSince1970: 1))
+    let store = CountingStore([writing], delays: [0.3])
+    let library = WritingLibrary(store: store, rest: .seconds(60))
+    library.load(seedingWhenEmpty: [])
+
+    library.edit(writing.id, at: Date(timeIntervalSince1970: 2)) { $0.body = "一度目" }
+    let first = Task { await library.saveNow() }
+    try await waitUntil { store.started > 0 }
+    library.edit(writing.id, at: Date(timeIntervalSince1970: 3)) { $0.body = "二度目" }
+    await library.saveNow()
+    await first.value
+
+    #expect(try store.all().map(\.body) == ["二度目"])
+  }
+
+  /// The open writing's page going away saves what was typed on it, without waiting for the rest.
+  @Test func closingThePageSavesItsEdits() async throws {
+    let writing = Writing(title: "朝", body: "本文", updated: Date(timeIntervalSince1970: 1))
+    let store = CountingStore([writing])
+    let library = WritingLibrary(store: store, rest: .seconds(60))
+    library.load(seedingWhenEmpty: [])
+    let directory = FileManager.default.temporaryDirectory.appending(
+      path: "WritingLibraryTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let photos = WritingPhotos(store: PhotoStore(directory: directory))
+    let page = HostedPage(
+      OpenWriting(
+        id: writing.id, library: library, photos: photos, setting: .constant(.standard),
+        open: { _ in }, edit: { library.edit($0, at: .now, $1) }, photoTaken: { _ in }))
+
+    library.edit(writing.id, at: Date(timeIntervalSince1970: 2)) { $0.body = "閉じる前" }
+    page.show(EmptyView())
+    try await waitUntil { store.saves > 0 }
+    #expect(try store.all().map(\.body) == ["閉じる前"])
   }
 
   /// The store is written off the main actor.
@@ -146,13 +186,14 @@ nonisolated private final class CountingStore: WritingStore {
 
   private let state:
     Mutex<(kept: [Writing.ID: Writing], onMain: [Bool], refusing: Bool, started: Int)>
-  /// How long each save takes before it writes, in seconds.
-  private let delay: TimeInterval
+  /// How long each save takes before it writes, in seconds, in order; the saves after them take
+  /// none.
+  private let delays: Mutex<[TimeInterval]>
 
-  init(_ writings: [Writing], refusing: Bool = false, delay: TimeInterval = 0) {
+  init(_ writings: [Writing], refusing: Bool = false, delays: [TimeInterval] = []) {
     state = Mutex(
       (Dictionary(uniqueKeysWithValues: writings.map { ($0.id, $0) }), [], refusing, 0))
-    self.delay = delay
+    self.delays = Mutex(delays)
   }
 
   var saves: Int { state.withLock { $0.onMain.count } }
@@ -170,7 +211,7 @@ nonisolated private final class CountingStore: WritingStore {
 
   func save(_ writing: Writing) throws {
     state.withLock { $0.started += 1 }
-    Thread.sleep(forTimeInterval: delay)
+    Thread.sleep(forTimeInterval: delays.withLock { $0.isEmpty ? 0 : $0.removeFirst() })
     try state.withLock {
       guard !$0.refusing else { throw Refused() }
       $0.onMain.append(Thread.isMainThread)

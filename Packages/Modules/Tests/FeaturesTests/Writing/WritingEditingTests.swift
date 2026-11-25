@@ -1255,6 +1255,47 @@ struct EditorViewTests {
   }
 }
 
+extension EditorViewTests {
+  /// A line break typed on the last line shown, above the bottom row, moves the page by no more
+  /// than to keep the caret in sight; the same for each line typed after it.
+  @Test func aLineBreakOnTheLastLineShownKeepsThePageInPlace() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try focusedEditor(in: page)
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    scroll.contentOffset.y = 2_000
+    page.settle()
+    let shown = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: nil)
+    // The caret at the start of the last whole line shown.
+    let point = editor.convert(CGPoint(x: 1, y: shown.maxY - 40), from: nil)
+    let position = try #require(editor.closestPosition(to: point))
+    editor.selectedTextRange = editor.textRange(from: position, to: position)
+    page.settle()
+    for _ in 0..<3 {
+      let before = scroll.contentOffset.y
+      type("\n", into: editor)
+      page.settle()
+      #expect(abs(scroll.contentOffset.y - before) < 100)
+      let caret = try #require(editor.selectedTextRange)
+      #expect(shown.contains(editor.convert(editor.caretRect(for: caret.start), to: nil)))
+    }
+  }
+
+  /// The arrow keys move the caret to the end of a long writing, and the page follows it there.
+  @Test func movingTheCaretToTheEndScrollsThePageThere() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try focusedEditor(in: page)
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    scroll.contentOffset.y = 0
+    page.settle()
+    editor.selectedTextRange = editor.textRange(
+      from: editor.endOfDocument, to: editor.endOfDocument)
+    page.settle()
+    let shown = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: nil)
+    let caret = try #require(editor.selectedTextRange)
+    #expect(shown.contains(editor.convert(editor.caretRect(for: caret.start), to: nil)))
+  }
+}
+
 /// A writing whose body is many screens long.
 private let long = Writing(
   title: "朝", body: Array(repeating: Writing.sampleBody, count: 12).joined(separator: "\n"))
@@ -1276,6 +1317,8 @@ struct EditorHeightTests {
       (NSRange(location: 3, length: 0), "\n"),
       (NSRange(location: 3, length: 1), ""),
       (NSRange(location: 20, length: 30), "置き換えた\n二行に"),
+      // The title wraps, and the space below it changes.
+      (NSRange(location: 1, length: 0), "の机に向かって、間合いの調整をする日の覚え書き"),
     ]
     for (range, text) in steps {
       editor.selectedRange = NSRange(location: min(range.location, ends()), length: range.length)
@@ -1288,5 +1331,10 @@ struct EditorHeightTests {
       container.paragraphs = nil
       #expect(abs(container.textHeight(within: editor.frame.width) - kept) < 0.01)
     }
+    // At another width, every line is set again.
+    let narrower = editor.frame.width - 40
+    let atNarrower = container.textHeight(within: narrower)
+    container.paragraphs = nil
+    #expect(abs(container.textHeight(within: narrower) - atNarrower) < 0.01)
   }
 }

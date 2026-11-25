@@ -586,14 +586,28 @@ final class EditorView: UIView {
     let width = textView.frame.width > 0 ? textView.frame.width : bounds.width
     let size = CGSize(width: width, height: window?.bounds.height ?? bounds.height)
     var top: CGFloat = 0
+    // What the page shows of the text view: the rest is inset, so the text view keeps the caret
+    // within it, clear of the bottom row and the keyboard. An inset leaves the container as it is.
+    var hidden = UIEdgeInsets.zero
     if let scrollView {
-      let shown = convert(scrollView.bounds, from: scrollView)
-      top = min(max(shown.minY, 0), max(bounds.height - size.height, 0))
+      // Placed over all the page draws, under the bars too; caret kept within what they leave.
+      let drawn = convert(scrollView.bounds, from: scrollView)
+      let clear = convert(
+        scrollView.bounds.inset(by: scrollView.adjustedContentInset), from: scrollView)
+      top = min(max(drawn.minY, 0), max(bounds.height - size.height, 0))
+      hidden.top = min(max(clear.minY - top, 0), size.height)
+      hidden.bottom = min(max(top + size.height - clear.maxY, 0), size.height - hidden.top)
     }
     moving = true
     mover.frame = CGRect(origin: CGPoint(x: 0, y: top), size: size)
     if textView.frame.size != size {
       textView.frame = CGRect(origin: .zero, size: size)
+    }
+    if textView.contentSize.height < bounds.height {
+      textView.contentSize = textView.contentSize
+    }
+    if textView.contentInset != hidden {
+      textView.contentInset = hidden
     }
     textView.contentOffset = CGPoint(x: 0, y: top)
     moving = false
@@ -734,6 +748,16 @@ final class PlaceholderTextView: UITextView {
   /// properties are set.
   var editor: EditorView? {
     superview?.superview as? EditorView
+  }
+
+  /// At least as tall as the editor: TextKit's own height is an estimate, and a text view held
+  /// shorter than the place it is scrolled to pulls itself back.
+  override var contentSize: CGSize {
+    get { super.contentSize }
+    set {
+      super.contentSize = CGSize(
+        width: newValue.width, height: max(newValue.height, editor?.bounds.height ?? 0))
+    }
   }
 
   // A scroll the text view makes itself, as to keep the caret in sight, scrolls the page.
