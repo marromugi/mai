@@ -12,7 +12,7 @@ struct WritingView: View {
   let others: [Writing]
   let open: (Writing) -> Void
   let edit: (_ change: (inout Writing) -> Void) -> Void
-  let photos: [UIImage]
+  let photos: [PagePhoto]
   @Binding var setting: BodySetting
   let camera: Camera
   let photoTaken: (UIImage) -> Void
@@ -40,7 +40,7 @@ struct WritingScreen: View {
   let others: [Writing]
   let open: (Writing) -> Void
   let edit: (_ change: (inout Writing) -> Void) -> Void
-  let photos: [UIImage]
+  let photos: [PagePhoto]
   @Binding var setting: BodySetting
   @Binding var editing: Bool
   @Binding var typesetting: Bool
@@ -205,7 +205,7 @@ struct WritingPage: View {
   var mentions: [TitleMention] = []
   var editing = false
   var edit: (_ change: (inout Writing) -> Void) -> Void = { _ in }
-  let photos: [UIImage]
+  let photos: [PagePhoto]
   let width: CGFloat
   let back: () -> Void
   let titleCutOff: (CGFloat) -> Void

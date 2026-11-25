@@ -48,23 +48,26 @@ nonisolated final class SyncedWritings: PlainWritingStore {
     }
     return Writing(
       id: plain.id, title: contents.title, body: contents.body, links: contents.links,
-      updated: plain.updated)
+      photos: contents.photos, updated: plain.updated)
   }
 }
 
 extension Writing {
   /// What a writing seals for the server: everything but its ID and updated time, which the
   /// sealed writing carries in its header. Every device reads it, so a field is only ever added,
-  /// and a device ignores the ones it doesn't know. Links are read as `Writing` reads them.
+  /// and a device ignores the ones it doesn't know. Links and photos are read as `Writing` reads
+  /// them. The photos are their IDs alone: each photo is kept apart from the writing.
   nonisolated struct Contents: Codable, Equatable {
     let title: String
     let body: String
     let links: [BodyLink]
+    let photos: [UUID]
 
     init(_ writing: Writing) {
       title = writing.title
       body = writing.body
       links = writing.links
+      photos = writing.photos
     }
 
     init(from decoder: any Decoder) throws {
@@ -73,6 +76,7 @@ extension Writing {
       body = try container.decode(String.self, forKey: .body)
       let saved = (try? container.decodeIfPresent([ReadableLink].self, forKey: .links)) ?? nil
       links = (saved ?? []).compactMap(\.link).fitted(to: body)
+      photos = container.photoIDs(forKey: .photos)
     }
 
     func encoded() throws -> Data {

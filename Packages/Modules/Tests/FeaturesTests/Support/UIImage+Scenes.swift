@@ -1,5 +1,7 @@
 import UIKit
 
+@testable import Features
+
 extension UIImage {
   /// A new photo 3 wide by 4 tall: a sky over a hill, with a sun at the top leading corner. Each is
   /// its own image, as each photo the camera takes is.
@@ -34,5 +36,12 @@ extension UIImage {
       context.cgContext.fillEllipse(
         in: CGRect(x: size.width * 0.1, y: size.height * 0.1, width: 60, height: 60))
     }
+  }
+}
+
+extension PagePhoto {
+  /// `image` as a photo of its own, shown as its thumbnail and as itself.
+  convenience init(_ image: UIImage) {
+    self.init(id: UUID(), thumbnail: image, photo: image)
   }
 }

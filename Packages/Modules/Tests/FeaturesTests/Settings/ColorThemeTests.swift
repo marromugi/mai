@@ -30,7 +30,10 @@ struct ColorThemeTests {
       path: "ColorThemeTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: directory) }
     let page = HostedPage(
-      RootView(store: FileWritingStore(directory: directory)).defaultAppStorage(store))
+      RootView(
+        store: FileWritingStore(directory: directory),
+        photoStore: PhotoStore(directory: directory.appending(path: "Photos"))
+      ).defaultAppStorage(store))
     let root = try #require(page.child(UIHostingController<AnyView>.self))
     #expect(root.view.window?.overrideUserInterfaceStyle == style)
   }
@@ -46,7 +49,10 @@ struct ColorThemeTests {
       path: "ColorThemeTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: directory) }
     let page = HostedPage(
-      RootView(store: FileWritingStore(directory: directory)).defaultAppStorage(store))
+      RootView(
+        store: FileWritingStore(directory: directory),
+        photoStore: PhotoStore(directory: directory.appending(path: "Photos"))
+      ).defaultAppStorage(store))
     let window = try #require(page.child(UIHostingController<AnyView>.self)?.view.window)
 
     for (theme, style) in [
