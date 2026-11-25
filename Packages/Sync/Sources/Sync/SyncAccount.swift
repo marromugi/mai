@@ -232,14 +232,16 @@ public struct SyncAccount: Sendable {
     return SyncKeys(session: session, ownKey: ownKey)
   }
 
-  /// Syncs `writings` with the account's writings on the server, sealed with `keys.ownKey`. Its
-  /// state is kept in `stateDirectory`, one file per account. Syncs run one after the other only
-  /// on the same `Synchronizer`, so one is kept per `SyncKeys`.
+  /// Syncs `writings` and their `photos` with the account's on the server, sealed with
+  /// `keys.ownKey`. Its state is kept in `stateDirectory`, one file per account and one for its
+  /// photos. Syncs run one after the other only on the same `Synchronizer`, so one is kept per
+  /// `SyncKeys`.
   public func synchronizer(
-    writings: any PlainWritingStore, stateDirectory: URL, keys: SyncKeys
+    writings: any PlainWritingStore, photos: any PlainPhotoStore, stateDirectory: URL,
+    keys: SyncKeys
   ) -> Synchronizer {
     Synchronizer(
-      writings: writings,
+      writings: writings, photos: photos,
       stateFile: Self.syncStateFile(of: keys.session.account, in: stateDirectory),
       server: WritingServer(
         url: server.url, token: keys.session.token, transport: server.transport),
@@ -281,14 +283,22 @@ public struct SyncAccount: Sendable {
     } catch {
       throw .notForgotten(error)
     }
+    let stateFile = Self.syncStateFile(of: session.account, in: stateDirectory)
     do {
-      try FileManager.default.removeItem(
-        at: Self.syncStateFile(of: session.account, in: stateDirectory))
+      try FileManager.default.removeItem(at: stateFile)
     } catch CocoaError.fileNoSuchFile {
       // Never synced.
     } catch {
       // Left behind, it only makes a later sync of the same account ID send every writing again.
       syncLogger.error("The sync state of a deleted account couldn't be removed: \(error)")
+    }
+    do {
+      try FileManager.default.removeItem(at: PhotoSyncState.file(beside: stateFile))
+    } catch CocoaError.fileNoSuchFile {
+      // No photo synced.
+    } catch {
+      // Left behind, a later account of the same ID and own key wouldn't send these photos.
+      syncLogger.error("The photo sync state of a deleted account couldn't be removed: \(error)")
     }
   }
 

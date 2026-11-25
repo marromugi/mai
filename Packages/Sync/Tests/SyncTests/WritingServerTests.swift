@@ -241,7 +241,7 @@ struct WritingServerTests {
     try devices.second.writings.save(theirs)
     _ = try await devices.second.synchronizer.sync()
     let lapsed = Synchronizer(
-      writings: devices.first.writings,
+      writings: devices.first.writings, photos: devices.first.photos,
       stateFile: FileManager.default.temporaryDirectory.appending(
         path: "mai-sync-tests-\(UUID().uuidString)/state.json"),
       server: server(transport: Refusing(fake, saveOf: refused, with: 402)), ownKey: ownKey)
@@ -323,7 +323,7 @@ struct WritingServerTests {
     let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
     let recording = KeepBothRecorder()
     let synchronizer = Synchronizer(
-      writings: recording,
+      writings: recording, photos: MemoryPhotoStore(),
       stateFile: FileManager.default.temporaryDirectory.appending(
         path: "mai-sync-tests-\(UUID().uuidString)/state.json"),
       server: server(), ownKey: ownKey)
@@ -351,7 +351,7 @@ struct WritingServerTests {
     let devices = try TwoDevices(server: { server() }, ownKey: ownKey)
     let refusing = RefusingStore(refusing: Data("unreadable".utf8))
     let synchronizer = Synchronizer(
-      writings: refusing,
+      writings: refusing, photos: MemoryPhotoStore(),
       stateFile: FileManager.default.temporaryDirectory.appending(
         path: "mai-sync-tests-\(UUID().uuidString)/state.json"),
       server: server(), ownKey: ownKey)
@@ -523,6 +523,10 @@ private final class KeepBothRecorder: PlainWritingStore {
     try writings.save(copy)
     try writings.save(received)
   }
+
+  func photos(of writing: PlainWriting) -> [UUID] {
+    writings.photos(of: writing)
+  }
 }
 
 /// Keeps writings in memory, but refuses to save any with `refused` contents, as the app's store
@@ -544,5 +548,9 @@ private final class RefusingStore: PlainWritingStore {
   func save(_ writing: PlainWriting) throws {
     guard writing.contents != refused else { throw Refused() }
     try writings.save(writing)
+  }
+
+  func photos(of writing: PlainWriting) -> [UUID] {
+    writings.photos(of: writing)
   }
 }

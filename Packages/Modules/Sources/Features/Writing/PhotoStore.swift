@@ -23,31 +23,49 @@ nonisolated struct PhotoStore: Sendable {
       throw UnkeptPhoto(reason: UnencodablePhoto())
     }
     let id = UUID()
+    try write(photo: photo, thumbnail: thumbnail, as: id)
+    return id
+  }
+
+  /// Writes `photo` and `thumbnail`, both JPEG, as the photo with `id`: there with both files, or
+  /// not at all. A write of the same ID cut off before is cleared first, and a photo with `id` kept
+  /// already stays as it is.
+  func write(photo: Data, thumbnail: Data, as id: UUID) throws(UnkeptPhoto) {
     let partial = directory.appending(
       path: ".\(id.uuidString).partial", directoryHint: .isDirectory)
     let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.complete]
     do {
       try FileManager.default.createDirectory(
         at: directory, withIntermediateDirectories: true, attributes: protection)
+      do {
+        try FileManager.default.removeItem(at: partial)
+      } catch CocoaError.fileNoSuchFile {
+        // None was cut off.
+      }
       try FileManager.default.createDirectory(
         at: partial, withIntermediateDirectories: false, attributes: protection)
     } catch {
       throw UnkeptPhoto(reason: error)
+    }
+    let removePartial = {
+      do {
+        try FileManager.default.removeItem(at: partial)
+      } catch {
+        photoLogger.error("A photo not kept left \(partial.lastPathComponent): \(error)")
+      }
     }
     do {
       try photo.write(to: partial.appending(path: Self.photo), options: .completeFileProtection)
       try thumbnail.write(
         to: partial.appending(path: Self.thumbnail), options: .completeFileProtection)
       try FileManager.default.moveItem(at: partial, to: folder(of: id))
+    } catch CocoaError.fileWriteFileExists {
+      // Kept already; it stays as it is.
+      removePartial()
     } catch {
-      do {
-        try FileManager.default.removeItem(at: partial)
-      } catch let removal {
-        photoLogger.error("A photo not kept left \(partial.lastPathComponent): \(removal)")
-      }
+      removePartial()
       throw UnkeptPhoto(reason: error)
     }
-    return id
   }
 
   /// The photo with `id` as a page shows it, its thumbnail decoded, or nil when the device has no
@@ -70,6 +88,20 @@ nonisolated struct PhotoStore: Sendable {
   func thumbnail(_ id: UUID) -> UIImage? {
     UIImage(
       contentsOfFile: folder(of: id).appending(path: Self.thumbnail).path(percentEncoded: false))
+  }
+
+  /// The photo with `id` and its thumbnail as kept, JPEG, or nil when the device has no such
+  /// photo.
+  @concurrent func files(of id: UUID) async throws -> (photo: Data, thumbnail: Data)? {
+    let folder = folder(of: id)
+    do {
+      return (
+        try Data(contentsOf: folder.appending(path: Self.photo)),
+        try Data(contentsOf: folder.appending(path: Self.thumbnail))
+      )
+    } catch CocoaError.fileReadNoSuchFile {
+      return nil
+    }
   }
 
   func folder(of id: UUID) -> URL {

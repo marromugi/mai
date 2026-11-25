@@ -12,9 +12,15 @@ enum ServerContract: CaseIterable, Sendable {
   case aSaveClaimingARevisionOfAWritingNeverSavedIsRefused
   case aWritingNeverSavedIsNotThere
   case anotherTokenIsRefused
+  case aPhotoIsSentAndReadBackWhole
+  case aPhotoPartSentAgainIsLeftAsItWas
+  case aPhotoNeverSentIsNotThere
+  case anotherTokenCanNeitherSendNorReadAPhoto
 
   /// `server` lets in its session's token; `stranger` holds another. `ownKey` seals and opens.
   func check(server: WritingServer, stranger: WritingServer, ownKey: OwnKey) async throws {
+    let photo = PlainPhoto(
+      id: UUID(), photo: Data(repeating: 0xd8, count: 40_000), thumbnail: Data("小さな写真".utf8))
     let first = PlainWriting(
       id: UUID(), updated: Date(timeIntervalSince1970: 1_790_000_000.123),
       contents: Data("一稿".utf8))
@@ -86,6 +92,45 @@ enum ServerContract: CaseIterable, Sendable {
         guard case ServerError.refused(status: 401, _) = error else { return false }
         return true
       }
+
+    case .aPhotoIsSentAndReadBackWhole:
+      let sealed = try ownKey.seal(photo)
+      #expect(try await server.send(sealed.thumbnail) == .sent)
+      #expect(try await server.readPhoto(photo.id, .photo) == nil)
+      #expect(try await server.send(sealed.photo) == .sent)
+      let thumbnail = try #require(try await server.readPhoto(photo.id, .thumbnail))
+      let whole = try #require(try await server.readPhoto(photo.id, .photo))
+      #expect(try ownKey.open(thumbnail) == photo.thumbnail)
+      #expect(try ownKey.open(whole) == photo.photo)
+
+    case .aPhotoPartSentAgainIsLeftAsItWas:
+      let first = try ownKey.seal(photo)
+      _ = try await server.send(first.photo)
+      let again = try ownKey.seal(
+        PlainPhoto(id: photo.id, photo: Data("別の写真".utf8), thumbnail: photo.thumbnail))
+      #expect(try await server.send(again.photo) == .alreadyThere)
+      let read = try #require(try await server.readPhoto(photo.id, .photo))
+      #expect(try ownKey.open(read) == photo.photo)
+
+    case .aPhotoNeverSentIsNotThere:
+      #expect(try await server.readPhoto(photo.id, .photo) == nil)
+      #expect(try await server.readPhoto(photo.id, .thumbnail) == nil)
+
+    case .anotherTokenCanNeitherSendNorReadAPhoto:
+      let sealed = try ownKey.seal(photo)
+      await #expect {
+        try await stranger.send(sealed.thumbnail)
+      } throws: { error in
+        guard case ServerError.refused(status: 401, _) = error else { return false }
+        return true
+      }
+      _ = try await server.send(sealed.thumbnail)
+      await #expect {
+        try await stranger.readPhoto(photo.id, .thumbnail)
+      } throws: { error in
+        guard case ServerError.refused(status: 401, _) = error else { return false }
+        return true
+      }
     }
   }
 }
@@ -102,15 +147,35 @@ struct TwoDevices {
 
   struct Device {
     let writings = MemoryWritingStore()
+    let photos = MemoryPhotoStore()
     let synchronizer: Synchronizer
 
     init(server: WritingServer, ownKey: OwnKey) throws {
       let directory = FileManager.default.temporaryDirectory.appending(
         path: "mai-sync-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
       synchronizer = Synchronizer(
-        writings: writings, stateFile: directory.appending(path: "state.json"), server: server,
-        ownKey: ownKey)
+        writings: writings, photos: photos, stateFile: directory.appending(path: "state.json"),
+        server: server, ownKey: ownKey)
     }
+  }
+
+  /// A photo taken on the first device reaches the second with the writing that points at it.
+  func checkAPhotoTravelsWithItsWriting() async throws {
+    let photo = PlainPhoto(
+      id: UUID(), photo: Data("写真".utf8), thumbnail: Data("サムネイル".utf8))
+    try first.photos.keep(photo)
+    let written = PlainWriting(
+      id: UUID(), updated: Date(timeIntervalSince1970: 1_790_000_000.25),
+      contents: .pointing(at: [photo.id]))
+    try first.writings.save(written)
+    let sent = try await first.synchronizer.sync()
+    #expect(sent.photosSent == [photo.id])
+    #expect(sent.sent == [written.id])
+
+    let received = try await second.synchronizer.sync()
+    #expect(received.received == [written.id])
+    #expect(received.photosReceived == [photo.id])
+    #expect(try second.photos.read(photo.id) == photo)
   }
 
   /// A writing written on the first device reaches the second, and the second's edit comes back.
@@ -145,5 +210,40 @@ final class MemoryWritingStore: PlainWritingStore {
 
   func save(_ writing: PlainWriting) throws {
     writings.withLock { $0[writing.id] = writing }
+  }
+
+  /// The photos of contents made by `Data.pointing(at:)`; none for any other contents.
+  func photos(of writing: PlainWriting) -> [UUID] {
+    (try? JSONDecoder().decode(Pointing.self, from: writing.contents))?.photos ?? []
+  }
+}
+
+/// Contents that point at photos, as `MemoryWritingStore` reads them.
+private struct Pointing: Codable {
+  let photos: [UUID]
+}
+
+extension Data {
+  static func pointing(at photos: [UUID]) -> Data {
+    do {
+      return try JSONEncoder().encode(Pointing(photos: photos))
+    } catch {
+      preconditionFailure("A list of UUIDs always encodes: \(error)")
+    }
+  }
+}
+
+/// Photos kept in memory, standing in for the app's photo store.
+final class MemoryPhotoStore: PlainPhotoStore {
+  private let photos = Mutex<[UUID: PlainPhoto]>([:])
+
+  func read(_ id: UUID) throws -> PlainPhoto? {
+    photos.withLock { $0[id] }
+  }
+
+  func keep(_ photo: PlainPhoto) throws {
+    photos.withLock { photos in
+      if photos[photo.id] == nil { photos[photo.id] = photo }
+    }
   }
 }

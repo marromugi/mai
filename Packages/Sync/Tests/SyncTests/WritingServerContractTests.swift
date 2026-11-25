@@ -35,4 +35,11 @@ struct WritingServerContractTests {
     try await TwoDevices(server: { server }, ownKey: OwnKey.generate())
       .checkAWritingAndItsEditTravelBothWays()
   }
+
+  @Test func aPhotoTravelsWithItsWritingThroughTheWorker() async throws {
+    let token = try #require(token, "MAI_SERVER_TOKEN is the local Worker's token")
+    let server = try server(token: token)
+    try await TwoDevices(server: { server }, ownKey: OwnKey.generate())
+      .checkAPhotoTravelsWithItsWriting()
+  }
 }
