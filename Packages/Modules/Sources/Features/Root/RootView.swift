@@ -1,5 +1,4 @@
 import SwiftUI
-import os
 
 public struct RootView: View {
   private let fonts: FontLibrary
@@ -68,22 +67,23 @@ public struct RootView: View {
         if case .success(let writings) = library.writings,
           let writing = writings.first(where: { $0.id == id })
         {
-          WritingView(
-            writing: writing,
-            others: writings.filter { $0.id != id },
-            open: { path.append($0.id) },
-            edit: { edit(id, $0) },
-            photos: photos.shown(writing.photos),
-            setting: $settings[id, default: defaultSetting.setting],
-            camera: .device,
-            photoTaken: { image in Task { await add(image, to: id) } })
+          ReadPhotos(ids: writing.photos, photos: photos) { read in
+            WritingView(
+              writing: writing,
+              others: writings.filter { $0.id != id },
+              open: { path.append($0.id) },
+              edit: { edit(id, $0) },
+              photos: read,
+              setting: $settings[id, default: defaultSetting.setting],
+              camera: .device,
+              photoTaken: { image in Task { await add(image, to: id) } })
+          }
         }
       }
     }
     .environment(\.fontFamilies, fontStack.stack.families(from: fonts.available))
     .task {
       library.load(seedingWhenEmpty: Writing.samples(now: opened, calendar: .current))
-      sweepPhotos()
       await account?.checkAtLaunch()
       launchChecked = true
       await sync?.syncNow()
@@ -123,21 +123,11 @@ public struct RootView: View {
     do {
       photo = try await photos.store.keep(image)
     } catch {
+      photoLogger.error("A photo taken wasn't kept: \(error.reason)")
       unsaved = .photo(error)
       return
     }
     edit(id) { $0.photos.append(photo) }
-  }
-
-  /// Removes the photos no writing on the device points at, once the writings are read. Runs
-  /// before any photo can be taken, so none is removed between being kept and being added.
-  private func sweepPhotos() {
-    guard case .success(let writings) = library.writings else { return }
-    do {
-      try photos.store.sweep(keeping: Set(writings.flatMap(\.photos)))
-    } catch {
-      photoLogger.error("Sweeping the photos failed: \(error)")
-    }
   }
 }
 
@@ -146,19 +136,17 @@ private enum Unsaved: LocalizedError {
   /// The edit is on screen but not on the device.
   case writing(any Error)
   /// The photo taken isn't on the device, nor on the page.
-  case photo(any Error)
+  case photo(UnkeptPhoto)
 
   var errorDescription: String? {
     switch self {
     case .writing(let reason):
       "この編集は画面に出ていますが、端末には残っていません。\(reason.localizedDescription)"
-    case .photo(let reason):
-      "撮った写真を端末に残せませんでした。\(reason.localizedDescription)"
+    case .photo(let unkept):
+      unkept.localizedDescription
     }
   }
 }
-
-private let photoLogger = Logger(subsystem: "com.marromugi.mai", category: "photos")
 
 #Preview {
   RootView(fonts: FontLibrary(server: nil), account: nil)

@@ -9,7 +9,8 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
   /// Stretches of `body` that link outside the app: whole characters, in order, never overlapping,
   /// as `fitted(to:)` leaves them.
   var links: [BodyLink]
-  /// The IDs of its photos in the `PhotoStore`, oldest first, shown after the body.
+  /// The IDs of its photos, oldest first, shown after the body. A writing synced from another
+  /// device may point at a photo this device's `PhotoStore` doesn't have.
   var photos: [UUID]
   var updated: Date
 

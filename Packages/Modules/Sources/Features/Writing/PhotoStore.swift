@@ -1,4 +1,5 @@
 import UIKit
+import os
 
 /// Where the photos taken on the device are kept: each photo and a thumbnail of it, as JPEG files
 /// in a directory of their own named by the photo's ID, under complete file protection, so they
@@ -10,38 +11,56 @@ nonisolated struct PhotoStore: Sendable {
   static let onDevice = PhotoStore(
     directory: .applicationSupportDirectory.appending(path: "Photos", directoryHint: .isDirectory))
 
-  /// The longest side of a thumbnail, in pixels: enough for the largest print in a `PhotoStack`.
+  /// The longest side of a thumbnail, in pixels: more than the largest print in a `PhotoStack`.
   static let thumbnailSide: CGFloat = 1200
 
   /// Keeps `image` and a thumbnail of it, and answers the new photo's ID. The photo is there with
   /// its thumbnail, or not at all.
-  @concurrent func keep(_ image: UIImage) async throws -> UUID {
+  @concurrent func keep(_ image: UIImage) async throws(UnkeptPhoto) -> UUID {
     guard let photo = image.jpegData(compressionQuality: 0.9),
       let thumbnail = Self.thumbnail(of: image).jpegData(compressionQuality: 0.8)
     else {
-      throw UnencodablePhoto()
+      throw UnkeptPhoto(reason: UnencodablePhoto())
     }
     let id = UUID()
     let partial = directory.appending(
       path: ".\(id.uuidString).partial", directoryHint: .isDirectory)
     let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.complete]
-    try FileManager.default.createDirectory(
-      at: directory, withIntermediateDirectories: true, attributes: protection)
-    try FileManager.default.createDirectory(
-      at: partial, withIntermediateDirectories: false, attributes: protection)
+    do {
+      try FileManager.default.createDirectory(
+        at: directory, withIntermediateDirectories: true, attributes: protection)
+      try FileManager.default.createDirectory(
+        at: partial, withIntermediateDirectories: false, attributes: protection)
+    } catch {
+      throw UnkeptPhoto(reason: error)
+    }
     do {
       try photo.write(to: partial.appending(path: Self.photo), options: .completeFileProtection)
       try thumbnail.write(
         to: partial.appending(path: Self.thumbnail), options: .completeFileProtection)
       try FileManager.default.moveItem(at: partial, to: folder(of: id))
     } catch {
-      try? FileManager.default.removeItem(at: partial)
-      throw error
+      do {
+        try FileManager.default.removeItem(at: partial)
+      } catch let removal {
+        photoLogger.error("A photo not kept left \(partial.lastPathComponent): \(removal)")
+      }
+      throw UnkeptPhoto(reason: error)
     }
     return id
   }
 
-  /// The photo with `id`, or nil when the device has no such photo or can't read it now.
+  /// The photo with `id` as a page shows it, its thumbnail decoded, or nil when the device has no
+  /// such photo or can't read it now.
+  @concurrent func read(_ id: UUID) async -> PagePhoto? {
+    guard let photo = photo(id),
+      let thumbnail = await thumbnail(id)?.byPreparingForDisplay()
+    else { return nil }
+    return PagePhoto(id: id, thumbnail: thumbnail, photo: photo)
+  }
+
+  /// The photo with `id`, decoded only when drawn, or nil when the device has no such photo or
+  /// can't read it now.
   func photo(_ id: UUID) -> UIImage? {
     UIImage(contentsOfFile: folder(of: id).appending(path: Self.photo).path(percentEncoded: false))
   }
@@ -51,23 +70,6 @@ nonisolated struct PhotoStore: Sendable {
   func thumbnail(_ id: UUID) -> UIImage? {
     UIImage(
       contentsOfFile: folder(of: id).appending(path: Self.thumbnail).path(percentEncoded: false))
-  }
-
-  /// Removes every photo but those in `kept`, and what a keep that stopped part way left.
-  func sweep(keeping kept: Set<UUID>) throws {
-    let entries: [URL]
-    do {
-      entries = try FileManager.default.contentsOfDirectory(
-        at: directory, includingPropertiesForKeys: nil)
-    } catch CocoaError.fileReadNoSuchFile {
-      return
-    }
-    for entry in entries {
-      let name = entry.lastPathComponent
-      let partial = name.hasPrefix(".") && name.hasSuffix(".partial")
-      guard partial || UUID(uuidString: name).map({ !kept.contains($0) }) == true else { continue }
-      try FileManager.default.removeItem(at: entry)
-    }
   }
 
   func folder(of id: UUID) -> URL {
@@ -93,9 +95,16 @@ nonisolated struct PhotoStore: Sendable {
   }
 }
 
-/// A photo that couldn't be made into a JPEG.
-nonisolated struct UnencodablePhoto: LocalizedError {
+/// A photo taken that couldn't be kept on the device, so it isn't added to the writing.
+nonisolated struct UnkeptPhoto: LocalizedError {
+  let reason: any Error
+
   var errorDescription: String? {
-    "写真を JPEG にできませんでした。"
+    "撮った写真を端末に残せませんでした。端末の空き容量を確かめて、もう一度撮ってください。"
   }
 }
+
+/// A photo that couldn't be made into a JPEG.
+nonisolated struct UnencodablePhoto: Error {}
+
+nonisolated let photoLogger = Logger(subsystem: "com.marromugi.mai", category: "photos")

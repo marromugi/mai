@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 import UIKit
 
@@ -103,93 +104,83 @@ struct PhotoStoreTests {
     }
   }
 
-  /// A sweep removes the photos not kept, and what a keep that stopped part way left; it leaves
-  /// anything else in the directory alone.
-  @Test func aSweepRemovesThePhotosNotKept() async throws {
+  /// A photo that can't be written isn't kept, and says so for a person.
+  @Test func aPhotoThatCantBeWrittenIsNotKept() async throws {
     try await withEmptyStore { store in
-      let kept = try await store.keep(.portrait)
-      let dropped = try await store.keep(.landscape)
-      let partial = store.directory.appending(path: ".\(UUID().uuidString).partial")
-      try FileManager.default.createDirectory(at: partial, withIntermediateDirectories: false)
-      let other = store.directory.appending(path: "notes.txt")
-      try Data("メモ".utf8).write(to: other)
-
-      try store.sweep(keeping: [kept, UUID(sample: 9)])
-
-      #expect(store.photo(kept) != nil)
-      #expect(store.photo(dropped) == nil)
-      #expect(!FileManager.default.fileExists(atPath: store.folder(of: dropped).path()))
-      #expect(!FileManager.default.fileExists(atPath: partial.path()))
-      #expect(FileManager.default.fileExists(atPath: other.path()))
+      // A file where the store's directory goes.
+      try FileManager.default.createDirectory(
+        at: store.directory.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try Data("ファイル".utf8).write(to: store.directory)
+      let error = await #expect(throws: UnkeptPhoto.self) {
+        try await store.keep(.portrait)
+      }
+      #expect(
+        error?.localizedDescription
+          == "撮った写真を端末に残せませんでした。端末の空き容量を確かめて、もう一度撮ってください。")
     }
   }
 
-  @Test func sweepingAStoreNeverKeptToDoesNothing() async throws {
+  /// A photo is read for a page with its thumbnail, and not when the device doesn't have it.
+  @Test func aPhotoIsReadForAPage() async throws {
     try await withEmptyStore { store in
-      try store.sweep(keeping: [])
-      #expect(!FileManager.default.fileExists(atPath: store.directory.path()))
+      let id = try await store.keep(.landscape)
+      let read = try #require(await store.read(id))
+      #expect(read.id == id)
+      #expect(pixels(read.thumbnail) == CGSize(width: 400, height: 300))
+      #expect(pixels(read.photo) == CGSize(width: 400, height: 300))
+      #expect(await store.read(UUID()) == nil)
     }
   }
 }
 
 @MainActor
 struct WritingPhotosTests {
-  /// The page shows the photos in the writing's order, leaving out one the device doesn't have.
-  @Test func thePageShowsThePhotosTheDeviceHas() async throws {
+  /// The page gets the photos in the writing's order, leaving out one the device doesn't have.
+  @Test func thePageGetsThePhotosTheDeviceHas() async throws {
     try await withEmptyStore { store in
       let first = try await store.keep(.portrait)
       let second = try await store.keep(.landscape)
       let photos = WritingPhotos(store: store)
-      let shown = photos.shown([second, UUID(sample: 1), first])
-      #expect(shown.map(\.id) == [second, first])
-      #expect(pixels(shown.first?.thumbnail) == CGSize(width: 400, height: 300))
-      #expect(pixels(shown.first?.photo) == CGSize(width: 400, height: 300))
+      let read = await photos.read([second, UUID(), first])
+      #expect(read.map(\.id) == [second, first])
     }
   }
 
-  /// A photo read once is shown again without reading the store.
+  /// A photo read once is given again without reading the store.
   @Test func aPhotoIsReadOnce() async throws {
     try await withEmptyStore { store in
       let id = try await store.keep(.portrait)
       let photos = WritingPhotos(store: store)
-      let first = try #require(photos.shown([id]).first)
+      let first = try #require(await photos.read([id]).first)
       try FileManager.default.removeItem(at: store.folder(of: id))
-      #expect(photos.shown([id]).first === first)
-    }
-  }
-}
-
-@MainActor
-struct LaunchSweepTests {
-  /// At launch, the photos no writing points at are removed, and those a writing points at stay.
-  @Test func theLaunchRemovesPhotosNoWritingPointsAt() async throws {
-    try await withEmptyStore { photos in
-      let writings = FileWritingStore(directory: photos.directory.appending(path: "Writings"))
-      let kept = try await photos.keep(.portrait)
-      let dropped = try await photos.keep(.landscape)
-      try writings.save(Writing(title: "写真", body: "一枚", photos: [kept]))
-
-      let page = HostedPage(RootView(store: writings, photoStore: photos))
-      try await page.settle { photos.photo(dropped) == nil }
-
-      #expect(photos.photo(dropped) == nil)
-      #expect(photos.photo(kept) != nil)
+      #expect(await photos.read([id]).first === first)
     }
   }
 
-  /// When the writings can't be read, no photo is removed.
-  @Test func theLaunchRemovesNoPhotoWhenTheWritingsCantBeRead() async throws {
-    try await withEmptyStore { photos in
-      let writings = FileWritingStore(directory: photos.directory.appending(path: "Writings"))
-      let id = try await photos.keep(.portrait)
-      try FileManager.default.createDirectory(
-        at: writings.directory, withIntermediateDirectories: true)
-      try Data("文書ではない".utf8).write(to: writings.file(for: UUID(sample: 1)))
-
-      let page = HostedPage(RootView(store: writings, photoStore: photos))
-      try await page.settle { false }
-
-      #expect(photos.photo(id) != nil)
+  /// The view is given the photos once they are read, and read again when the IDs change.
+  @Test func theViewIsGivenThePhotosRead() async throws {
+    try await withEmptyStore { store in
+      let first = try await store.keep(.portrait)
+      let second = try await store.keep(.landscape)
+      let photos = WritingPhotos(store: store)
+      let given = Given()
+      func view(_ ids: [UUID]) -> some View {
+        ReadPhotos(ids: ids, photos: photos) { read in
+          Text(verbatim: "\(read.count)")
+            .onAppear { given.ids = read.map(\.id) }
+            .onChange(of: read.map(\.id)) { given.ids = $1 }
+        }
+      }
+      let page = HostedPage(view([first]))
+      try await page.settle { given.ids == [first] }
+      #expect(given.ids == [first])
+      page.show(view([first, second]))
+      try await page.settle { given.ids == [first, second] }
+      #expect(given.ids == [first, second])
     }
+  }
+
+  private final class Given {
+    var ids: [UUID] = []
   }
 }
