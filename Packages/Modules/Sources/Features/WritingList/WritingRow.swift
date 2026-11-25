@@ -78,7 +78,7 @@ extension WritingRow {
       WritingRow(
         id: UUID(sample: 7), title: "朝", characterCount: 312, updated: ago(5, .minute)),
       WritingRow(
-        id: UUID(sample: 8), title: "週末に読み返すための、とりとめのない覚え書きをまとめたもの", characterCount: 99999,
+        id: UUID(sample: 8), title: "週末に読み返すための、とりとめのない覚え書きをまとめたもの", characterCount: 9999,
         updated: ago(12, .hour)),
       WritingRow(
         id: UUID(sample: 10), title: "読書メモ", characterCount: 2048, updated: ago(2, .hour)),

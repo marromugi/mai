@@ -180,6 +180,12 @@ struct WritingTests {
     }
   }
 
+  /// The samples seeded on a device keep to lengths people write: none longer than 12,480
+  /// characters (#116).
+  @Test func noSampleIsLongerThanTwelveThousandFourHundredEightyCharacters() {
+    #expect(Writing.samples(now: .now, calendar: .current).allSatisfy { $0.body.count <= 12_480 })
+  }
+
   @Test func aStoreWithWritingsIsNotSeeded() throws {
     try withEmptyStore { store throws in
       let writing = Writing(title: "朝", body: "", updated: Date(timeIntervalSince1970: 1))
