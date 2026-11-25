@@ -23,6 +23,11 @@ struct ReadModeScreenTests {
     assertReadMode(until: nil, agents: [])
   }
 
+  /// An agent revoked is none to wrap for: read mode can't be turned on.
+  @Test func readModeWithOnlyARevokedAgent() {
+    assertReadMode(until: nil, agents: [sampleAgents[1]])
+  }
+
   @Test func readModeInDarkMode() {
     assertReadMode(until: nil, colorScheme: .dark)
   }

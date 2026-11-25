@@ -87,10 +87,14 @@ struct ReadModeSettingsView: View {
     }
   }
 
-  /// The writings that sync, newest first; the samples stay on the device.
   private var writings: [ExcludableWriting] {
     guard case .success(let all) = library?.writings else { return [] }
-    return all.filter { !$0.id.isSample }.sorted { $0.updated > $1.updated }.map {
+    return Self.excludable(all)
+  }
+
+  /// Of `all`, the writings that sync, newest first; the samples stay on the device.
+  static func excludable(_ all: [Writing]) -> [ExcludableWriting] {
+    all.filter { !$0.id.isSample }.sorted { $0.updated > $1.updated }.map {
       ExcludableWriting(id: $0.id, title: $0.title)
     }
   }

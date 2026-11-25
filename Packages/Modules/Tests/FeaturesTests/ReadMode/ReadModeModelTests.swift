@@ -123,6 +123,46 @@ struct ReadModeModelTests {
       ReadModeModel.message(for: CocoaError(.fileReadCorruptFile)).hasPrefix("この端末の同期の記録"))
   }
 
+  /// Settings never read are unreadable until a read goes through.
+  @Test func settingsThatCantBeReadAreSaidSo() async {
+    let failing = FailingReads(fake: fake)
+    let model = model(over: failing)
+    await failing.fail(true)
+    await model.load()
+    #expect(model.unreadable)
+    #expect(!model.loaded)
+    await failing.fail(false)
+    await model.load()
+    #expect(!model.unreadable)
+    #expect(model.loaded)
+  }
+
+  /// When the change fails and the read after it does too, the change's failure is what is said.
+  @Test func theChangesFailureIsSaidOverTheReadsAfterIt() async {
+    let failing = FailingReads(fake: fake)
+    let model = model(over: failing)
+    await failing.fail(true)
+    await model.turnOn(until: .now - 60)
+    #expect(model.problem == "終わる時刻がもう過ぎています。これから先の時刻を選んでください。")
+  }
+
+  /// The samples stay on the device, so they aren't listed to exclude; the rest newest first.
+  @Test func theWritingsToExcludeAreThoseThatSync() {
+    let samples = Writing.samples(now: .now, calendar: .current)
+    let older = Writing(title: "古い", body: "", updated: .now - 60)
+    let newer = Writing(title: "新しい", body: "", updated: .now)
+    #expect(
+      ReadModeSettingsView.excludable(samples + [older, newer]).map(\.id) == [newer.id, older.id])
+  }
+
+  private func model(over transport: any HTTPTransport) -> ReadModeModel {
+    ReadModeModel(
+      readMode: ReadMode(
+        server: ReadModeServer(url: url, token: token, transport: transport), ownKey: ownKey,
+        stateFile: FileManager.default.temporaryDirectory.appending(
+          path: "mai-read-mode-model-\(UUID().uuidString).json")))
+  }
+
   @Test func excludingAndIncludingAWriting() async {
     let id = UUID()
     await model.setExcluded(id, true)
@@ -156,8 +196,8 @@ struct ReadModeModelTests {
   @Test(arguments: [
     (0, [:], "0 件の写しをエージェントあてに置きました。"),
     (
-      3, [CopyRefusal.revision: 1, .agent: 1],
-      "3 件の写しをエージェントあてに置きました。2 件は、そのあいだに設定か文書が変わったため置いていません。"
+      3, [CopyRefusal.revision: 2, .agent: 1],
+      "3 件の写しをエージェントあてに置きました。3 件は、そのあいだに設定か文書が変わったため置いていません。"
     ),
   ])
   func whatWasSentIsSaid(kept: Int, refused: [CopyRefusal: Int], said: String) {
@@ -190,6 +230,29 @@ private actor FailingAgents: HTTPTransport {
       return try await fake.send(request)
     }
     failing = false
+    return (Data(#"{"error":"down"}"#.utf8), response)
+  }
+}
+
+/// Passes requests on to the fake, answering every `GET` with a 500 while told to fail.
+private actor FailingReads: HTTPTransport {
+  let fake: FakeWritingServer
+  private var failing = false
+
+  init(fake: FakeWritingServer) {
+    self.fake = fake
+  }
+
+  func fail(_ failing: Bool) {
+    self.failing = failing
+  }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    guard failing, request.httpMethod ?? "GET" == "GET", let url = request.url,
+      let response = HTTPURLResponse(url: url, statusCode: 500, httpVersion: nil, headerFields: nil)
+    else {
+      return try await fake.send(request)
+    }
     return (Data(#"{"error":"down"}"#.utf8), response)
   }
 }
