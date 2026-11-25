@@ -74,10 +74,16 @@ struct Account {
   func write(
     _ title: String, _ body: String, links: [(Range<Int>, String)] = [], at seconds: TimeInterval
   ) throws -> PlainWriting {
-    let contents: [String: Any] = [
-      "title": title, "body": body, "photos": [String](),
-      "links": links.map { ["range": [$0.0.lowerBound, $0.0.upperBound], "url": $0.1] },
-    ]
+    try write(
+      contents: [
+        "title": title, "body": body, "photos": [String](),
+        "links": links.map { ["range": [$0.0.lowerBound, $0.0.upperBound], "url": $0.1] },
+      ], at: seconds)
+  }
+
+  /// Saves a writing on the device whose contents are `contents` as JSON.
+  @discardableResult
+  func write(contents: [String: Any], at seconds: TimeInterval) throws -> PlainWriting {
     let writing = PlainWriting(
       id: UUID(), updated: Date(timeIntervalSince1970: 1_790_000_000 + seconds),
       contents: try JSONSerialization.data(withJSONObject: contents))
@@ -103,4 +109,47 @@ final class MemoryWritings: PlainWritingStore {
 struct NoPhotos: PlainPhotoStore {
   func read(_ id: UUID) -> PlainPhoto? { nil }
   func keep(_ photo: PlainPhoto) {}
+}
+
+/// The fake server, with each answer passed through `change`, and the paths asked for counted.
+final class Tampering: HTTPTransport {
+  let fake: FakeWritingServer
+  let change: @Sendable (URLRequest, Data, HTTPURLResponse) -> (Data, HTTPURLResponse)
+  private let asked = Mutex<[String]>([])
+
+  init(
+    _ fake: FakeWritingServer,
+    change: @escaping @Sendable (URLRequest, Data, HTTPURLResponse) -> (Data, HTTPURLResponse) = {
+      ($1, $2)
+    }
+  ) {
+    self.fake = fake
+    self.change = change
+  }
+
+  var paths: [String] { asked.withLock { $0 } }
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    asked.withLock { $0.append(request.url?.path() ?? "") }
+    let (data, response) = try await fake.send(request)
+    return change(request, data, response)
+  }
+
+  /// An answer to `request` with `status`, `headers` and `body`.
+  static func answer(
+    _ request: URLRequest, _ status: Int, headers: [String: String] = [:], body: Data = Data()
+  ) -> (Data, HTTPURLResponse) {
+    guard let url = request.url,
+      let response = HTTPURLResponse(
+        url: url, statusCode: status, httpVersion: nil, headerFields: headers)
+    else {
+      preconditionFailure("A request made by AgentServer has a URL")
+    }
+    return (body, response)
+  }
+
+  /// Whether `request` is for the copy of `writing`.
+  static func isCopy(_ request: URLRequest, of writing: UUID) -> Bool {
+    request.url?.lastPathComponent == writing.uuidString.lowercased()
+  }
 }

@@ -83,7 +83,7 @@ public struct PairingFile: Sendable {
       }
       try FileManager.default.removeItem(at: url)
       return true
-    } catch CocoaError.fileReadNoSuchFile, CocoaError.fileNoSuchFile {
+    } catch CocoaError.fileReadNoSuchFile {
       return false
     } catch {
       throw .unwritable(url, error.localizedDescription)

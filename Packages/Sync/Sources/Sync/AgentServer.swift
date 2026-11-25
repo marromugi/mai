@@ -4,7 +4,6 @@ import Foundation
 public struct AgentListedWriting: Sendable, Equatable {
   public let id: UUID
   public let revision: Revision
-  public let updated: Date
   /// When the copy expires: the end of read mode.
   public let expires: Date
 }
@@ -32,9 +31,7 @@ public struct AgentServer: Sendable {
       throw .unexpectedAnswer(String(describing: error))
     }
     return listing.writings.map {
-      AgentListedWriting(
-        id: $0.id, revision: $0.revision, updated: Self.date($0.updated),
-        expires: Self.date($0.expires))
+      AgentListedWriting(id: $0.id, revision: $0.revision, expires: Self.date($0.expires))
     }
   }
 
@@ -71,7 +68,6 @@ public struct AgentServer: Sendable {
     struct Entry: Decodable {
       let id: UUID
       let revision: Revision
-      let updated: Int64
       let expires: Int64
     }
     let writings: [Entry]

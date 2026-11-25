@@ -13,6 +13,7 @@ struct HandoffTests {
     #expect(try Handoff(line: "http://127.0.0.1:8787#\(token)").token == token)
     #expect(try Handoff(line: "http://localhost:8787#\(token)").token == token)
     #expect(try Handoff(line: "HTTPS://mai.example.workers.dev#\(token)").token == token)
+    #expect(try Handoff(line: "http://[::1]:8787#\(token)").token == token)
   }
 
   @Test(arguments: [
@@ -24,6 +25,13 @@ struct HandoffTests {
     ("https://mai.example.workers.dev#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.", .notAToken),
     ("https://mai.example.workers.dev#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.a\nb", .notAToken),
     ("https://mai.example.workers.dev#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.a b", .notAToken),
+    (
+      "https://mai.example.workers.dev#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301..c2Vj", .notAToken
+    ),
+    (
+      "https://mai.example.workers.dev#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.c2Vj.c2Vj",
+      .notAToken
+    ),
     (
       "https://mai.example.workers.dev#x#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.c2Vj",
       .notAServer
@@ -51,6 +59,44 @@ struct PairingFileTests {
     let permissions = try FileManager.default.attributesOfItem(atPath: account.file.url.path)[
       .posixPermissions]
     #expect(permissions as? Int == 0o600)
+  }
+
+  /// A pairing file as this version writes it, with a key of fixed bytes: a later version reads it.
+  @Test func readsAPairingFileKeptBefore() throws {
+    let file = PairingFile(
+      directory: FileManager.default.temporaryDirectory.appending(
+        path: "mai-agent-tests-\(UUID().uuidString)", directoryHint: .isDirectory))
+    try FileManager.default.createDirectory(
+      at: file.url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data(Self.keptBefore.utf8).write(to: file.url)
+
+    let read: Pairing<P256.KeyAgreement.PrivateKey> = try #require(try file.read())
+    #expect(read.key.rawRepresentation == Data(repeating: 7, count: 32))
+    #expect(read.handoff.server.absoluteString == "https://mai.example.workers.dev")
+    #expect(read.handoff.token == "agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.c2VjcmV0")
+  }
+
+  private static let keptBefore =
+    #"{"key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=","server":"https:\/\/mai.example.workers.dev","token":"BMhL7ZmH8EP36Cl5Z1RmYig7vafO4tygb9BkTZ+BsLnslofpFNsTe6n9hrWdU0cyyhIjXqMoSZmcfHnI\/bUUOBcoHqjrDweZjkqZuw+TqR7HayFcDKVrVSMGta9uVHDYDW6tAEF7f6ZVqYn6+eHMVh5QDxY8w3DJNpe4DVJ+ijYeX1YD"}"#
+
+  @Test func theDirectoryItMakesIsThisUsersAlone() async throws {
+    let account = Account()
+    let key = P256.KeyAgreement.PrivateKey()
+    let (_, line) = try await account.approve(key)
+    try account.file.write(Pairing(key: key, handoff: Handoff(line: line)))
+    let permissions = try FileManager.default.attributesOfItem(
+      atPath: account.file.url.deletingLastPathComponent().path)[.posixPermissions]
+    #expect(permissions as? Int == 0o700)
+    #expect(account.file.url.lastPathComponent == "pairing.json")
+  }
+
+  @Test func standsInMaiMCPHomeOrApplicationSupport() {
+    #expect(
+      PairingFile.standard(environment: ["MAI_MCP_HOME": "/private/tmp/mai-home"]).url.path
+        == "/private/tmp/mai-home/pairing.json")
+    let standard = URL.applicationSupportDirectory.appending(path: "mai-mcp/pairing.json").path
+    #expect(PairingFile.standard(environment: [:]).url.path == standard)
+    #expect(PairingFile.standard(environment: ["MAI_MCP_HOME": ""]).url.path == standard)
   }
 
   @Test func aTokenSealedToAnotherKeyDoesntRead() async throws {
@@ -107,8 +153,9 @@ struct PairTests {
     await #expect {
       _ = try await account.file.pair(second, line: secondLine, transport: account.fake)
     } throws: {
-      guard case .server(.refused(status: 401, _)) = $0 as? PairingProblem else { return false }
-      return true
+      guard let problem = $0 as? PairingProblem, case .server(.refused(status: 401, _)) = problem
+      else { return false }
+      return problem.localizedDescription.hasPrefix("サーバーがこのトークンを受け付けません。")
     }
     let kept: Pairing<P256.KeyAgreement.PrivateKey> = try #require(try account.file.read())
     #expect(kept.handoff == (try Handoff(line: firstLine)))

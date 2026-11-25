@@ -40,6 +40,9 @@ public actor Library<Key: AgentPrivateKey> {
   private let key: Key
   private var opened: [UUID: (revision: Revision, writing: OpenedWriting)] = [:]
 
+  /// The writings opened and kept in memory now.
+  var openedIDs: Set<UUID> { Set(opened.keys) }
+
   public init(server: AgentServer, key: Key) {
     self.server = server
     self.key = key
@@ -58,7 +61,7 @@ public actor Library<Key: AgentPrivateKey> {
       }
     }
     return Shelf(
-      writings: writings.sorted { $0.updated > $1.updated }, unopenable: unopenable.sorted())
+      writings: writings.sorted { $0.updated > $1.updated }, unopenable: unopenable)
   }
 
   /// The writing with `id`, or nil when the agent holds no copy of it now.

@@ -1,4 +1,4 @@
-import Agent
+@testable import Agent
 import CryptoKit
 import Foundation
 import MCP
@@ -61,7 +61,16 @@ struct ReadingToolsTests {
     let (client, _) = try await connect()
     let tools = try await client.listTools().tools
     #expect(tools.map(\.name) == ["list_writings", "read_writing", "search_writings"])
-    #expect(tools.allSatisfy { $0.annotations.readOnlyHint == true })
+    #expect(
+      tools.allSatisfy {
+        $0.annotations.readOnlyHint == true && $0.annotations.destructiveHint == false
+          && $0.annotations.idempotentHint == true && $0.annotations.openWorldHint == false
+      })
+    #expect(tools[0].inputSchema == .object(["type": "object", "properties": .object([:])]))
+    #expect(tools[1].inputSchema.objectValue?["required"] == .array(["id"]))
+    #expect(tools[1].inputSchema.objectValue?["properties"]?.objectValue?["id"] != nil)
+    #expect(tools[2].inputSchema.objectValue?["required"] == .array(["query"]))
+    #expect(tools[2].inputSchema.objectValue?["properties"]?.objectValue?["query"] != nil)
   }
 
   @Test func listsReadsAndSearchesWhileReadModeIsOn() async throws {
@@ -254,33 +263,206 @@ struct ReadingToolsTests {
     let letter = try account.write("手紙の下書き", "拝啓", at: 60)
     let (_, line) = try await account.approve(key)
     _ = try await account.file.pair(key, line: line, transport: account.fake)
-    let client = try await client(transport: Breaking(fake: account.fake, copy: letter.id))
+    let unopenable = "文書 \(letter.id.uuidString.lowercased()) の写しはありますが、この Mac の鍵では開けませんでした。"
+    for (name, broken) in [
+      (
+        "no wrapped key",
+        { @Sendable (request: URLRequest, body: Data) in
+          Tampering.answer(request, 200, body: body)
+        }
+      ),
+      (
+        "not a sealed writing",
+        { @Sendable (request: URLRequest, _: Data) in
+          Tampering.answer(request, 200, headers: ["Mai-Wrapped-Key": "00"], body: Data([1, 2, 3]))
+        }
+      ),
+    ] {
+      let tampering = Tampering(account.fake) { request, data, response in
+        Tampering.isCopy(request, of: letter.id) ? broken(request, data) : (data, response)
+      }
+      let client = try await client(transport: tampering)
+      _ = try await turnOn(forSeconds: 600)
+
+      let listed = try await call(client, "list_writings")
+      #expect(listed.isError == false, "\(name)")
+      #expect(listed.text.contains("散歩の記録"), "\(name)")
+      #expect(listed.text.contains(unopenable), "\(name)")
+      #expect(
+        try await call(client, "read_writing", ["id": .string(walk.id.uuidString)]).text
+          .hasPrefix("# 散歩の記録"), "\(name)")
+      #expect(
+        try await call(client, "read_writing", ["id": .string(letter.id.uuidString)]).text
+          .hasPrefix(unopenable), "\(name)")
+      let found = try await call(client, "search_writings", ["query": "川"])
+      #expect(found.text.contains(unopenable), "\(name)")
+      #expect(
+        try await call(client, "search_writings", ["query": "無い言葉"]).text.contains(unopenable),
+        "\(name)")
+    }
+  }
+
+  @Test func aCopyGoneBetweenTheListAndTheReadIsNotRead() async throws {
+    let walk = try account.write("散歩の記録", "川沿いを歩いた。", at: 0)
+    let (_, line) = try await account.approve(key)
+    _ = try await account.file.pair(key, line: line, transport: account.fake)
+    let tampering = Tampering(account.fake) { request, data, response in
+      Tampering.isCopy(request, of: walk.id) ? Tampering.answer(request, 404) : (data, response)
+    }
+    let client = try await client(transport: tampering)
     _ = try await turnOn(forSeconds: 600)
 
     let listed = try await call(client, "list_writings")
-    #expect(listed.isError == false)
-    #expect(listed.text.contains("散歩の記録"))
-    #expect(listed.text.contains("文書 \(letter.id.uuidString.lowercased()) の写しはありますが"))
+    #expect(listed.text.hasPrefix("いま読める文書はありません。"))
+    #expect(!listed.text.contains("開けませんでした"))
     #expect(
       try await call(client, "read_writing", ["id": .string(walk.id.uuidString)]).text.hasPrefix(
-        "# 散歩の記録"))
+        "文書 \(walk.id.uuidString.lowercased()) は読めません。"))
+  }
+
+  @Test func aRefusedCopyIsAnErrorAndNotUnopenable() async throws {
+    let walk = try account.write("散歩の記録", "川沿いを歩いた。", at: 0)
+    let (_, line) = try await account.approve(key)
+    _ = try await account.file.pair(key, line: line, transport: account.fake)
+    let tampering = Tampering(account.fake) { request, data, response in
+      Tampering.isCopy(request, of: walk.id) ? Tampering.answer(request, 401) : (data, response)
+    }
+    let client = try await client(transport: tampering)
+    _ = try await turnOn(forSeconds: 600)
+
+    let listed = try await call(client, "list_writings")
+    #expect(listed.isError)
+    #expect(listed.text.hasPrefix("このエージェントは iPhone で取り消されたか"))
+  }
+
+  @Test func aListingOfAnotherShapeIsAnError() async throws {
+    let (agent, line) = try await account.approve(key)
+    _ = agent
+    _ = try await account.file.pair(key, line: line, transport: account.fake)
+    let tampering = Tampering(account.fake) { request, data, response in
+      request.url?.lastPathComponent == "writings"
+        ? Tampering.answer(request, 200, body: Data(#"{"writings":5}"#.utf8)) : (data, response)
+    }
+    let client = try await client(transport: tampering)
+    let listed = try await call(client, "list_writings")
+    #expect(listed.isError)
+    #expect(listed.text.hasPrefix("Cotoma のサーバーの答えが読めませんでした"))
+  }
+
+  @Test func eachRevisionIsFetchedOnceAcrossCalls() async throws {
+    let walk = try account.write("散歩の記録", "川沿いを歩いた。", at: 0)
+    try account.write("手紙の下書き", "拝啓", at: 60)
+    let (_, line) = try await account.approve(key)
+    _ = try await account.file.pair(key, line: line, transport: account.fake)
+    let tampering = Tampering(account.fake)
+    let client = try await client(transport: tampering)
+    _ = try await turnOn(forSeconds: 600)
+
+    _ = try await call(client, "list_writings")
+    #expect(tampering.paths.count == 3)
+    _ = try await call(client, "search_writings", ["query": "川"])
+    _ = try await call(client, "read_writing", ["id": .string(walk.id.uuidString)])
+    #expect(tampering.paths.count == 5)
+    #expect(tampering.paths.dropFirst(3).allSatisfy { $0.hasSuffix("/agent/writings") })
+  }
+
+  @Test func searchIgnoresCaseWidthAndAccentsInTitlesAndBodies() async throws {
+    let (client, _) = try await connect()
+    try account.write("Café の ABC", "本文", at: 0)
+    try account.write("手紙", "résumé を書く", at: 60)
+    _ = try await turnOn(forSeconds: 600)
+
+    #expect(
+      try await call(client, "search_writings", ["query": "cafe"]).text.contains("Café の ABC"))
+    #expect(try await call(client, "search_writings", ["query": "ａｂｃ"]).text.contains("Café の ABC"))
+    let body = try await call(client, "search_writings", ["query": "  RESUME "])
+    #expect(body.text.hasPrefix("「RESUME」を含む文書は 1 件"))
+    #expect(body.text.contains("手紙"))
+  }
+
+  @Test func anExcerptShowsFortyCharactersEachSideOnOneLine() async throws {
+    let (client, _) = try await connect()
+    let before = String(repeating: "あ", count: 45)
+    let after = String(repeating: "い", count: 45)
+    try account.write("長い", before + "鷺" + after, at: 0)
+    try account.write("短い", "浅瀬に\n鷹が一羽", at: 60)
+    _ = try await turnOn(forSeconds: 600)
+
+    let long = try await call(client, "search_writings", ["query": "鷺"])
+    #expect(
+      long.text.hasSuffix(
+        "\n  …" + String(repeating: "あ", count: 40) + "鷺" + String(repeating: "い", count: 40) + "…")
+    )
+    let short = try await call(client, "search_writings", ["query": "鷹"])
+    #expect(short.text.hasSuffix("\n  浅瀬に 鷹が一羽"))
+  }
+
+  @Test func aWritingWithoutATitleIsNamedUntitled() async throws {
+    let (client, _) = try await connect()
+    let writing = try account.write("", "題のない文書", at: 0)
+    _ = try await turnOn(forSeconds: 600)
+    #expect(try await call(client, "list_writings").text.contains("- （無題）（ID: "))
+    #expect(
+      try await call(client, "read_writing", ["id": .string(writing.id.uuidString)]).text
+        .hasPrefix("# （無題）"))
+  }
+
+  @Test func onlyLinksThatFitTheBodyAreShown() async throws {
+    let (client, _) = try await connect()
+    let fitting = try account.write(
+      contents: [
+        "title": "リンク", "body": "全体を見る", "photos": [String](),
+        "links": [
+          ["range": [-1, 2], "url": "https://example.com/a"],
+          ["range": [3, 3], "url": "https://example.com/b"],
+          ["range": [0, 999], "url": "https://example.com/c"],
+          ["range": [1, 2, 3], "url": "https://example.com/d"],
+          ["range": "x", "url": "https://example.com/e"],
+          ["range": [3, 2], "url": "https://example.com/f"],
+          ["range": [1, 3], "url": "https://example.com/ok"],
+          ["range": [3, 5], "url": "https://example.com/end"],
+        ],
+      ], at: 0)
+    let unreadableLinks = try account.write(
+      contents: ["title": "壊れたリンク", "body": "本文", "links": "x"], at: 60)
+    _ = try await turnOn(forSeconds: 600)
+
+    let read = try await call(client, "read_writing", ["id": .string(fitting.id.uuidString)])
+    #expect(
+      read.text.hasSuffix(
+        "全体を見る\n\nリンク:\n- 体を: https://example.com/ok\n- 見る: https://example.com/end"))
+    let other = try await call(
+      client, "read_writing", ["id": .string(unreadableLinks.id.uuidString)])
+    #expect(other.text.hasSuffix("\n\n本文"))
+  }
+
+  @Test func anUnreadablePairingFileIsNamed() async throws {
+    try FileManager.default.createDirectory(
+      at: account.file.url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("{".utf8).write(to: account.file.url)
+    let answer = try await call(try await client(), "list_writings")
+    #expect(answer.isError)
+    #expect(answer.text.hasPrefix("ペアリングのファイル \(account.file.url.path) が読めません"))
   }
 }
 
-/// The fake server, with the copy of one writing sent without its wrapped key.
-struct Breaking: HTTPTransport {
-  let fake: FakeWritingServer
-  let copy: UUID
+struct LibraryTests {
+  @Test func whatWasOpenedIsDroppedOnceItIsNoLongerListed() async throws {
+    let account = Account()
+    let key = P256.KeyAgreement.PrivateKey()
+    let (_, line) = try await account.approve(key)
+    let handoff = try Handoff(line: line)
+    let library = Library(
+      server: AgentServer(url: handoff.server, token: handoff.token, transport: account.fake),
+      key: key)
+    let walk = try account.write("散歩の記録", "川沿いを歩いた。", at: 0)
+    _ = try await account.synchronizer.sync()
+    _ = try await account.readMode.turnOn(until: account.clock.now + 600)
+    _ = try await library.shelf()
+    #expect(await library.openedIDs == [walk.id])
 
-  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-    let (data, response) = try await fake.send(request)
-    guard request.url?.lastPathComponent == copy.uuidString.lowercased(),
-      let url = response.url,
-      let broken = HTTPURLResponse(
-        url: url, statusCode: response.statusCode, httpVersion: nil, headerFields: [:])
-    else {
-      return (data, response)
-    }
-    return (data, broken)
+    try await account.readMode.turnOff()
+    _ = try await library.shelf()
+    #expect(await library.openedIDs.isEmpty)
   }
 }
