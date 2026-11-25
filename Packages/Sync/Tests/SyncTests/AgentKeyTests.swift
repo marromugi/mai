@@ -23,6 +23,25 @@ struct AgentKeyTests {
     #expect(throws: AgentKeyError.mistyped) { try AgentKey(pairingCode: String(digits)) }
   }
 
+  /// Pasted with other line breaks or tabs, or typed full-width on a Japanese keyboard.
+  @Test func aCodeIsReadAsItIsPastedOrTyped() throws {
+    let key = AgentKey(agent.publicKey)
+    let groups = key.pairingCode.split(separator: "-")
+    let fullWidth = String(
+      String.UnicodeScalarView(
+        key.pairingCode.unicodeScalars.compactMap {
+          $0 == "-" ? Unicode.Scalar(0xFF0D) : Unicode.Scalar($0.value - 0x21 + 0xFF01)
+        }))
+    for typed in [
+      groups[0..<7].joined(separator: "-") + "\r\n" + groups[7...].joined(separator: "-"),
+      "\t" + key.pairingCode + " \n",
+      fullWidth,
+      groups.joined(separator: "ー"),
+    ] {
+      #expect(try AgentKey(pairingCode: typed) == key, "\(typed)")
+    }
+  }
+
   @Test func aRecoveryKeyIsNotAnAgentsCode() {
     let text = RecoveryKey(OwnKey.generate()).text
     #expect(throws: AgentKeyError.self) { try AgentKey(pairingCode: text) }

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// The read-mode settings as a device read them from the server: `view[d]` of `Specs/ReadMode`.
 /// A device reads them just before it wraps; whatever changed since, the server refuses.
@@ -116,11 +117,12 @@ public struct ReadMode: Sendable {
     try await server.revoke(agent)
   }
 
-  /// Turns read mode on until `until`, then sends a copy of every writing the device has synced
-  /// and isn't excluded, for every trusted agent.
+  /// Turns read mode on until `until`, then sends a copy of every writing on the server that isn't
+  /// excluded, for every trusted agent: those this device synced with the key it kept, and the
+  /// rest, synced by another device or before keys were kept, read from the server for theirs.
   public func turnOn(until: Date) async throws -> CopiesSent {
     _ = try await server.turnOn(until: until)
-    return try await send(of: nil, in: view())
+    return try await send(of: nil, in: view()).sent
   }
 
   public func turnOff() async throws(ServerError) {
@@ -138,95 +140,146 @@ public struct ReadMode: Sendable {
   }
 
   /// Sends the copies of `writings` at the revisions the sync last put on the server or took from
-  /// it, as after a sync sent them, with those whose copies failed to go before. While read mode
-  /// is off, asks only that, and owes nothing: turning it on sends every writing.
+  /// it, as after a sync sent them, with those still owed from before: whose sending failed, or
+  /// which the server refused for another read mode than the one read. While read mode is off,
+  /// asks only that, and owes nothing: turning it on sends every writing.
   public func sendCopies(of writings: Set<UUID>) async throws -> CopiesSent {
-    let all = writings.union(try owed.load())
+    let all = writings.union(owed.load())
     guard !all.isEmpty else { return CopiesSent() }
     do {
-      let sent: CopiesSent
-      if let until = try await server.readMode() {
-        async let excluded = server.exclusions()
-        async let agents = server.agents()
-        sent = try await send(
-          of: all, in: ReadModeView(until: until, excluded: excluded, agents: agents))
-      } else {
-        sent = CopiesSent()
+      guard let until = try await server.readMode() else {
+        owed.settle(all, owing: [])
+        return CopiesSent()
       }
-      try owed.save([])
+      async let excluded = server.exclusions()
+      async let agents = server.agents()
+      let (sent, refusedForMode) = try await send(
+        of: all, in: ReadModeView(until: until, excluded: excluded, agents: agents))
+      owed.settle(all, owing: refusedForMode)
       return sent
     } catch {
-      try owed.save(all)
+      owed.settle(all, owing: all)
       throw error
     }
   }
 
-  /// Sends the copies `view` makes of `writings`, every synced one when nil.
-  private func send(of writings: Set<UUID>?, in view: ReadModeView) async throws -> CopiesSent {
-    guard let until = view.until, !view.trustedAgents(ownKey).isEmpty else { return CopiesSent() }
-    var synced: [KeyedRevision] = []
-    for (id, entry) in try state.load()
-    where writings?.contains(id) ?? true {
-      if let key = entry.writingKey {
-        synced.append(KeyedRevision(id: id, revision: entry.revision, key: key))
+  /// Sends the copies `view` makes of `writings`, every writing on the server when nil. Answers
+  /// what was sent, and the writings refused for another read mode.
+  private func send(of writings: Set<UUID>?, in view: ReadModeView) async throws -> (
+    sent: CopiesSent, refusedForMode: Set<UUID>
+  ) {
+    guard let until = view.until, !view.trustedAgents(ownKey).isEmpty else {
+      return (CopiesSent(), [])
+    }
+    let synced = try state.load()
+    // Each writing, with the server's revision when it was listed.
+    let wanted: [(id: UUID, revision: Revision?)] =
+      if let writings {
+        writings.map { ($0, nil) }
+      } else {
+        try await writingServer.list().map { ($0.id, $0.revision) }
+      }
+    var keyed: [KeyedRevision] = []
+    for (id, revision) in wanted where !view.excluded.contains(id) {
+      if let entry = synced[id], let key = entry.writingKey,
+        revision ?? entry.revision == entry.revision
+      {
+        keyed.append(KeyedRevision(id: id, revision: entry.revision, key: key))
       } else if let read = try await keyedFromServer(id) {
-        synced.append(read)
+        keyed.append(read)
       }
     }
-    let copies = view.copies(of: synced, ownKey: ownKey)
-    guard !copies.isEmpty else { return CopiesSent() }
+    let copies = view.copies(of: keyed, ownKey: ownKey)
+    guard !copies.isEmpty else { return (CopiesSent(), []) }
     var sent = CopiesSent()
-    for refusal in try await server.send(copies, expires: until) {
+    var refusedForMode: Set<UUID> = []
+    for (copy, refusal) in zip(copies, try await server.send(copies, expires: until)) {
       if let refusal {
         sent.refused[refusal, default: 0] += 1
+        if refusal == .readMode { refusedForMode.insert(copy.writing) }
       } else {
         sent.kept += 1
       }
     }
-    return sent
+    return (sent, refusedForMode)
   }
 
-  /// The server's save of the writing with `id` and its key, opened with the own key, for a
-  /// writing whose key the sync state doesn't hold; nil when the server has none.
+  private var writingServer: WritingServer {
+    WritingServer(url: server.url, token: server.token, transport: server.transport)
+  }
+
+  /// The server's save of the writing with `id` and its key, opened with the own key; nil when the
+  /// server has none, or has one this own key can't open, which no agent could read either.
   private func keyedFromServer(_ id: UUID) async throws -> KeyedRevision? {
-    let writings = WritingServer(url: server.url, token: server.token, transport: server.transport)
-    guard let (envelope, revision) = try await writings.read(id) else { return nil }
+    guard let (envelope, revision) = try await writingServer.read(id) else { return nil }
     guard envelope.id == id else {
       throw ServerError.unexpectedAnswer(
         "the server gave writing \(envelope.id.uuidString) for \(id.uuidString)")
     }
-    return KeyedRevision(id: id, revision: revision, key: try ownKey.openWithKey(envelope).key)
+    do {
+      return KeyedRevision(id: id, revision: revision, key: try ownKey.openWithKey(envelope).key)
+    } catch {
+      syncLogger.error(
+        "A writing on the server wasn't copied, as the own key can't open it: \(error)")
+      return nil
+    }
   }
 }
 
-/// The writings whose copies a sync sent but failed to put on the server.
+/// The writings whose copies are owed: their sending failed, or the server refused them for
+/// another read mode than the one read. Every device's read mode of one account shares the file,
+/// so each change is made under one lock, from what the file holds then.
 struct OwedCopies {
   let file: URL
+  private static let lock = Mutex(())
 
   /// Kept beside the sync's `stateFile`.
   init(beside stateFile: URL) {
     file = stateFile.deletingPathExtension().appendingPathExtension("copies.json")
   }
 
-  func load() throws -> Set<UUID> {
+  func load() -> Set<UUID> {
+    Self.lock.withLock { _ in read() }
+  }
+
+  /// Takes `sent` off what is owed, then owes `owing` again.
+  func settle(_ sent: Set<UUID>, owing: Set<UUID>) {
+    Self.lock.withLock { _ in
+      write(read().subtracting(sent).union(owing))
+    }
+  }
+
+  /// Owes nothing.
+  func clear() {
+    Self.lock.withLock { _ in write([]) }
+  }
+
+  /// What the file holds; none when it can't be read, which leaves those copies to the next save
+  /// of each writing.
+  private func read() -> Set<UUID> {
     do {
       return try JSONDecoder().decode(Set<UUID>.self, from: Data(contentsOf: file))
     } catch CocoaError.fileReadNoSuchFile {
       return []
+    } catch {
+      syncLogger.error("The owed read-mode copies couldn't be read, and are dropped: \(error)")
+      return []
     }
   }
 
-  func save(_ writings: Set<UUID>) throws {
-    guard !writings.isEmpty else {
-      do {
+  private func write(_ writings: Set<UUID>) {
+    do {
+      if writings.isEmpty {
         try FileManager.default.removeItem(at: file)
-      } catch CocoaError.fileNoSuchFile {
-        // Owed nothing already.
+      } else {
+        try FileManager.default.createDirectory(
+          at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(writings).write(to: file, options: .atomic)
       }
-      return
+    } catch CocoaError.fileNoSuchFile {
+      // Owed nothing already.
+    } catch {
+      syncLogger.error("The owed read-mode copies couldn't be kept: \(error)")
     }
-    try FileManager.default.createDirectory(
-      at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try JSONEncoder().encode(writings).write(to: file, options: .atomic)
   }
 }

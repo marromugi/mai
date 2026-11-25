@@ -1,7 +1,8 @@
 import Foundation
 
 /// Crockford's Base32, as a person reads and types it: groups of 4 digits joined by hyphens, read
-/// back in any case, with or without hyphens and spaces, and with O, I and L taken for 0, 1 and 1.
+/// back in any case, full-width or half-width, with or without hyphens, dashes and whitespace, and
+/// with O, I and L taken for 0, 1 and 1.
 enum Base32 {
   enum ReadError: Error, Equatable {
     case unknownCharacter(Character)
@@ -21,7 +22,10 @@ enum Base32 {
   static func bytes(of text: String, count: Int) throws(ReadError) -> Data {
     precondition(count * 8 % 5 == 0, "Base32 text holds a whole number of 5-bit digits")
     var digits: [UInt8] = []
-    for character in text.uppercased() where !separators.contains(character) {
+    // Full-width letters and digits, as a Japanese keyboard types them, are read as half-width.
+    let halfWidth = text.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? text
+    for character in halfWidth.uppercased()
+    where !character.isWhitespace && !hyphens.contains(character) {
       guard let digit = digit(of: character) else {
         throw .unknownCharacter(character)
       }
@@ -34,7 +38,10 @@ enum Base32 {
   }
 
   private static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
-  private static let separators: Set<Character> = ["-", " ", "\n"]
+  /// Hyphens and the dashes a hyphen is typed or pasted as; whitespace of any kind is skipped too.
+  private static let hyphens: Set<Character> = [
+    "-", "\u{2010}", "\u{2011}", "\u{2012}", "\u{2013}", "\u{2212}", "\u{30FC}", "\u{FF70}",
+  ]
 
   private static func digit(of character: Character) -> UInt8? {
     let read: Character =

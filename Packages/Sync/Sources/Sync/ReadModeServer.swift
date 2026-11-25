@@ -25,14 +25,28 @@ public struct CopyToSend: Sendable, Equatable {
 }
 
 /// Why the server took no copy (`Server/README.md`, 「読み取りモード」).
-public enum CopyRefusal: String, Sendable, Equatable, Decodable {
+public enum CopyRefusal: Sendable, Hashable, Decodable {
   /// Read mode is off, has ended, or ends at another time than the copy's.
-  case readMode = "read-mode"
+  case readMode
   case excluded
   /// The agent isn't the account's, or was revoked.
   case agent
   /// The server's writing is at another revision, or isn't there.
   case revision
+  /// A reason this device doesn't know yet, as the server named it.
+  case other(String)
+
+  public init(from decoder: any Decoder) throws {
+    let reason = try decoder.singleValueContainer().decode(String.self)
+    self =
+      switch reason {
+      case "read-mode": .readMode
+      case "excluded": .excluded
+      case "agent": .agent
+      case "revision": .revision
+      default: .other(reason)
+      }
+  }
 }
 
 /// The read-mode routes of the Worker in `Server/` (#26): agents, read mode, exclusions and copies.
@@ -52,11 +66,11 @@ public struct ReadModeServer: Sendable {
     let listed: AgentListing = try await decoded(request(for: "agents"))
     var agents: [ServerAgent] = []
     for agent in listed.agents {
-      guard let id = UUID(uuidString: agent.id), let signature = Self.bytes(ofHex: agent.signature)
+      guard let id = UUID(uuidString: agent.id), let signature = Hex.bytes(of: agent.signature)
       else {
         throw .unexpectedAnswer("an agent was listed as \(agent.id) with an unreadable signature")
       }
-      let key = Self.bytes(ofHex: agent.publicKey).flatMap { try? AgentKey(rawRepresentation: $0) }
+      let key = Hex.bytes(of: agent.publicKey).flatMap { try? AgentKey(rawRepresentation: $0) }
       agents.append(ServerAgent(id: id, key: key, signature: signature, revoked: agent.revoked))
     }
     return agents
@@ -200,18 +214,6 @@ public struct ReadModeServer: Sendable {
 
   static func hex(_ bytes: Data) -> String {
     bytes.map { String(format: "%02x", $0) }.joined()
-  }
-
-  static func bytes(ofHex text: String) -> Data? {
-    let digits = Array(text.utf8)
-    guard digits.count.isMultiple(of: 2) else { return nil }
-    var bytes = Data(capacity: digits.count / 2)
-    for index in stride(from: 0, to: digits.count, by: 2) {
-      guard let byte = UInt8(String(decoding: digits[index...index + 1], as: UTF8.self), radix: 16)
-      else { return nil }
-      bytes.append(byte)
-    }
-    return bytes
   }
 
   private static func milliseconds(_ date: Date) -> Int64 {

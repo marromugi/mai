@@ -309,12 +309,7 @@ public struct SyncAccount: Sendable {
       // Left behind, a later account of the same ID and own key wouldn't send these photos.
       syncLogger.error("The photo sync state of a deleted account couldn't be removed: \(error)")
     }
-    do {
-      try OwedCopies(beside: stateFile).save([])
-    } catch {
-      // Left behind, a later account of the same ID would try these writings' copies once.
-      syncLogger.error("The owed copies of a deleted account couldn't be removed: \(error)")
-    }
+    OwedCopies(beside: stateFile).clear()
   }
 
   /// Where the sync of `account` keeps its state, in `stateDirectory`.

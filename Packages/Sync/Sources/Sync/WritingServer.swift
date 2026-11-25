@@ -86,20 +86,31 @@ public struct Revision: Sendable, Hashable, Codable {
 
   /// The revision written as 64 lowercase hex digits; nil for any other text.
   init?(hex: String) {
-    let digits = Array(hex.utf8)
-    guard digits.count == 64 else { return nil }
-    var bytes = Data(capacity: 32)
-    for index in stride(from: 0, to: 64, by: 2) {
-      guard let high = Self.value(of: digits[index]), let low = Self.value(of: digits[index + 1])
-      else { return nil }
-      bytes.append(high << 4 | low)
-    }
+    guard let bytes = Hex.bytes(of: hex), bytes.count == 32 else { return nil }
     self.bytes = bytes
   }
 
   /// The revision of the sealed writing `bytes`.
   init(of bytes: Data) {
     self.bytes = Data(SHA256.hash(data: bytes))
+  }
+
+}
+
+/// Bytes written as lowercase hex, two digits each, as the Worker writes them.
+enum Hex {
+  /// The bytes `text` writes; nil for any other text.
+  static func bytes(of text: String) -> Data? {
+    let digits = Array(text.utf8)
+    guard digits.count.isMultiple(of: 2) else { return nil }
+    var bytes = Data(capacity: digits.count / 2)
+    for index in stride(from: 0, to: digits.count, by: 2) {
+      guard let high = value(of: digits[index]), let low = value(of: digits[index + 1]) else {
+        return nil
+      }
+      bytes.append(high << 4 | low)
+    }
+    return bytes
   }
 
   private static func value(of digit: UInt8) -> UInt8? {

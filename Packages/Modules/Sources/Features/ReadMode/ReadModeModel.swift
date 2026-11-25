@@ -89,7 +89,12 @@ struct AgentRow: Identifiable, Equatable {
   /// Turns read mode on until `until`, sending the copies of the writings synced.
   func turnOn(until: Date) async {
     await act { () async throws in
-      let copies = try await self.readMode.turnOn(until: until)
+      let copies: CopiesSent
+      do {
+        copies = try await self.readMode.turnOn(until: until)
+      } catch ServerError.refused(status: 400, _) {
+        throw EndPassed()
+      }
       self.sent = Self.said(copies)
     }
   }
@@ -153,14 +158,15 @@ struct AgentRow: Identifiable, Equatable {
 
   /// What went wrong with read mode, for a person, by the kind of failure.
   static func message(for error: any Error) -> String {
+    if error is EndPassed {
+      return "終わる時刻がもう過ぎています。これから先の時刻を選んでください。"
+    }
     guard let error = error as? ServerError else {
       return "この端末の同期の記録が読めなかったため、読み取りモードを変えられませんでした。一度同期してから、もう一度お試しください。"
     }
     switch error {
     case .unreachable:
       return "サーバーにつながりませんでした。ネットワークを確かめて、もう一度お試しください。"
-    case .refused(status: 400, _):
-      return "終わる時刻がもう過ぎています。これから先の時刻を選んでください。"
     case .refused(status: 401, _):
       return "サインインが切れました。もう一度 Apple でサインインしてください。"
     case .refused(status: 402, _):
@@ -182,6 +188,9 @@ struct AgentRow: Identifiable, Equatable {
     return kept + "\(refused) 件は、ほかの端末で設定か文書が変わったため置いていません。"
   }
 }
+
+/// The end of read mode asked for has passed by the server's clock (`PUT /read-mode` answered 400).
+struct EndPassed: Error {}
 
 /// Why an agent wasn't approved, written for a person.
 struct ApprovalProblem: Error, Equatable {
