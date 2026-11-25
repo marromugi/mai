@@ -61,7 +61,7 @@ claude mcp add cotoma -- ~/.local/bin/mai-mcp
 Claude Desktop は `~/Library/Application Support/Claude/claude_desktop_config.json` に `{"mcpServers": {"cotoma": {"command": "/Users/<名前>/.local/bin/mai-mcp"}}}` を書く。
 
 - **組む**: `mai-mcp pair` が Secure Enclave に鍵を作り、ペアリングのコードを QR コードと文字で出す。iPhone の Cotoma で「設定」→「AI に読ませる」→「エージェントを承認…」から読み取るか打ち、承認のあとに出る 1 行(`<Worker の URL>#<トークン>`)を「コピー」して `mai-mcp pair` に貼る。トークンでサーバーを読めたときだけ残す。形は `Server/README.md` の「エージェントの側」。
-- **残すもの**: `~/Library/Application Support/mai-mcp/pairing.json`(`MAI_MCP_HOME` で場所を変えられる)の 1 つだけで、この利用者だけが読める。中身は Secure Enclave が返す鍵の形(この Mac の Secure Enclave でしか使えない)、サーバーの URL、その鍵あてに HPKE で封じたトークン。開いた文書は `mai-mcp` のプロセスのメモリにだけ置き、ファイルには書かない。
+- **残すもの**: `~/Library/Application Support/mai-mcp/pairing.json`(`MAI_MCP_HOME` で場所を変えられる)の 1 つだけ(権限は 0600)。中身は Secure Enclave が返す鍵の形(この Mac の Secure Enclave でしか使えない)、サーバーの URL、その鍵あてに HPKE で封じたトークン。ファイルを別の Mac に写しても開けないが、同じ Mac の同じ利用者で動くプロセス(シェルを持つエージェントも)は、この鍵を Secure Enclave に渡して使えるし、`mai-mcp` を動かすこともできる。開いた文書は `mai-mcp` のプロセスのメモリにだけ置き、ファイルには書かない。
 - **組み直す**: 同じ鍵は二度承認できないので、`mai-mcp pair` はいつも新しい鍵を作る。前のペアリングは、新しいトークンで読めるまで残る。`mai-mcp forget` はペアリングを消す。どちらのときも、iPhone で前のエージェントを取り消す。
 - **読む**: どのツールも、まずサーバーの写しの一覧を取り、その中にあるものだけを開く。読み取りモードがオフか終わる時刻を過ぎていれば、何も読めないと答える。iPhone で取り消したエージェントには、組み直すように答える。
 
