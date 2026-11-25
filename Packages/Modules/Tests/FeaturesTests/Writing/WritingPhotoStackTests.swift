@@ -51,7 +51,7 @@ struct WritingPhotoStackTests {
         WritingView(
           writing: Writing(title: "間合いの調整", body: Writing.sampleBody), others: [], open: { _ in },
           edit: { _ in },
-          photos: photos,
+          photos: photos.map(PagePhoto.init),
           setting: .constant(.standard), camera: .standIn(taking: nil), photoTaken: { _ in }))
       return try #require(page.scrollViews.first).contentSize.height
     }
@@ -63,7 +63,8 @@ private func page(
   _ photos: [UIImage], _ colorScheme: ColorScheme, _ size: DynamicTypeSize
 ) -> some View {
   WritingPage(
-    writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: photos, width: 402,
+    writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: photos.map(PagePhoto.init),
+    width: 402,
     back: {}, titleCutOff: { _ in }
   )
   .fixedSize(horizontal: false, vertical: true)

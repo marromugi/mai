@@ -5,21 +5,21 @@ internal import Typesetting
 /// `lineLength` wide, each in a light border with rounded corners and a soft shadow, tilted, the
 /// newest on top. Only the newest `PhotoStack.layers.count` are drawn. A tap on a print opens the
 /// photos in a `PhotoViewer` on that print's photo, zooming out of it and back into it on close;
-/// VoiceOver's activate opens them on the newest.
+/// VoiceOver's activate opens them on the newest. Each print is the photo's thumbnail.
 struct PhotoStack: View {
-  let photos: [UIImage]
+  let photos: [PagePhoto]
   let lineLength: CGFloat
   @EnvironmentTypeScale private var scale
   @Namespace private var zoom
   @State private var tapped: TappedPrint?
-  @State private var shownInViewer: ObjectIdentifier?
+  @State private var shownInViewer: PagePhoto.ID?
 
   var body: some View {
     let drawn = Array(photos.suffix(Self.layers.count))
     ZStack {
       ForEach(Array(drawn.enumerated()), id: \.element.id) { index, photo in
         let layer = Self.layers[drawn.count - 1 - index]
-        PhotoPrint(photo: photo, bounds: bounds)
+        PhotoPrint(photo: photo.thumbnail, bounds: bounds)
           .contentShape(.rect)
           .onTapGesture { open(photo) }
           .rotationEffect(.degrees(layer.tilt))
@@ -41,7 +41,7 @@ struct PhotoStack: View {
     }
   }
 
-  private func open(_ photo: UIImage) {
+  private func open(_ photo: PagePhoto) {
     shownInViewer = photo.id
     tapped = TappedPrint(id: photo.id)
   }
@@ -93,13 +93,7 @@ private struct PhotoPrint: View {
   }
 }
 
-/// The print the viewer was opened from, by its photo's `UIImage.id`.
+/// The print the viewer was opened from, by its photo's ID.
 private struct TappedPrint: Identifiable {
-  let id: ObjectIdentifier
-}
-
-extension UIImage {
-  /// Who this photo is: each photo the camera takes is a new image object, and `UIImage`'s `==`
-  /// compares the pixels' source instead.
-  var id: ObjectIdentifier { ObjectIdentifier(self) }
+  let id: PagePhoto.ID
 }
