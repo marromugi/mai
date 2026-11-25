@@ -26,6 +26,9 @@ jobs:
           node-version: "24"
       - name: Test that pr-images keeps the token out of its output
         run: node --test scripts/pr-images.test.mts
+      - run: npm install --global @ast-grep/cli@0.45.0
+      - name: Check ast-grep loads every break rule
+        run: scripts/check-breaks.sh
 
   server:
     runs-on: ubuntu-latest
