@@ -173,7 +173,7 @@ AI のエージェント(Mac の MCP サーバーなど)に、期間を決めて
 - 取り消したエージェントあての写しはない(`NoCopyForRevokedKey`)。1 つの公開鍵のエージェントは 1 つだけで、取り消した鍵は新しいエージェントとしても承認しない。
 - 写しは文書の今の版のものだけ(`CopyIsOfCurrentVersion`)。保存は前の版の写しを消す。
 
-`test/read-mode-properties.test.ts` が、モデルの操作を無作為に並べて Worker と sqld に通し、一歩ごとにこれらを確かめる。端末の見ているものは古くてよく、前の期間や前の版の写しも送る。
+`test/read-mode-properties.test.ts` が、モデルの操作を無作為に並べて Worker と sqld に通し、一歩ごとにこれらを確かめる。端末の見ているものは古くてよく、前の期間や前の版の写しも送る。端末の側の性質(`NeverWrapForUnsignedKey`・`DeviceWraps`)は `Packages/Sync` の `ReadModePropertyTests` が、同じ操作をアプリの `ReadMode` と `Synchronizer` に通して確かめる。
 
 端末の経路のうち読み取りモードを変えるもの(`POST /agents`、`DELETE /agents/<ID>`、`PUT`・`DELETE /read-mode`、`PUT`・`DELETE /exclusions/<ID>`、`POST /copies`)は書き込みとして扱い、期限の切れたアカウントは 402(#26 のメモ)。期限が切れると Cron が写しとモードを消し、エージェントにはそれより前から渡さない。エージェントの要求も、そのアカウントの 1 日のリクエスト数に数える(一覧の数には数えない)。
 
