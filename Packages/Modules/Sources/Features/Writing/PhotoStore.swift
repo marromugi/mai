@@ -23,6 +23,13 @@ nonisolated struct PhotoStore: Sendable {
       throw UnkeptPhoto(reason: UnencodablePhoto())
     }
     let id = UUID()
+    try write(photo: photo, thumbnail: thumbnail, as: id)
+    return id
+  }
+
+  /// Writes `photo` and `thumbnail`, both JPEG, as the photo with `id`: there with both files, or
+  /// not at all.
+  func write(photo: Data, thumbnail: Data, as id: UUID) throws(UnkeptPhoto) {
     let partial = directory.appending(
       path: ".\(id.uuidString).partial", directoryHint: .isDirectory)
     let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.complete]
@@ -47,7 +54,6 @@ nonisolated struct PhotoStore: Sendable {
       }
       throw UnkeptPhoto(reason: error)
     }
-    return id
   }
 
   /// The photo with `id` as a page shows it, its thumbnail decoded, or nil when the device has no
