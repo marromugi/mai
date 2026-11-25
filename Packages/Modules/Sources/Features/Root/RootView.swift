@@ -9,30 +9,33 @@ public struct RootView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var path: [Writing.ID] = []
   @State private var settings = WritingBodySettings()
-  @State private var photos = WritingPhotos()
+  @State private var photos: WritingPhotos
   @State private var opened = Date.now
   @State private var showingSettings = false
   /// Whether the launch check is done, after which coming to the front syncs.
   @State private var launchChecked = false
   /// The last save that failed, until it is shown and dismissed.
-  @State private var unsaved: UnsavedWriting?
+  @State private var unsaved: Unsaved?
   @AppStorage(StoredBodySetting.key) private var defaultSetting = StoredBodySetting.standard
   @AppStorage(ColorTheme.key) private var theme = ColorTheme.system
   @AppStorage(StoredFontStack.key) private var fontStack = StoredFontStack.standard
 
-  /// The writings kept on the device, set in the families of `fonts`, with the account a plan pays
-  /// for when there is a server to sign in to, and synced with it while signed in.
+  /// The writings and their photos kept on the device, set in the families of `fonts`, with the
+  /// account a plan pays for when there is a server to sign in to, and synced with it while signed
+  /// in.
   public init(fonts: FontLibrary, account: AccountModel?) {
-    self.init(store: FileWritingStore.onDevice, fonts: fonts, account: account)
+    self.init(
+      store: FileWritingStore.onDevice, photoStore: .onDevice, fonts: fonts, account: account)
   }
 
   /// Opened on the writings in `path`, the last one on top.
   init(
-    store: any WritingStore, fonts: FontLibrary = FontLibrary(server: nil),
+    store: any WritingStore, photoStore: PhotoStore, fonts: FontLibrary = FontLibrary(server: nil),
     account: AccountModel? = nil, path: [Writing.ID] = []
   ) {
     self.fonts = fonts
     self.account = account
+    _photos = State(initialValue: WritingPhotos(store: photoStore))
     let library = WritingLibrary(store: store)
     _library = State(initialValue: library)
     _sync = State(initialValue: account.map { WritingSync(account: $0, library: library) })
@@ -64,15 +67,17 @@ public struct RootView: View {
         if case .success(let writings) = library.writings,
           let writing = writings.first(where: { $0.id == id })
         {
-          WritingView(
-            writing: writing,
-            others: writings.filter { $0.id != id },
-            open: { path.append($0.id) },
-            edit: { edit(id, $0) },
-            photos: photos[id],
-            setting: $settings[id, default: defaultSetting.setting],
-            camera: .device,
-            photoTaken: { photos[id].append($0) })
+          ReadPhotos(ids: writing.photos, photos: photos) { read in
+            WritingView(
+              writing: writing,
+              others: writings.filter { $0.id != id },
+              open: { path.append($0.id) },
+              edit: { edit(id, $0) },
+              photos: read,
+              setting: $settings[id, default: defaultSetting.setting],
+              camera: .device,
+              photoTaken: { image in Task { await add(image, to: id) } })
+          }
         }
       }
     }
@@ -107,18 +112,36 @@ public struct RootView: View {
     do {
       guard try library.edit(id, at: .now, change) else { return }
     } catch {
-      unsaved = UnsavedWriting(reason: error)
+      unsaved = .writing(error)
     }
     sync?.edited()
   }
+
+  /// Keeps `image` in the photo store, then adds it to the writing with `id`.
+  private func add(_ image: UIImage, to id: Writing.ID) async {
+    do {
+      try await photos.add(image, to: id, edit: edit)
+    } catch {
+      photoLogger.error("A photo taken wasn't kept: \(error.reason)")
+      unsaved = .photo(error)
+    }
+  }
 }
 
-/// A save that failed: the edit is on screen but not on the device.
-private struct UnsavedWriting: LocalizedError {
-  let reason: any Error
+/// A save that failed.
+private enum Unsaved: LocalizedError {
+  /// The edit is on screen but not on the device.
+  case writing(any Error)
+  /// The photo taken isn't on the device, nor on the page.
+  case photo(UnkeptPhoto)
 
   var errorDescription: String? {
-    "この編集は画面に出ていますが、端末には残っていません。\(reason.localizedDescription)"
+    switch self {
+    case .writing(let reason):
+      "この編集は画面に出ていますが、端末には残っていません。\(reason.localizedDescription)"
+    case .photo(let unkept):
+      unkept.localizedDescription
+    }
   }
 }
 

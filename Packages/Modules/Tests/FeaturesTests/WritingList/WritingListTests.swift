@@ -290,7 +290,10 @@ private func assertRoot(
     }
   }
   assertSnapshot(
-    of: RootView(store: writingStore, path: path).defaultAppStorage(store)
+    of: RootView(
+      store: writingStore, photoStore: PhotoStore(directory: directory.appending(path: "Photos")),
+      path: path
+    ).defaultAppStorage(store)
       .frame(width: 402, height: 874).background(Color(.systemBackground)),
     as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
     testName: testName)

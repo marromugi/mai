@@ -1,18 +1,18 @@
 import SwiftUI
 
 /// A writing's `photos`, oldest first, each as large as fits the screen over black, one to a page,
-/// paged sideways. `shown` is the photo on screen, by its `UIImage.id`; the close button calls
+/// paged sideways. `shown` is the photo on screen, by its ID; the close button calls
 /// `close`.
 struct PhotoViewer: View {
-  let photos: [UIImage]
-  @Binding var shown: ObjectIdentifier?
+  let photos: [PagePhoto]
+  @Binding var shown: PagePhoto.ID?
   let close: () -> Void
 
   var body: some View {
     ScrollView(.horizontal) {
       LazyHStack(spacing: 0) {
         ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
-          Image(uiImage: photo)
+          Image(uiImage: photo.photo)
             .resizable()
             .scaledToFit()
             .containerRelativeFrame(.horizontal)

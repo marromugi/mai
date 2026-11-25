@@ -155,13 +155,14 @@ struct WritingSyncTests {
     #expect(try library.store.all().map(\.body) == ["書き足した"])
   }
 
-  /// What is sealed is the title, the body, and the links; a writing from another device opens
-  /// to the same, and contents that aren't a writing's fail that writing alone.
+  /// What is sealed is the title, the body, the links, and the photos' IDs; a writing from another
+  /// device opens to the same, and contents that aren't a writing's fail that writing alone.
   @Test func aWritingsContentsTravelWhole() async throws {
     let library = WritingLibrary(store: MemoryWritingStore([]))
     library.load(seedingWhenEmpty: [])
     let synced = SyncedWritings(library: library)
-    let written = writing("朝", at: 1_000)
+    var written = writing("朝", at: 1_000)
+    written.photos = [UUID(sample: 7), UUID(sample: 3)]
     _ = try await synced.all()
     try await synced.save(
       PlainWriting(
@@ -177,6 +178,14 @@ struct WritingSyncTests {
       ))
     try await synced.save(outOfRange)
     #expect(try library.forSync().first { $0.id == outOfRange.id }?.links == [])
+    #expect(try library.forSync().first { $0.id == outOfRange.id }?.photos == [])
+
+    let oddPhotos = PlainWriting(
+      id: UUID(), updated: written.updated,
+      contents: Data(#"{"body":"本文","photos":["not-an-id"],"title":"題"}"#.utf8))
+    try await synced.save(oddPhotos)
+    #expect(try library.forSync().first { $0.id == oddPhotos.id }?.title == "題")
+    #expect(try library.forSync().first { $0.id == oddPhotos.id }?.photos == [])
 
     await #expect(throws: UnreadableContents.self) {
       try await synced.save(
