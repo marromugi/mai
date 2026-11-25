@@ -76,7 +76,7 @@ extension Writing {
       body = try container.decode(String.self, forKey: .body)
       let saved = (try? container.decodeIfPresent([ReadableLink].self, forKey: .links)) ?? nil
       links = (saved ?? []).compactMap(\.link).fitted(to: body)
-      photos = try container.decodeIfPresent([UUID].self, forKey: .photos) ?? []
+      photos = container.photoIDs(forKey: .photos)
     }
 
     func encoded() throws -> Data {

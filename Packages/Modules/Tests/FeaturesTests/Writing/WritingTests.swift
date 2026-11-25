@@ -132,6 +132,30 @@ struct WritingTests {
     }
   }
 
+  /// A photo ID the file holds that can't be read is dropped, an ID held twice is read once in its
+  /// first place, and photos that aren't a list read as none; the writing is read whatever they
+  /// say.
+  @Test(arguments: [
+    (#"["not-an-id", "\#(photoA)", 1, "\#(photoB)"]"#, [photoA, photoB]),
+    (#"["\#(photoA)", "\#(photoB)", "\#(photoA)"]"#, [photoA, photoB]),
+    (#""x""#, []),
+    (#"{"a":1}"#, []),
+    ("null", []),
+  ])
+  func oddPhotosAreReadAsFarAsTheyCanBe(_ photos: String, _ read: [String]) throws {
+    try withEmptyStore { store throws in
+      let id = try #require(UUID(uuidString: "6F0C9A1E-0D8B-4C49-9E35-2B7E0A1D5C11"))
+      try FileManager.default.createDirectory(
+        at: store.directory, withIntermediateDirectories: true)
+      try Data(
+        #"{"id":"\#(id.uuidString)","title":"朝","body":"本文","photos":\#(photos),"updated":0}"#
+          .utf8
+      ).write(to: store.file(for: id))
+      #expect(try store.all().map(\.body) == ["本文"])
+      #expect(try store.all().map(\.photos) == [read.compactMap(UUID.init(uuidString:))])
+    }
+  }
+
   @Test func savingAgainReplacesTheWritingWithItsID() throws {
     try withEmptyStore { store throws in
       var writing = Writing(title: "朝", body: "一行目", updated: Date(timeIntervalSince1970: 1))
@@ -313,6 +337,8 @@ struct WritingTests {
 
 nonisolated private let bread = URL(string: "https://example.com/bread") ?? URL(filePath: "/")
 nonisolated private let flour = URL(string: "https://example.com/flour") ?? URL(filePath: "/")
+nonisolated private let photoA = "0B6E2F7A-3C1D-4E59-8A2B-6D4C3B2A1F00"
+nonisolated private let photoB = "9C8D7E6F-5A4B-4C3D-9E2F-1A0B9C8D7E6F"
 /// A saved link that can be read: 「です」 of 「本文です」 linked to `flour`.
 nonisolated private let good = #"{"range":[2,4],"url":"https://example.com/flour"}"#
 

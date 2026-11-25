@@ -9,8 +9,8 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
   /// Stretches of `body` that link outside the app: whole characters, in order, never overlapping,
   /// as `fitted(to:)` leaves them.
   var links: [BodyLink]
-  /// The IDs of its photos, oldest first, shown after the body. A writing synced from another
-  /// device may point at a photo this device's `PhotoStore` doesn't have.
+  /// The IDs of its photos, oldest first, none twice, shown after the body. A writing synced from
+  /// another device may point at a photo this device's `PhotoStore` doesn't have.
   var photos: [UUID]
   var updated: Date
 
@@ -32,7 +32,7 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
 
   /// A writing saved before links or photos were kept has none. A link that can't be read is
   /// dropped, and the rest are made to fit the body as `fitted(to:)` does, so the body is read
-  /// whatever its links say.
+  /// whatever its links say. Photos are read as `photoIDs(forKey:)` reads them.
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(UUID.self, forKey: .id)
@@ -40,7 +40,7 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
     body = try container.decode(String.self, forKey: .body)
     let saved = (try? container.decodeIfPresent([ReadableLink].self, forKey: .links)) ?? nil
     links = (saved ?? []).compactMap(\.link).fitted(to: body)
-    photos = try container.decodeIfPresent([UUID].self, forKey: .photos) ?? []
+    photos = container.photoIDs(forKey: .photos)
     updated = try container.decode(Date.self, forKey: .updated)
   }
 }
@@ -51,6 +51,26 @@ nonisolated struct ReadableLink: Decodable {
 
   init(from decoder: any Decoder) throws {
     link = try? BodyLink(from: decoder)
+  }
+}
+
+nonisolated extension KeyedDecodingContainer {
+  /// The photo IDs under `key`, each once, in their first place. An ID that can't be read is
+  /// dropped, and a value that isn't a list reads as none, so the writing is read whatever its
+  /// photos say.
+  func photoIDs(forKey key: Key) -> [UUID] {
+    let saved = (try? decodeIfPresent([ReadablePhotoID].self, forKey: key)) ?? nil
+    var seen = Set<UUID>()
+    return (saved ?? []).compactMap(\.id).filter { seen.insert($0).inserted }
+  }
+}
+
+/// A saved photo ID, or nil where it can't be read as one.
+nonisolated struct ReadablePhotoID: Decodable {
+  let id: UUID?
+
+  init(from decoder: any Decoder) throws {
+    id = try? UUID(from: decoder)
   }
 }
 

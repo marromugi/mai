@@ -180,6 +180,13 @@ struct WritingSyncTests {
     #expect(try library.forSync().first { $0.id == outOfRange.id }?.links == [])
     #expect(try library.forSync().first { $0.id == outOfRange.id }?.photos == [])
 
+    let oddPhotos = PlainWriting(
+      id: UUID(), updated: written.updated,
+      contents: Data(#"{"body":"本文","photos":["not-an-id"],"title":"題"}"#.utf8))
+    try await synced.save(oddPhotos)
+    #expect(try library.forSync().first { $0.id == oddPhotos.id }?.title == "題")
+    #expect(try library.forSync().first { $0.id == oddPhotos.id }?.photos == [])
+
     await #expect(throws: UnreadableContents.self) {
       try await synced.save(
         PlainWriting(id: UUID(), updated: written.updated, contents: Data("平文".utf8)))

@@ -88,7 +88,8 @@ nonisolated struct PhotoStore: Sendable {
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
     let size = CGSize(
-      width: (pixels.width * fit).rounded(), height: (pixels.height * fit).rounded())
+      width: max(1, (pixels.width * fit).rounded()), height: max(1, (pixels.height * fit).rounded())
+    )
     return UIGraphicsImageRenderer(size: size, format: format).image { _ in
       image.draw(in: CGRect(origin: .zero, size: size))
     }

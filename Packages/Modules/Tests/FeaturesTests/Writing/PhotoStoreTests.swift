@@ -75,6 +75,8 @@ struct PhotoStoreTests {
   @Test(arguments: [
     (CGSize(width: 2400, height: 1800), CGSize(width: 1200, height: 900)),
     (CGSize(width: 1500, height: 3000), CGSize(width: 600, height: 1200)),
+    (CGSize(width: 3000, height: 1), CGSize(width: 1200, height: 1)),
+    (CGSize(width: 2, height: 5000), CGSize(width: 1, height: 1200)),
   ])
   func theThumbnailFitsItsSide(_ size: CGSize, _ thumbnail: CGSize) async throws {
     try await withEmptyStore { store in
