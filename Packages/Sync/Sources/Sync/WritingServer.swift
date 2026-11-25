@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Sends one request and gives back the answer. `URLSession` is the real one.
@@ -62,10 +63,20 @@ public enum PlanLimit: String, Sendable, Equatable {
 
 /// Tells one save of a writing from another: the SHA-256 of what was saved, as the server gives it.
 public struct Revision: Sendable, Hashable, Codable {
-  public let hex: String
+  /// The 32 bytes of the SHA-256.
+  let bytes: Data
+
+  public var hex: String {
+    bytes.map { String(format: "%02x", $0) }.joined()
+  }
 
   public init(from decoder: any Decoder) throws {
-    hex = try decoder.singleValueContainer().decode(String.self)
+    let container = try decoder.singleValueContainer()
+    guard let revision = Revision(hex: try container.decode(String.self)) else {
+      throw DecodingError.dataCorruptedError(
+        in: container, debugDescription: "a revision is a SHA-256 in lowercase hex")
+    }
+    self = revision
   }
 
   public func encode(to encoder: any Encoder) throws {
@@ -73,8 +84,30 @@ public struct Revision: Sendable, Hashable, Codable {
     try container.encode(hex)
   }
 
-  init(hex: String) {
-    self.hex = hex
+  /// The revision written as 64 lowercase hex digits; nil for any other text.
+  init?(hex: String) {
+    let digits = Array(hex.utf8)
+    guard digits.count == 64 else { return nil }
+    var bytes = Data(capacity: 32)
+    for index in stride(from: 0, to: 64, by: 2) {
+      guard let high = Self.value(of: digits[index]), let low = Self.value(of: digits[index + 1])
+      else { return nil }
+      bytes.append(high << 4 | low)
+    }
+    self.bytes = bytes
+  }
+
+  /// The revision of the sealed writing `bytes`.
+  init(of bytes: Data) {
+    self.bytes = Data(SHA256.hash(data: bytes))
+  }
+
+  private static func value(of digit: UInt8) -> UInt8? {
+    switch digit {
+    case UInt8(ascii: "0")...UInt8(ascii: "9"): digit - UInt8(ascii: "0")
+    case UInt8(ascii: "a")...UInt8(ascii: "f"): digit - UInt8(ascii: "a") + 10
+    default: nil
+    }
   }
 }
 
@@ -130,11 +163,15 @@ public struct WritingServer: Sendable {
     let (data, response) = try await transport.answer(
       request(for: path(of: id)), expecting: [200, 404])
     guard response.statusCode == 200 else { return nil }
-    guard let revision = response.value(forHTTPHeaderField: "Mai-Revision") else {
-      throw .unexpectedAnswer("a writing came without its Mai-Revision")
+    guard
+      let revision = response.value(forHTTPHeaderField: "Mai-Revision").flatMap({
+        Revision(hex: $0)
+      })
+    else {
+      throw .unexpectedAnswer("a writing came without a revision in its Mai-Revision")
     }
     do {
-      return (try Envelope(bytes: data), Revision(hex: revision))
+      return (try Envelope(bytes: data), revision)
     } catch {
       throw .unexpectedAnswer(error.localizedDescription)
     }

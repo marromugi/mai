@@ -36,6 +36,15 @@ struct WritingServerContractTests {
       .checkAWritingAndItsEditTravelBothWays()
   }
 
+  @Test func readModeReachesAnAgentThroughTheWorker() async throws {
+    let token = try #require(token, "MAI_SERVER_TOKEN is the local Worker's token")
+    let url = try #require(url, "MAI_SERVER_URL names the local Worker")
+    let ownKey = OwnKey.generate()
+    try await ReadModeContract.check(
+      ReadModeSetUp(ownKey: ownKey, url: url, token: token, transport: URLSession.shared),
+      ownKey: ownKey, now: Date.init)
+  }
+
   @Test func aPhotoTravelsWithItsWritingThroughTheWorker() async throws {
     let token = try #require(token, "MAI_SERVER_TOKEN is the local Worker's token")
     let server = try server(token: token)
