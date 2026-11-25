@@ -12,6 +12,7 @@ struct HandoffTests {
     #expect(handoff.token == token)
     #expect(try Handoff(line: "http://127.0.0.1:8787#\(token)").token == token)
     #expect(try Handoff(line: "http://localhost:8787#\(token)").token == token)
+    #expect(try Handoff(line: "HTTPS://mai.example.workers.dev#\(token)").token == token)
   }
 
   @Test(arguments: [
@@ -21,6 +22,12 @@ struct HandoffTests {
     ("https://mai.example.workers.dev#s1.session.token", .notAToken),
     ("https://mai.example.workers.dev#agent.not-an-id.c2Vj", .notAToken),
     ("https://mai.example.workers.dev#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.", .notAToken),
+    ("https://mai.example.workers.dev#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.a\nb", .notAToken),
+    ("https://mai.example.workers.dev#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.a b", .notAToken),
+    (
+      "https://mai.example.workers.dev#x#agent.3f2504e0-4f89-11d3-9a0c-0305e82c3301.c2Vj",
+      .notAServer
+    ),
   ])
   func refusesALineOfAnotherShape(_ line: String, _ problem: HandoffError) {
     #expect(throws: problem) { try Handoff(line: line) }
@@ -105,6 +112,48 @@ struct PairTests {
     }
     let kept: Pairing<P256.KeyAgreement.PrivateKey> = try #require(try account.file.read())
     #expect(kept.handoff == (try Handoff(line: firstLine)))
+  }
+
+  @Test func theLineOfThePairingKeptIsRefusedForANewKey() async throws {
+    let account = Account()
+    let first = P256.KeyAgreement.PrivateKey()
+    let (_, line) = try await account.approve(first)
+    _ = try await account.file.pair(first, line: line, transport: account.fake)
+
+    await #expect {
+      _ = try await account.file.pair(
+        P256.KeyAgreement.PrivateKey(), line: line, transport: account.fake)
+    } throws: {
+      guard case .lineOfThePairingKept = $0 as? PairingProblem else { return false }
+      return true
+    }
+    let kept: Pairing<P256.KeyAgreement.PrivateKey> = try #require(try account.file.read())
+    #expect(kept.key.rawRepresentation == first.rawRepresentation)
+  }
+
+  @Test func anotherAgentsLineIsRefusedWhenItsCopyDoesntOpen() async throws {
+    let account = Account()
+    let (_, line) = try await account.approve(P256.KeyAgreement.PrivateKey())
+    try account.write("散歩の記録", "川沿いを歩いた。", at: 0)
+    _ = try await account.synchronizer.sync()
+    _ = try await account.readMode.turnOn(until: account.clock.now + 600)
+
+    await #expect {
+      _ = try await account.file.pair(
+        P256.KeyAgreement.PrivateKey(), line: line, transport: account.fake)
+    } throws: {
+      guard case .anotherKeysLine = $0 as? PairingProblem else { return false }
+      return true
+    }
+    let none: Pairing<P256.KeyAgreement.PrivateKey>? = try account.file.read()
+    #expect(none == nil)
+  }
+
+  @Test func forgettingRemovesAFileAlone() throws {
+    let account = Account()
+    try FileManager.default.createDirectory(at: account.file.url, withIntermediateDirectories: true)
+    #expect(throws: PairingFileError.self) { try account.file.remove() }
+    #expect(FileManager.default.fileExists(atPath: account.file.url.path))
   }
 
   @Test func aLineOfAnotherShapeKeepsNothing() async throws {

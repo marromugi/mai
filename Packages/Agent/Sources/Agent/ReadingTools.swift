@@ -77,18 +77,17 @@ public actor ReadingTools<Key: AgentPrivateKey> {
         listing: try await served { () async throws(ServerError) in try await library.shelf() },
         in: timeZone)
     case "read_writing":
-      guard let text = call.arguments?["id"]?.stringValue,
-        let id = UUID(uuidString: text.trimmingCharacters(in: .whitespaces))
-      else {
-        throw .notAnID(call.arguments?["id"]?.stringValue)
+      guard let text = call.arguments?["id"]?.stringValue else { throw .noID }
+      guard let id = UUID(uuidString: text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        throw .notAnID(text)
       }
       let library = try library()
       return Answer(
         reading: try await served { () async throws(ServerError) in try await library.writing(id) },
         of: id, in: timeZone)
     case "search_writings":
-      let words = (call.arguments?["query"]?.stringValue ?? "").trimmingCharacters(
-        in: .whitespacesAndNewlines)
+      guard let query = call.arguments?["query"]?.stringValue else { throw .noQuery }
+      let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !words.isEmpty else { throw .noWords }
       let library = try library()
       let (matches, shelf) = try await served { () async throws(ServerError) in
@@ -217,7 +216,9 @@ enum Problem: Error {
   case notPaired
   case unreadablePairing(PairingFileError)
   case server(ServerError)
-  case notAnID(String?)
+  case noID
+  case notAnID(String)
+  case noQuery
   case noWords
   case unknownTool(String)
 
@@ -237,8 +238,12 @@ enum Problem: Error {
       "Cotoma のサーバーが断りました（\(status)）。"
     case .server(.unexpectedAnswer(let reason)):
       "Cotoma のサーバーの答えが読めませんでした（\(reason)）。"
+    case .noID:
+      "read_writing には id（文書の ID の文字列）が要ります。ID は list_writings か search_writings が返すものを使ってください。"
     case .notAnID(let given):
-      "「\(given ?? "")」は文書の ID（UUID）ではありません。ID は list_writings か search_writings が返すものを使ってください。"
+      "「\(given)」は文書の ID（UUID）ではありません。ID は list_writings か search_writings が返すものを使ってください。"
+    case .noQuery:
+      "search_writings には query（探す言葉の文字列）が要ります。"
     case .noWords:
       "探す言葉（query）が空です。"
     case .unknownTool(let name):

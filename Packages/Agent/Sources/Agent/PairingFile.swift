@@ -77,9 +77,13 @@ public struct PairingFile: Sendable {
   /// Removes the pairing; false when there was none.
   public func remove() throws(PairingFileError) -> Bool {
     do {
+      let type = try FileManager.default.attributesOfItem(atPath: url.path)[.type]
+      guard type as? FileAttributeType == .typeRegular else {
+        throw CocoaError(.fileWriteUnknown)
+      }
       try FileManager.default.removeItem(at: url)
       return true
-    } catch CocoaError.fileNoSuchFile {
+    } catch CocoaError.fileReadNoSuchFile, CocoaError.fileNoSuchFile {
       return false
     } catch {
       throw .unwritable(url, error.localizedDescription)
@@ -99,8 +103,9 @@ public struct PairingFile: Sendable {
 }
 
 extension PairingFile {
-  /// Keeps `key` paired by the handoff `line`, once the token it carries reads from the server.
-  /// The pairing kept before stays until then.
+  /// Keeps `key` paired by the handoff `line`, once the token it carries reads from the server
+  /// and, when the agent holds a copy, the copy opens with `key`. The pairing kept before stays
+  /// until then, and its own line is refused: it belongs to the key kept before.
   public func pair<Key: AgentPrivateKey>(
     _ key: Key, line: String, transport: any HTTPTransport
   ) async throws(PairingProblem) -> Pairing<Key> {
@@ -110,11 +115,21 @@ extension PairingFile {
     } catch {
       throw .handoff(error)
     }
+    let kept: Pairing<Key>? = try? read()
+    guard kept?.handoff != handoff else { throw .lineOfThePairingKept }
+    let server = AgentServer(url: handoff.server, token: handoff.token, transport: transport)
     do {
-      _ = try await AgentServer(url: handoff.server, token: handoff.token, transport: transport)
-        .list()
-    } catch {
+      if let first = try await server.list().first,
+        let copy = try await server.copy(of: first.id), (try? copy.open(with: key)) == nil
+      {
+        throw PairingProblem.anotherKeysLine
+      }
+    } catch let problem as PairingProblem {
+      throw problem
+    } catch let error as ServerError {
       throw .server(error)
+    } catch {
+      preconditionFailure("Only the server's errors and the check above are thrown: \(error)")
     }
     let pairing = Pairing(key: key, handoff: handoff)
     do {
@@ -128,12 +143,16 @@ extension PairingFile {
 
 public enum PairingProblem: LocalizedError {
   case handoff(HandoffError)
+  case lineOfThePairingKept
+  case anotherKeysLine
   case server(ServerError)
   case file(PairingFileError)
 
   public var errorDescription: String? {
     switch self {
     case .handoff(let error): error.localizedDescription
+    case .lineOfThePairingKept, .anotherKeysLine:
+      "この行は前に承認したエージェントのもので、いま作った鍵のものではありません。iPhone でいまのコードを承認し、そのあとに出た行を貼り付けてください。"
     case .server(.refused(status: 401, _)):
       "サーバーがこのトークンを受け付けません。iPhone でいま承認したエージェントの行か確かめてください。"
     case .server(.unreachable):

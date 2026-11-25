@@ -97,7 +97,14 @@ public actor Library<Key: AgentPrivateKey> {
     if let kept = opened[entry.id], kept.revision == entry.revision {
       return .opened(kept.writing)
     }
-    guard let copy = try await server.copy(of: entry.id) else { return .gone }
+    let copy: AgentCopy?
+    do {
+      copy = try await server.copy(of: entry.id)
+    } catch {
+      guard case .unexpectedAnswer = error else { throw error }
+      return .unopenable
+    }
+    guard let copy else { return .gone }
     guard let plain = try? copy.open(with: key),
       let contents = try? JSONDecoder().decode(Contents.self, from: plain.contents)
     else {

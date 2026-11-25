@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import MCP
 import Sync
+import SyncFakes
 import Testing
 
 /// The tools as an MCP client calls them, over the agent's pairing with an account on the fake
@@ -18,11 +19,11 @@ struct ReadingToolsTests {
     return (try await client(), agent)
   }
 
-  private func client() async throws -> Client {
+  private func client(transport: (any HTTPTransport)? = nil) async throws -> Client {
     let server = Server(
       name: "mai-mcp", version: "test", capabilities: .init(tools: .init(listChanged: false)))
     await ReadingTools<P256.KeyAgreement.PrivateKey>(
-      file: account.file, transport: account.fake, timeZone: Self.tokyo
+      file: account.file, transport: transport ?? account.fake, timeZone: Self.tokyo
     ).register(on: server)
     let (clientEnd, serverEnd) = await InMemoryTransport.createConnectedPair()
     try await server.start(transport: serverEnd)
@@ -188,7 +189,10 @@ struct ReadingToolsTests {
 
   @Test(arguments: [
     ("read_writing", ["id": Value.string("not-an-id")], "「not-an-id」は文書の ID（UUID）ではありません。"),
+    ("read_writing", [:], "read_writing には id（文書の ID の文字列）が要ります。"),
+    ("read_writing", ["id": Value.int(5)], "read_writing には id（文書の ID の文字列）が要ります。"),
     ("search_writings", ["query": Value.string("  ")], "探す言葉（query）が空です。"),
+    ("search_writings", ["query": Value.bool(true)], "search_writings には query（探す言葉の文字列）が要ります。"),
     ("write_writing", [:], "write_writing というツールはありません。"),
   ])
   func refusesAWrongCall(_ name: String, _ arguments: [String: Value], _ answer: String)
@@ -219,5 +223,64 @@ struct ReadingToolsTests {
     let read = try await call(client, "read_writing", ["id": .string(walk.id.uuidString)])
     #expect(read.text.contains("夕方にもう一度歩いた。"))
     #expect(!read.text.contains("川沿いを歩いた。"))
+  }
+
+  @Test func anIDWithANewlineAfterItIsRead() async throws {
+    let (client, _) = try await connect()
+    let walk = try account.write("散歩の記録", "川沿いを歩いた。", at: 0)
+    _ = try await turnOn(forSeconds: 600)
+    let read = try await call(client, "read_writing", ["id": .string(walk.id.uuidString + "\n")])
+    #expect(read.text.hasPrefix("# 散歩の記録"))
+  }
+
+  @Test func aRunningServerReadsWithTheKeyOfANewPairing() async throws {
+    let (client, _) = try await connect()
+    try account.write("散歩の記録", "川沿いを歩いた。", at: 0)
+    _ = try await turnOn(forSeconds: 600)
+    #expect(try await call(client, "list_writings").text.contains("散歩の記録"))
+
+    let second = P256.KeyAgreement.PrivateKey()
+    let (_, line) = try await account.approve(second)
+    _ = try await account.readMode.sendCopies(of: Set(account.writings.all().map(\.id)))
+    _ = try await account.file.pair(second, line: line, transport: account.fake)
+
+    let listed = try await call(client, "list_writings")
+    #expect(listed.text.contains("散歩の記録"))
+    #expect(!listed.text.contains("開けませんでした"))
+  }
+
+  @Test func aCopyTheServerSendsBrokenIsNamedAndTheRestRead() async throws {
+    let walk = try account.write("散歩の記録", "川沿いを歩いた。", at: 0)
+    let letter = try account.write("手紙の下書き", "拝啓", at: 60)
+    let (_, line) = try await account.approve(key)
+    _ = try await account.file.pair(key, line: line, transport: account.fake)
+    let client = try await client(transport: Breaking(fake: account.fake, copy: letter.id))
+    _ = try await turnOn(forSeconds: 600)
+
+    let listed = try await call(client, "list_writings")
+    #expect(listed.isError == false)
+    #expect(listed.text.contains("散歩の記録"))
+    #expect(listed.text.contains("文書 \(letter.id.uuidString.lowercased()) の写しはありますが"))
+    #expect(
+      try await call(client, "read_writing", ["id": .string(walk.id.uuidString)]).text.hasPrefix(
+        "# 散歩の記録"))
+  }
+}
+
+/// The fake server, with the copy of one writing sent without its wrapped key.
+struct Breaking: HTTPTransport {
+  let fake: FakeWritingServer
+  let copy: UUID
+
+  func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    let (data, response) = try await fake.send(request)
+    guard request.url?.lastPathComponent == copy.uuidString.lowercased(),
+      let url = response.url,
+      let broken = HTTPURLResponse(
+        url: url, statusCode: response.statusCode, httpVersion: nil, headerFields: [:])
+    else {
+      return (data, response)
+    }
+    return (data, broken)
   }
 }
