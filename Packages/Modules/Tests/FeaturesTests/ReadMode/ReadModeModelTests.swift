@@ -157,7 +157,7 @@ struct ReadModeModelTests {
     (0, [:], "0 件の写しをエージェントあてに置きました。"),
     (
       3, [CopyRefusal.revision: 1, .agent: 1],
-      "3 件の写しをエージェントあてに置きました。2 件は、ほかの端末で設定か文書が変わったため置いていません。"
+      "3 件の写しをエージェントあてに置きました。2 件は、そのあいだに設定か文書が変わったため置いていません。"
     ),
   ])
   func whatWasSentIsSaid(kept: Int, refused: [CopyRefusal: Int], said: String) {

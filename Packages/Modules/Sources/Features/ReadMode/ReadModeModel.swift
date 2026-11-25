@@ -86,7 +86,7 @@ struct AgentRow: Identifiable, Equatable {
     }
   }
 
-  /// Turns read mode on until `until`, sending the copies of the writings synced.
+  /// Turns read mode on until `until`, sending the copies of every writing on the server.
   func turnOn(until: Date) async {
     await act { () async throws in
       let copies: CopiesSent
@@ -185,7 +185,7 @@ struct AgentRow: Identifiable, Equatable {
     let refused = copies.refused.values.reduce(0, +)
     let kept = "\(copies.kept) 件の写しをエージェントあてに置きました。"
     guard refused > 0 else { return kept }
-    return kept + "\(refused) 件は、ほかの端末で設定か文書が変わったため置いていません。"
+    return kept + "\(refused) 件は、そのあいだに設定か文書が変わったため置いていません。"
   }
 }
 

@@ -2,7 +2,7 @@ import Foundation
 import Sync
 import Testing
 
-/// `ServerContract` on the Worker in `Server/`, run under `wrangler dev` by
+/// `ServerContract` and `ReadModeContract` on the Worker in `Server/`, run under `wrangler dev` by
 /// `scripts/server-contract-test.sh`, which gives the server's URL and token. Left out of the
 /// ordinary run by `--skip Contract`.
 struct WritingServerContractTests {

@@ -344,7 +344,8 @@ struct PhotoSyncState {
   }
 }
 
-/// For each writing, the server's revision and the device's updated time when they last matched.
+/// For each writing, the server's revision, the device's updated time when they last matched, and
+/// the key of that revision.
 struct SyncState {
   struct Entry: Codable, Equatable {
     let revision: Revision

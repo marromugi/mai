@@ -11,8 +11,7 @@ public struct RecoveryKey: Sendable, Equatable {
     self.ownKey = ownKey
   }
 
-  /// Reads a recovery key as a person typed it: any case, with or without hyphens and spaces, and
-  /// O, I and L taken for 0, 1 and 1.
+  /// Reads a recovery key as a person typed or pasted it, as `Base32` reads.
   public init(text: String) throws(RecoveryKeyError) {
     let bytes: Data
     do {

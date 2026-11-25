@@ -227,8 +227,8 @@ public struct ReadMode: Sendable {
 }
 
 /// The writings whose copies are owed: their sending failed, or the server refused them for
-/// another read mode than the one read. Every device's read mode of one account shares the file,
-/// so each change is made under one lock, from what the file holds then.
+/// another read mode than the one read. The sync and the read-mode page of one account share the
+/// file, so each change is made under one lock, from what the file holds then.
 struct OwedCopies {
   let file: URL
   private static let lock = Mutex(())
