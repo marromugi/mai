@@ -62,17 +62,20 @@ struct WritingListPage: View {
         }
         .padding(.bottom, scale.space(.s))
       OrderMenu(order: $order)
-      ForEach(rows.sorted(order)) { row in
-        Button {
-          open(row)
-        } label: {
-          WritingRowView(row: row, now: now)
-            .padding(.vertical, scale.space(.s))
-            .contentShape(.rect)
+      // Lazy: a row is laid out once it comes near the screen.
+      LazyVStack(alignment: .leading, spacing: 0) {
+        ForEach(rows.sorted(order)) { row in
+          Button {
+            open(row)
+          } label: {
+            WritingRowView(row: row, now: now)
+              .padding(.vertical, scale.space(.s))
+              .contentShape(.rect)
+          }
+          .buttonStyle(.plain)
+          DottedRule()
+            .padding(.horizontal, -scale.ruleOverhang)
         }
-        .buttonStyle(.plain)
-        DottedRule()
-          .padding(.horizontal, -scale.ruleOverhang)
       }
     }
     .frame(width: area.lineLength, alignment: .leading)

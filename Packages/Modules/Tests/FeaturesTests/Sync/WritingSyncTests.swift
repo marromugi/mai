@@ -104,7 +104,7 @@ struct WritingSyncTests {
 
     await device.account.checkAtLaunch()
     await device.sync.syncNow()
-    try device.library.edit(written.id, at: .now) { $0.title = "夜" }
+    device.library.edit(written.id, at: .now) { $0.title = "夜" }
     device.sync.edited()
     #expect(device.sync.pending == nil)
     await device.sync.syncNow()
@@ -182,13 +182,16 @@ struct WritingSyncTests {
     library.load(seedingWhenEmpty: [])
     let synced = SyncedWritings(library: library)
     _ = try await synced.all()
-    try library.edit(written.id, at: Date(timeIntervalSince1970: 2_000)) { $0.body = "書き足した" }
+    library.edit(written.id, at: Date(timeIntervalSince1970: 2_000)) { $0.body = "書き足した" }
     let fromServer = PlainWriting(
       id: written.id, updated: Date(timeIntervalSince1970: 1_500),
       contents: try Writing.Contents(writing("昼", at: 0)).encoded())
 
     await #expect(throws: EditedDuringSync.self) { try await synced.save(fromServer) }
     #expect(try library.forSync().map(\.body) == ["書き足した"])
+    // Neither the sync nor the edit has saved yet.
+    #expect(try library.store.all().map(\.body) == ["朝の本文"])
+    await library.saveNow()
     #expect(try library.store.all().map(\.body) == ["書き足した"])
   }
 
@@ -237,7 +240,7 @@ struct WritingSyncTests {
     await device.account.checkAtLaunch()
     await device.sync.syncNow()
 
-    try device.library.edit(written.id, at: Date(timeIntervalSince1970: 2_000)) {
+    device.library.edit(written.id, at: Date(timeIntervalSince1970: 2_000)) {
       $0.title = "夜"
     }
     device.sync.edited()
@@ -293,7 +296,7 @@ struct WritingSyncTests {
     await device.sync.syncNow()
     let error = status == 429 ? ServerError.limitReached(.saves) : .refused(status: 402, reason: "")
     #expect(device.sync.status == .stopped(error.localizedDescription))
-    try device.library.edit(written.id, at: .now) { $0.title = "夜" }
+    device.library.edit(written.id, at: .now) { $0.title = "夜" }
     device.sync.edited()
     #expect(device.sync.pending == nil)
 
@@ -330,7 +333,7 @@ struct WritingSyncTests {
     library.load(seedingWhenEmpty: [])
     let synced = SyncedWritings(library: library)
     _ = try await synced.all()
-    try library.edit(written.id, at: Date(timeIntervalSince1970: 3_000)) { $0.body = "二度目" }
+    library.edit(written.id, at: Date(timeIntervalSince1970: 3_000)) { $0.body = "二度目" }
     let received = PlainWriting(
       id: written.id, updated: Date(timeIntervalSince1970: 2_000),
       contents: try Writing.Contents(writing("他の端末", at: 0)).encoded())
@@ -342,6 +345,8 @@ struct WritingSyncTests {
       try await synced.keepBoth(received, copy: copy)
     }
     #expect(try library.forSync().map(\.body) == ["二度目"])
+    #expect(try library.store.all().map(\.body) == ["朝の本文"])
+    await library.saveNow()
     #expect(try library.store.all().map(\.body) == ["二度目"])
   }
 
@@ -382,7 +387,7 @@ struct WritingSyncTests {
     await second.account.checkAtLaunch()
     await first.sync.syncNow()
     await second.sync.syncNow()
-    try second.library.edit(written.id, at: Date(timeIntervalSince1970: 2_000)) {
+    second.library.edit(written.id, at: Date(timeIntervalSince1970: 2_000)) {
       $0.body = "他の端末"
     }
     await second.sync.syncNow()
@@ -392,7 +397,7 @@ struct WritingSyncTests {
     while first.sent.listings < 2 {
       try await Task.sleep(for: .milliseconds(10))
     }
-    try first.library.edit(written.id, at: Date(timeIntervalSince1970: 3_000)) {
+    first.library.edit(written.id, at: Date(timeIntervalSince1970: 3_000)) {
       $0.body = "書き足した"
     }
     first.sent.release()

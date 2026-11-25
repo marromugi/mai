@@ -1,4 +1,5 @@
 import SwiftUI
+internal import Typesetting
 
 public struct RootView: View {
   private let fonts: FontLibrary
@@ -46,15 +47,14 @@ public struct RootView: View {
   public var body: some View {
     NavigationStack(path: $path) {
       Group {
-        switch library.writings {
+        switch library.rows {
         case nil:
           Color.clear
         case .failure(let error):
           ContentUnavailableView(
             "文書を読み込めませんでした", systemImage: "exclamationmark.triangle",
             description: Text(verbatim: error.localizedDescription))
-        case .success(let writings):
-          let rows = writings.map(WritingRow.init)
+        case .success(let rows):
           // Every minute, so the wording keeps up with the clock while the list is on screen.
           TimelineView(.periodic(from: opened, by: 60)) { context in
             WritingListView(
@@ -65,21 +65,11 @@ public struct RootView: View {
       }
       .toolbar(.hidden, for: .navigationBar)
       .navigationDestination(for: Writing.ID.self) { id in
-        if case .success(let writings) = library.writings,
-          let writing = writings.first(where: { $0.id == id })
-        {
-          ReadPhotos(ids: writing.photos, photos: photos) { read in
-            WritingView(
-              writing: writing,
-              others: writings.filter { $0.id != id },
-              open: { path.append($0.id) },
-              edit: { edit(id, $0) },
-              photos: read,
-              setting: $settings[id, default: defaultSetting.setting],
-              camera: .device,
-              photoTaken: { image in Task { await add(image, to: id) } })
-          }
-        }
+        OpenWriting(
+          id: id, library: library, photos: photos,
+          setting: $settings[id, default: defaultSetting.setting],
+          open: { path.append($0.id) }, edit: edit,
+          photoTaken: { image in Task { await add(image, to: id) } })
       }
     }
     .environment(\.fontFamilies, fontStack.stack.families(from: fonts.available))
@@ -90,7 +80,11 @@ public struct RootView: View {
       await sync?.syncNow()
     }
     .onChange(of: scenePhase) { _, phase in
-      guard phase == .active, launchChecked else { return }
+      guard phase == .active else {
+        Task { await library.saveNow() }
+        return
+      }
+      guard launchChecked else { return }
       Task { await sync?.syncNow() }
     }
     .sheet(isPresented: $showingSettings) {
@@ -100,8 +94,9 @@ public struct RootView: View {
         .environment(\.writingLibrary, library)
     }
     .alert(
-      "保存できませんでした", isPresented: Binding(get: { unsaved != nil }, set: { _ in unsaved = nil }),
-      presenting: unsaved
+      "保存できませんでした",
+      isPresented: Binding(get: { shownUnsaved != nil }, set: { _ in dismissUnsaved() }),
+      presenting: shownUnsaved
     ) { _ in
     } message: { unsaved in
       Text(verbatim: unsaved.localizedDescription)
@@ -109,13 +104,22 @@ public struct RootView: View {
     .colorTheme(theme)
   }
 
-  /// Makes `change` to the writing with `id` and saves it.
-  private func edit(_ id: Writing.ID, _ change: (inout Writing) -> Void) {
-    do {
-      guard try library.edit(id, at: .now, change) else { return }
-    } catch {
-      unsaved = .writing(error)
+  /// The photo that wasn't kept, or else the edits the library couldn't save.
+  private var shownUnsaved: Unsaved? {
+    unsaved ?? library.unsaved.map(Unsaved.writing)
+  }
+
+  private func dismissUnsaved() {
+    if unsaved != nil {
+      unsaved = nil
+    } else {
+      library.dismissUnsaved()
     }
+  }
+
+  /// Makes `change` to the writing with `id`, which the library saves once edits rest.
+  private func edit(_ id: Writing.ID, _ change: (inout Writing) -> Void) {
+    guard library.edit(id, at: .now, change) else { return }
     sync?.edited()
   }
 
@@ -126,6 +130,40 @@ public struct RootView: View {
     } catch {
       photoLogger.error("A photo taken wasn't kept: \(error.reason)")
       unsaved = .photo(error)
+    }
+  }
+}
+
+/// The writing with `id` on its page, with its photos, while `library` holds it. Its own view, so
+/// an edit updates the page and not the list under it.
+struct OpenWriting: View {
+  let id: Writing.ID
+  let library: WritingLibrary
+  let photos: WritingPhotos
+  @Binding var setting: BodySetting
+  let open: (Writing) -> Void
+  let edit: (Writing.ID, (inout Writing) -> Void) -> Void
+  let photoTaken: (UIImage) -> Void
+
+  var body: some View {
+    if case .success(let writings) = library.writings,
+      let writing = writings.first(where: { $0.id == id })
+    {
+      ReadPhotos(ids: writing.photos, photos: photos) { read in
+        WritingView(
+          writing: writing,
+          others: writings.filter { $0.id != id },
+          open: open,
+          edit: { edit(id, $0) },
+          photos: read,
+          setting: $setting,
+          camera: .device,
+          photoTaken: photoTaken)
+      }
+      // The page closing saves what was typed on it.
+      .onDisappear {
+        Task { await library.saveNow() }
+      }
     }
   }
 }

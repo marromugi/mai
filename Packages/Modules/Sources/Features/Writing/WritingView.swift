@@ -313,9 +313,13 @@ struct WritingHeader: View {
 }
 
 /// The mentions of other writings' titles found in `body`.
-struct FoundMentions: Equatable {
+nonisolated struct FoundMentions: Equatable, Sendable {
   let body: String
   let mentions: [TitleMention]
+
+  static func == (lhs: FoundMentions, rhs: FoundMentions) -> Bool {
+    lhs.body.isSameText(as: rhs.body) && lhs.mentions == rhs.mentions
+  }
 
   /// How long the body rests unchanged before its mentions are found again.
   static let rest = Duration.milliseconds(400)
@@ -325,6 +329,10 @@ struct FoundMentions: Equatable {
 private struct MentionSource: Equatable {
   let body: String
   let others: [Writing]
+
+  static func == (lhs: MentionSource, rhs: MentionSource) -> Bool {
+    lhs.body.isSameText(as: rhs.body) && lhs.others == rhs.others
+  }
 }
 
 extension OpenURLAction {

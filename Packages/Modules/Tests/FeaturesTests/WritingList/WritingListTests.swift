@@ -221,10 +221,8 @@ struct WritingListTests {
         order: .constant(.newestFirst),
         width: 402
       )
-      .fixedSize(horizontal: false, vertical: true)
-      .frame(width: 402)
-      .background(Color(.systemBackground))
-      .environment(\.calendar, calendar),
+      .environment(\.calendar, calendar)
+      .scrolledForSnapshot,
       as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits))
   }
 
@@ -311,20 +309,52 @@ private func assertList(
   column: UInt = #column
 ) {
   assertSnapshot(
-    of: WritingListPage(
-      rows: WritingRow.samples(now: now, calendar: calendar), now: now, order: .constant(order),
-      width: 402
+    of: scrolled(
+      WritingListPage(
+        rows: WritingRow.samples(now: now, calendar: calendar), now: now,
+        order: .constant(order), width: 402
+      )
+      .dynamicTypeSize(size)
+      .environment(\.calendar, calendar)
     )
-    .fixedSize(horizontal: false, vertical: true)
-    .frame(width: 402)
-    .background(Color(.systemBackground))
     .dynamicTypeSize(size)
-    .environment(\.colorScheme, colorScheme)
-    .environment(\.calendar, calendar),
+    .environment(\.colorScheme, colorScheme),
     as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
     fileID: fileID,
     file: file,
     testName: testName,
     line: line,
     column: column)
+}
+
+/// `page` in a scroll view 402 wide and as tall as the scroll view lays the page out, on the
+/// system background, as the app shows the list: a lazy stack measured outside a scroll view
+/// comes out shorter than it lays out.
+@MainActor
+private func scrolled(_ page: some View) -> some View {
+  let measuring = UIHostingController(rootView: ScrollView { page })
+  let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 20_000))
+  window.rootViewController = measuring
+  window.makeKeyAndVisible()
+  measuring.view.layoutIfNeeded()
+  var pending: [UIView] = [measuring.view]
+  var height: CGFloat = 0
+  while let view = pending.popLast() {
+    if let scroll = view as? UIScrollView {
+      height = scroll.contentSize.height
+      break
+    }
+    pending.append(contentsOf: view.subviews)
+  }
+  window.isHidden = true
+  return ScrollView { page }
+    .frame(width: 402, height: height)
+    .background(Color(.systemBackground))
+}
+
+extension View {
+  @MainActor
+  fileprivate var scrolledForSnapshot: some View {
+    scrolled(self)
+  }
 }

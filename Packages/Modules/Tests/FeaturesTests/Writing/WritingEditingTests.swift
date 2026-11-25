@@ -1214,3 +1214,127 @@ private func inkPixels(in image: UIImage, within rect: CGRect) throws -> Int {
 private func editorView(in page: HostedPage) -> PlaceholderTextView? {
   page.textViews.first as? PlaceholderTextView
 }
+
+@MainActor
+struct EditorViewTests {
+  /// On a body many screens long, the text view is a window tall and sits over the part of the
+  /// page shown, wherever the page is scrolled to.
+  @Test func theTextViewCoversThePartOfAPageShown() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try #require(editorView(in: page))
+    let container = try #require(editor.editor)
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    let window = try #require(editor.window)
+    #expect(container.bounds.height > window.bounds.height * 3)
+    for y in [0, container.bounds.height / 2, scroll.contentSize.height - scroll.bounds.height] {
+      scroll.contentOffset.y = y
+      page.settle()
+      #expect(editor.bounds.height == window.bounds.height)
+      let shown = editor.convert(editor.bounds, to: nil)
+      let screen = window.bounds.intersection(container.convert(container.bounds, to: nil))
+      #expect(shown.contains(screen.insetBy(dx: 1, dy: 1)))
+    }
+  }
+
+  /// The text view's own scroll to a place out of sight, as to keep the caret in sight, scrolls
+  /// the page to it: the text view doesn't scroll on its own.
+  @Test func aScrollToTheCaretScrollsThePage() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try focusedEditor(in: page)
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    let window = try #require(editor.window)
+    scroll.contentOffset.y = 0
+    page.settle()
+    editor.selectedRange = NSRange(location: (editor.text as NSString).length / 2, length: 0)
+    editor.scrollRangeToVisible(editor.selectedRange)
+    page.settle()
+    #expect(scroll.contentOffset.y > 0)
+    let caret = try #require(editor.selectedTextRange)
+    let shown = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: nil)
+    #expect(shown.contains(editor.convert(editor.caretRect(for: caret.start), to: nil)))
+  }
+}
+
+extension EditorViewTests {
+  /// A line break typed on the last line shown, above the bottom row, moves the page by no more
+  /// than to keep the caret in sight; the same for each line typed after it.
+  @Test func aLineBreakOnTheLastLineShownKeepsThePageInPlace() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try focusedEditor(in: page)
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    scroll.contentOffset.y = 2_000
+    page.settle()
+    let shown = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: nil)
+    // The caret at the start of the last whole line shown.
+    let point = editor.convert(CGPoint(x: 1, y: shown.maxY - 40), from: nil)
+    let position = try #require(editor.closestPosition(to: point))
+    editor.selectedTextRange = editor.textRange(from: position, to: position)
+    page.settle()
+    for _ in 0..<3 {
+      let before = scroll.contentOffset.y
+      type("\n", into: editor)
+      page.settle()
+      #expect(abs(scroll.contentOffset.y - before) < 100)
+      let caret = try #require(editor.selectedTextRange)
+      #expect(shown.contains(editor.convert(editor.caretRect(for: caret.start), to: nil)))
+    }
+  }
+
+  /// The arrow keys move the caret to the end of a long writing, and the page follows it there.
+  @Test func movingTheCaretToTheEndScrollsThePageThere() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try focusedEditor(in: page)
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    scroll.contentOffset.y = 0
+    page.settle()
+    editor.selectedTextRange = editor.textRange(
+      from: editor.endOfDocument, to: editor.endOfDocument)
+    page.settle()
+    let shown = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: nil)
+    let caret = try #require(editor.selectedTextRange)
+    #expect(shown.contains(editor.convert(editor.caretRect(for: caret.start), to: nil)))
+  }
+}
+
+/// A writing whose body is many screens long.
+private let long = Writing(
+  title: "朝", body: Array(repeating: Writing.sampleBody, count: 12).joined(separator: "\n"))
+
+@MainActor
+struct EditorHeightTests {
+  /// However the text is edited, the editor is as tall as the whole text laid out again, though it
+  /// lays out again only the paragraphs an edit touches.
+  @Test func theEditorKeepsTheWholeTextsHeightThroughEdits() throws {
+    let edits = Edits(writing: Writing(title: "朝", body: Writing.sampleBody))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let container = try #require(editor.editor)
+    let ends = { (editor.text as NSString).length }
+    let steps: [(NSRange, String)] = [
+      (NSRange(location: 10, length: 0), "書き足した"),
+      (NSRange(location: ends(), length: 0), "\n"),
+      (NSRange(location: ends() + 1, length: 0), "最後の行"),
+      (NSRange(location: 3, length: 0), "\n"),
+      (NSRange(location: 3, length: 1), ""),
+      (NSRange(location: 20, length: 30), "置き換えた\n二行に"),
+      // The title wraps, and the space below it changes.
+      (NSRange(location: 1, length: 0), "の机に向かって、間合いの調整をする日の覚え書き"),
+    ]
+    for (range, text) in steps {
+      editor.selectedRange = NSRange(location: min(range.location, ends()), length: range.length)
+      type(text, into: editor)
+      page.settle()
+      let wholeLayouts = container.wholeLayouts
+      let kept = container.textHeight(within: editor.frame.width)
+      // Only the paragraphs the edit touched were laid out again.
+      #expect(container.wholeLayouts == wholeLayouts)
+      container.paragraphs = nil
+      #expect(abs(container.textHeight(within: editor.frame.width) - kept) < 0.01)
+    }
+    // At another width, every line is set again.
+    let narrower = editor.frame.width - 40
+    let atNarrower = container.textHeight(within: narrower)
+    container.paragraphs = nil
+    #expect(abs(container.textHeight(within: narrower) - atNarrower) < 0.01)
+  }
+}
