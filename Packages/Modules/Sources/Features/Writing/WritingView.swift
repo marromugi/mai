@@ -186,7 +186,7 @@ private struct BottomRow: View {
 
 /// The page laid out across a screen `width` wide: the back mark, then the title, the body with
 /// the mentions `found` in it linked, and the photos after its last paragraph, piled as one stack,
-/// on the type area. The title and body are editable, and each change goes to `edit`.
+/// on the type area. The title and body are one editor, and each change goes to `edit`.
 /// `titleCutOff` hears how much of the title has scrolled above the scroll view's top, from 0 to 1.
 struct WritingPage: View {
   let writing: Writing
@@ -214,26 +214,29 @@ struct WritingPage: View {
       .padding(.leading, max(0, area.margin - max(markWidth, TextButtonStyle.minimumSide) / 2))
       .padding(.bottom, scale.space(.l))
       VStack(alignment: .leading, spacing: 0) {
-        TextStyleEditor(
-          role: .heading, text: writing.title, placeholder: "タイトル", oneLine: true
-        ) { title, _ in
-          edit { $0.title = title }
-        }
-        .onGeometryChange(for: CGFloat.self) {
-          let frame = $0.frame(in: .scrollView)
-          guard frame.height > 0 else { return 0 }
-          return min(max(-frame.minY / frame.height, 0), 1)
-        } action: {
-          titleCutOff($0)
-        }
-        .padding(.bottom, scale.space(.m))
-        TextStyleEditor(
-          role: .body, text: writing.body, links: writing.links, found: found, pastesLinks: true
-        ) { body, links in
+        WritingEditor(
+          writing: WritingText(title: writing.title, body: writing.body, links: writing.links),
+          found: found
+        ) { text in
           edit {
-            $0.body = body
-            $0.links = links
+            $0.title = text.title
+            $0.body = text.body
+            $0.links = text.links
           }
+        }
+        .background(alignment: .topLeading) {
+          // The title's lines as the editor sets them, to measure how far they have scrolled off.
+          Text(verbatim: writing.title.isEmpty ? "タイトル" : writing.title)
+            .textStyle(.heading)
+            .hidden()
+            .accessibilityHidden(true)
+            .onGeometryChange(for: CGFloat.self) {
+              let frame = $0.frame(in: .scrollView)
+              guard frame.height > 0 else { return 0 }
+              return min(max(-frame.minY / frame.height, 0), 1)
+            } action: {
+              titleCutOff($0)
+            }
         }
         if !photos.isEmpty {
           PhotoStack(photos: photos, lineLength: area.lineLength)
