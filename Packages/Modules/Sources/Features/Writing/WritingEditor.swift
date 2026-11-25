@@ -868,17 +868,14 @@ final class PlaceholderTextView: UITextView {
   }
 
   /// The highlight as UIKit draws it, with each of the selection's handles where the caret would
-  /// be at that end, and as tall.
+  /// be at that end, and as tall. An empty range is UIKit's.
   override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
     let rects = super.selectionRects(for: range)
-    var ends: [UITextSelectionRect] = []
-    if rects.contains(where: \.containsStart) {
-      ends.append(SelectionEnd(at: range.start, isStart: true, in: self))
-    }
-    if rects.contains(where: \.containsEnd) {
-      ends.append(SelectionEnd(at: range.end, isStart: false, in: self))
-    }
-    return rects.map(Highlight.init) + ends
+    guard !range.isEmpty else { return rects }
+    return rects.map(Highlight.init) + [
+      SelectionEnd(at: range.start, isStart: true, of: rects, in: self),
+      SelectionEnd(at: range.end, isStart: false, of: rects, in: self),
+    ]
   }
 
   /// From the ascender to the descender of the type on the line laid out at `rect`'s middle, in
@@ -976,11 +973,15 @@ private final class SelectionEnd: UITextSelectionRect {
   private let direction: NSWritingDirection
   private let isStart: Bool
 
-  /// At `position`, where `view` puts its caret.
-  init(at position: UITextPosition, isStart: Bool, in view: UITextView) {
+  /// At `position`, where `view` puts its caret, written in the direction UIKit gives that end
+  /// among `rects`.
+  init(
+    at position: UITextPosition, isStart: Bool, of rects: [UITextSelectionRect], in view: UITextView
+  ) {
     let caret = view.caretRect(for: position)
     edge = CGRect(x: caret.midX, y: caret.minY, width: 0, height: caret.height)
-    direction = view.baseWritingDirection(for: position, in: .forward)
+    let uikits = rects.first { isStart ? $0.containsStart : $0.containsEnd }
+    direction = uikits?.writingDirection ?? .natural
     self.isStart = isStart
   }
 

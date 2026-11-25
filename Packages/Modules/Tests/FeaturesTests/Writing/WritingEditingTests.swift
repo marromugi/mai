@@ -1439,11 +1439,25 @@ struct CaretTests {
     #expect(starts[0].rect.minY == startCaret.minY && starts[0].rect.height == startCaret.height)
     #expect(ends[0].rect.minY == endCaret.minY && ends[0].rect.height == endCaret.height)
     // UIKit centres the caret on the place between two characters.
-    #expect(abs(starts[0].rect.minX - startCaret.midX) < 0.01)
-    #expect(abs(ends[0].rect.minX - endCaret.midX) < 0.01)
+    for (end, caret) in [(starts[0], startCaret), (ends[0], endCaret)] {
+      #expect(abs(end.rect.minX - caret.midX) < 0.01 && end.rect.width == 0)
+    }
+    // As UIKit writes its own ends, right-to-left text included.
+    #expect(starts[0].writingDirection == .leftToRight)
+    #expect(ends[0].writingDirection == .leftToRight)
     let highlight = rects.filter { !$0.containsStart && !$0.containsEnd }.map(\.rect)
     #expect(try #require(highlight.map(\.minY).min()) < startCaret.minY)
     #expect(try #require(highlight.map(\.maxY).max()) > endCaret.maxY)
+  }
+
+  /// An empty range is UIKit's: one place, holding both its ends.
+  @Test func anEmptyRangeIsUIKits() throws {
+    let page = HostedPage(screen(edits: Edits()))
+    let editor = try focusedEditor(in: page)
+    let place = try #require(editor.position(from: editor.beginningOfDocument, offset: 3))
+    let rects = editor.selectionRects(for: try #require(editor.textRange(from: place, to: place)))
+    #expect(rects.count == 1)
+    #expect(rects.allSatisfy { $0.containsStart && $0.containsEnd })
   }
 }
 
