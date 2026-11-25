@@ -867,22 +867,16 @@ final class PlaceholderTextView: UITextView {
       height: type.upperBound - type.lowerBound)
   }
 
-  /// The highlight as UIKit draws it, with the selection's handles as tall as the type at each
-  /// end, as the caret is; as tall as UIKit's highlight at an end not laid out.
+  /// The highlight as UIKit draws it, with each of the selection's handles where the caret would
+  /// be at that end, and as tall.
   override func selectionRects(for range: UITextRange) -> [UITextSelectionRect] {
     let rects = super.selectionRects(for: range)
     var ends: [UITextSelectionRect] = []
-    for rect in rects where rect.containsStart || rect.containsEnd {
-      for isStart in [true, false] where isStart ? rect.containsStart : rect.containsEnd {
-        let type = typeExtent(atHeightOf: rect.rect) ?? rect.rect.minY...rect.rect.maxY
-        let onTheLeft = isStart != (rect.writingDirection == .rightToLeft)
-        let x = onTheLeft ? rect.rect.minX : rect.rect.maxX
-        ends.append(
-          SelectionEnd(
-            rect: CGRect(
-              x: x, y: type.lowerBound, width: 0, height: type.upperBound - type.lowerBound),
-            writingDirection: rect.writingDirection, isStart: isStart))
-      }
+    if rects.contains(where: \.containsStart) {
+      ends.append(SelectionEnd(at: range.start, isStart: true, in: self))
+    }
+    if rects.contains(where: \.containsEnd) {
+      ends.append(SelectionEnd(at: range.end, isStart: false, in: self))
     }
     return rects.map(Highlight.init) + ends
   }
@@ -982,9 +976,11 @@ private final class SelectionEnd: UITextSelectionRect {
   private let direction: NSWritingDirection
   private let isStart: Bool
 
-  init(rect: CGRect, writingDirection: NSWritingDirection, isStart: Bool) {
-    edge = rect
-    direction = writingDirection
+  /// At `position`, where `view` puts its caret.
+  init(at position: UITextPosition, isStart: Bool, in view: UITextView) {
+    let caret = view.caretRect(for: position)
+    edge = CGRect(x: caret.midX, y: caret.minY, width: 0, height: caret.height)
+    direction = view.baseWritingDirection(for: position, in: .forward)
     self.isStart = isStart
   }
 

@@ -1368,6 +1368,26 @@ struct CaretTests {
     #expect(try caretRect(at: 3, in: editor).height > caretRect(at: 4, in: editor).height)
   }
 
+  /// On every line of a wrapped title and a wrapped body, the caret stands on the line of a
+  /// character beside it: the one before it, or at a wrap, the one after.
+  @Test func theCaretIsOnTheLineOfACharacterBesideIt() throws {
+    let wrapped = String(repeating: "長い行が折り返す。", count: 6)
+    let edits = Edits(writing: Writing(title: wrapped, body: wrapped + "\n" + wrapped))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let text = editor.text as NSString
+    func character(at offset: Int) throws -> CGRect {
+      let start = try #require(editor.position(from: editor.beginningOfDocument, offset: offset))
+      let end = try #require(editor.position(from: start, offset: 1))
+      return editor.firstRect(for: try #require(editor.textRange(from: start, to: end)))
+    }
+    for offset in 1..<text.length where text.character(at: offset - 1) != 0x0A {
+      let caret = try caretRect(at: offset, in: editor)
+      let beside = [try character(at: offset - 1), try character(at: offset)]
+      #expect(beside.contains { $0.minY <= caret.midY && caret.midY <= $0.maxY }, "\(offset)")
+    }
+  }
+
   /// Where no character is beside it — an empty writing, the line after a last line break — the
   /// caret is where it is once a character is typed there.
   @Test(arguments: [Writing(title: "", body: ""), Writing(title: "朝", body: "本文\n")])
@@ -1402,8 +1422,9 @@ struct CaretTests {
   }
 
   /// A selection's handles are as tall as the caret at each of its ends; its highlight is UIKit's.
-  @Test func theSelectionsEndsAreAsTallAsTheCaretThere() throws {
-    let edits = Edits(writing: Writing(title: "朝の机", body: "本文の一行目\n二行目"))
+  @Test(arguments: ["本文の一行目\n二行目", "مرحبا بالعالم\nسطر ثان"])
+  func theSelectionsEndsAreAsTallAsTheCaretThere(_ body: String) throws {
+    let edits = Edits(writing: Writing(title: "朝の机", body: body))
     let page = HostedPage(screen(edits: edits))
     let editor = try focusedEditor(in: page)
     let start = try #require(editor.position(from: editor.beginningOfDocument, offset: 1))
