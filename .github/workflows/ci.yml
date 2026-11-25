@@ -50,10 +50,24 @@ jobs:
           echo "71720fc8648c19efef416efebd47145ef59b62e198770533530a858e1336879f  sqld.tar.xz" | sha256sum -c -
           mkdir sqld && tar -xf sqld.tar.xz -C sqld
           dirname "$(find "$PWD/sqld" -type f -name sqld)" >> "$GITHUB_PATH"
+      - name: Check worker-configuration.d.ts holds every environment of wrangler.jsonc
+        run: pnpm types:check
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm fmt:check
       - run: pnpm test
+      - name: Test the environment scripts and each environment's settings
+        run: node --test scripts/setup.test.mts scripts/environments.test.mts
+      - name: Check each build of the app talks to the Worker wrangler.jsonc deploys for it
+        run: |
+          url() { echo "https://$(node scripts/environment.mjs "$1" | jq -r .worker).marrromugi-dev.workers.dev"; }
+          settings() { sed -n "/^        $1:\$/,/^        [A-Z]/p" ../project.yml; }
+          settings Debug | grep -qx "          MAI_SERVER: $(url staging)"
+          settings Beta | grep -qx "          MAI_SERVER: $(url staging)"
+          settings Beta | grep -qx "          MAI_APP_STORE_SERVER: $(url prod)"
+          settings Release | grep -qx "          MAI_SERVER: $(url prod)"
+          # Only Beta asks StoreKit where it was installed from.
+          test "$(grep -c 'MAI_APP_STORE_SERVER:' ../project.yml)" -eq 1
 
   build:
     runs-on: macos-26
@@ -103,3 +117,7 @@ jobs:
         run: grep -q 'INFOPLIST_KEY_NSCameraUsageDescription = "[^"]' Mai.xcodeproj/project.pbxproj
       - name: Check the home screen names the app Cotoma
         run: grep -q 'INFOPLIST_KEY_CFBundleDisplayName = Cotoma;' Mai.xcodeproj/project.pbxproj
+      - name: Check the Debug, Beta and Release builds each name a server
+        run: |
+          test "$(grep -c 'MAI_SERVER = "https://' Mai.xcodeproj/project.pbxproj)" -eq 3
+          test "$(grep -c 'MAI_APP_STORE_SERVER = "https://' Mai.xcodeproj/project.pbxproj)" -eq 1

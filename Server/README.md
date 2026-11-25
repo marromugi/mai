@@ -177,7 +177,7 @@ AI のエージェント(Mac の MCP サーバーなど)に、期間を決めて
 
 `accounts.paid_until` を過ぎたアカウントは期限切れで、文書と写真を読めるが書けない。文書の保存(`PUT /writings/<ID>`)、写真とサムネイル(`PUT /photos/<ID>`、`.../thumbnail`)、自分の鍵の確かめの値(`PUT /account/own-key-check`)は 402 で、何も書かず、数えもしない。一覧・読み出し、アカウントを読むこと(`GET /account`)、購読を戻すための送り直しはそのまま使える。`paid_until` が期限の切れた時刻で、その 90 日あとに Cron が消す(下の「期限切れのあとの削除」)。
 
-`APP_STORE_ENVIRONMENTS` は受ける購入の環境で、`Production`・`Sandbox`、または両方をカンマで。`wrangler.jsonc` の値は `Production` で、本番の Worker は Sandbox(TestFlight と Sandbox のテスト用アカウント)の購入を受けない。Sandbox のビルドは、`APP_STORE_ENVIRONMENTS` を `Sandbox` にした別の Worker と別のデータベースに向ける。App Review の購入も Sandbox なので、本番が Sandbox も受けるかは #54 で聞いている。Xcode の StoreKit の試験(`environment: "Xcode"`)の取引は Apple の鍵で署名されていないので、どの Worker も受けない。
+`APP_STORE_ENVIRONMENTS` は受ける購入の環境で、`Production`・`Sandbox`、または両方をカンマで。本番の Worker は両方を、staging の Worker は `Sandbox` だけを受ける(下の「デプロイ」)。本番が Sandbox も受けるのは、App Review が Release のビルドで Sandbox の購入をするから(#54)。その購入でできたアカウントは本番のデータベースに入り、`subscriptions.environment` で見分けられる。Xcode の StoreKit の試験(`environment: "Xcode"`)の取引は Apple の鍵で署名されていないので、どの Worker も受けない。
 
 ### プランの上限
 
@@ -210,7 +210,7 @@ scripts/upload-fonts.sh --local --persist-to /private/tmp/mai-wrangler
 pnpm exec wrangler dev --persist-to /private/tmp/mai-wrangler --var TURSO_URL:http://127.0.0.1:8080 --var TURSO_TOKEN:
 ```
 
-デバッグビルドのアプリは `http://localhost:8787` から取る。ほかのポートは環境変数 `MAI_SERVER_URL` で渡す。リリースビルドはまだサーバーを持たず、和文の書体は一覧に出ない。
+アプリは、ビルドの構成が向く Worker から取る(下の「デプロイ」)。手元の `wrangler dev` から取るときは、デバッグビルドに環境変数 `MAI_SERVER_URL` で `http://localhost:8787` を渡す。
 
 ### 期限の掃除
 
@@ -277,21 +277,83 @@ scripts/server-contract-test.sh
 
 ## デプロイ
 
-まだしていない。するときは、次のものが作られる。
+デプロイする環境は本番と staging の 2 つで、どちらも `wrangler.jsonc` に書いてある。最上位が本番、`env.staging` が staging。開発は手元だけで、`wrangler dev`・偽物の Apple・`turso dev` で動かす(上の「手元で動かす」)。
 
-- Turso: データベース `mai` 1 つ(`schema.sql` の表とトリガー、`plans` の 3 行)と、それに書ける認証トークン 1 つ
-- Cloudflare: R2 のバケット `mai-fonts` 1 つと、そこに置く書体のファイル 6 つ(合わせて 28.8 MB)
-- Cloudflare: R2 のバケット `mai-photos` 1 つ(`wrangler r2 bucket create mai-photos`、Worker のバインディング `PHOTOS`)、Worker `mai-server` 1 つ(`workers.dev` の URL つき)、その毎分の Cron Trigger、変数 `APP_STORE_ENVIRONMENTS`(`Production`)、秘密 `TURSO_URL`・`TURSO_TOKEN`・`CHALLENGE_KEY`・`REFRESH_TOKEN_KEY`・`APPLE_CLIENT_ID`・`APPLE_TEAM_ID`・`APPLE_SIGN_IN_KEY_ID`・`APPLE_SIGN_IN_KEY`
+|            | 本番                                                          | staging                                                                       |
+| ---------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Worker     | `mai-server`(`https://mai-server.marrromugi-dev.workers.dev`) | `mai-server-staging`(`https://mai-server-staging.marrromugi-dev.workers.dev`) |
+| 受ける購入 | Production と Sandbox                                         | Sandbox                                                                       |
+| Turso      | データベース `mai`                                            | データベース `mai-staging`                                                    |
+| R2         | `mai-photos`・`mai-fonts`                                     | `mai-photos-staging`・`mai-fonts-staging`                                     |
+| 作る       | `pnpm setup:prod`                                             | `pnpm setup:staging`                                                          |
+| デプロイ   | `pnpm deploy:prod`                                            | `pnpm deploy:staging`                                                         |
 
-その前に開発者が Apple Developer でしておくこと:
+アプリのビルドの構成ごとに向く Worker が決まる(`project.yml` の `MAI_SERVER`)。
 
-- App ID `com.marromugi.mai` で Sign in with Apple を有効にする
-- 同じ App ID の Sign in with Apple の Configure で、Server-to-Server Notification Endpoint を `https://<Worker の URL>/apple/sign-in-notifications` にする([Enabling server-to-server notifications](https://developer.apple.com/help/account/configure-app-capabilities/enabling-server-to-server-notifications)。主の App ID にだけ置ける)
-- Sign in with Apple の鍵(.p8)を 1 つ作り、その鍵 ID と、チーム ID を控える。.p8 は一度しか落とせない
+| 構成    | 使うところ                                   | 向く Worker                                                                                |
+| ------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Debug   | Xcode から動かす                             | staging。`MAI_SERVER_URL` で手元の `wrangler dev` にも向けられる                           |
+| Beta    | TestFlight(スキーム `Mai Beta` でアーカイブ) | staging。ただし App Store から入れたもの(StoreKit の `AppTransaction` が Production)は本番 |
+| Release | App Store(スキーム `Mai` でアーカイブ)       | 本番                                                                                       |
 
-App Store Connect でしておくこと:
+Beta のビルドは、起動のたびに StoreKit に入れた元を聞き、答えが来るまで画面を出さない。答えが得られないか確かめられないときは staging にする。Beta のアーカイブを間違えて App Store に出しても、利用者は本番に向く。App Review は Sandbox なので staging に向く。Debug と Release は StoreKit に聞かない。
 
-- 購読のグループを 1 つ作り、その中に自動更新の購読を 3 つ、次の商品 ID で作る。商品 ID は `schema.sql` の `plans.product_id` と同じもので、あとから変えられない。値段は #22 の答え。
+本番が Sandbox も受けるのは App Review のため。審査は Release のビルドで Sandbox の購入をする(#54)。
+
+### 作る
+
+`scripts/setup.sh`(`pnpm setup:staging`・`pnpm setup:prod`)は、その環境に足りないものだけを作り、あるものには触らない。何度実行してもよく、全部ある本番に実行しても読むだけで何も変えない。コードはデプロイしない。
+
+- Turso のデータベース。無ければ作り、何も入っていないデータベースにだけ `schema.sql` を入れる
+- R2 のバケット。無ければ作る(`--update-config=false` で、`wrangler.jsonc` に書き足すかを聞かせない)
+- 書体のファイル。バケットに無いか、`fonts.json` の SHA-256 と違うものだけを置く(`scripts/upload-fonts.sh`)。`fonts.json` を変えたら、もう一度実行する
+- Worker の秘密。`secrets.required` のうち Worker に無いものだけを作り、`wrangler secret bulk` で置く。Worker がまだ無ければ、これが中身の空の Worker を作る。置いてある秘密は作り直さない
+
+足りない秘密は次のように作る。秘密が全部あれば、どれも要らない。
+
+- `TURSO_URL`・`TURSO_TOKEN`: その環境のデータベースから(`turso db show --url`・`turso db tokens create`)
+- `CHALLENGE_KEY`・`REFRESH_TOKEN_KEY`: 32 バイトの乱数の base64。`REFRESH_TOKEN_KEY` を変えると置いてある refresh トークンが開けなくなり、削除のときに Apple で取り消せなくなるので、作り直さない
+- `APPLE_CLIENT_ID`: アプリのバンドル ID `com.marromugi.mai`
+- `APPLE_TEAM_ID`・`APPLE_SIGN_IN_KEY_ID`・`APPLE_SIGN_IN_KEY`: シェルの変数 `APPLE_TEAM_ID`(チーム ID)・`APPLE_SIGN_IN_KEY_ID`(Sign in with Apple の鍵 ID)・`APPLE_SIGN_IN_KEY_FILE`(その .p8 のパス)から。どちらの環境も同じ App ID と同じ鍵を使う。足りないのにこれらが無ければ、何も作らずに止まり、要る変数の名前を出す
+
+Cloudflare と Turso にログインして(`pnpm exec wrangler login`・`turso auth login`)、`Server/` で実行する。staging を初めて作るときは:
+
+```sh
+APPLE_TEAM_ID=... APPLE_SIGN_IN_KEY_ID=... APPLE_SIGN_IN_KEY_FILE=... pnpm setup:staging
+pnpm deploy:staging
+```
+
+秘密をわざと変えるときは、`pnpm exec wrangler secret put <名前> --env staging`(本番は `--env ''`)で 1 つずつ置く。
+
+### デプロイする
+
+```sh
+pnpm deploy:staging
+pnpm deploy:prod
+```
+
+どちらもただの `wrangler deploy`。秘密に触らず、置いてある秘密は消えない。Worker に足りない秘密があれば wrangler がデプロイを断るので、先に `pnpm setup:<環境>` を実行する。`wrangler.jsonc` を変えたら `pnpm types` で `worker-configuration.d.ts` を作り直す(CI の `pnpm types:check` が確かめる)。
+
+サーバーを変えるときは、staging にデプロイして TestFlight の Beta で確かめてから、本番にデプロイする。
+
+### TestFlight に出す
+
+Xcode でスキーム `Mai Beta` を選び、Product → Archive。Organizer から App Store Connect に上げ、TestFlight だけで配る。App Store に出すビルドは、スキーム `Mai`(Release)で別にアーカイブする。同じバージョンの中では、ビルド番号(`CURRENT_PROJECT_VERSION`)を上げるたびに変える。
+
+Xcode から動かすデバッグビルドは、スキームの StoreKit Configuration(`StoreKit/Mai.storekit`)で買うので、その取引はどの Worker も受けない。Debug で staging に Sandbox の購入を通すときは、Edit Scheme の Run → Options で StoreKit Configuration を None にし、Sandbox のテスト用アカウントでサインインした実機で動かす。
+
+### Apple の側でしておくこと
+
+Apple Developer で:
+
+- [ ] App ID `com.marromugi.mai` で Sign in with Apple を有効にする
+- [ ] 同じ App ID の Sign in with Apple の Configure で、Server-to-Server Notification Endpoint を `https://mai-server.marrromugi-dev.workers.dev/apple/sign-in-notifications` にする([Enabling server-to-server notifications](https://developer.apple.com/help/account/configure-app-capabilities/enabling-server-to-server-notifications))。置けるのは主の App ID に 1 つだけなので本番に向け、staging はサインインの取り消しを Apple から知らされない
+- [ ] Sign in with Apple の鍵(.p8)を 1 つ作り、その鍵 ID と、チーム ID を控える。.p8 は一度しか落とせない
+
+App Store Connect で:
+
+- [ ] 有料アプリの契約(Paid Apps Agreement)を結ぶ。結ぶまで購読は売れない
+- [ ] 購読のグループを 1 つ作り、その中に自動更新の購読を 3 つ、次の商品 ID で作る。商品 ID は `schema.sql` の `plans.product_id` と同じもので、あとから変えられない。値段は #22 の答え。
 
   | プラン | 商品 ID                           | 期間   | 値段(日本) |
   | ------ | --------------------------------- | ------ | ---------- |
@@ -299,33 +361,6 @@ App Store Connect でしておくこと:
   | Plus   | `com.marromugi.mai.plus.monthly`  | 1 か月 | ¥700       |
   | Pro    | `com.marromugi.mai.pro.monthly`   | 1 か月 | ¥1,600     |
 
-- 請求のやり直しの猶予(Billing Grace Period)を入れるなら、その間も書き込める
-- App Store Server Notifications を Version 2 にし、本番の URL を `https://<Worker の URL>/app-store/notifications` にする。Sandbox の URL は、Sandbox を受ける Worker があればその URL に
-
-秘密のうち:
-
-- `APPLE_CLIENT_ID` はアプリのバンドル ID `com.marromugi.mai`(ID トークンの `aud` と、`/auth/token` の `client_id`)
-- `APPLE_TEAM_ID`・`APPLE_SIGN_IN_KEY_ID` は上で控えたもの、`APPLE_SIGN_IN_KEY` は .p8 の中身(`-----BEGIN PRIVATE KEY-----` の行ごとでも、間の base64 だけでもよい)
-- `CHALLENGE_KEY` と `REFRESH_TOKEN_KEY` はそれぞれ 32 バイトの乱数の base64。`REFRESH_TOKEN_KEY` を変えると、置いてある refresh トークンが開けなくなり、削除のときに Apple で取り消せなくなる
-
-Turso と Cloudflare にログインして、`Server/` で次を実行する。最初のデプロイは、`secrets.required` の秘密をデプロイと一緒に渡す(`--secrets-file`)。
-
-```sh
-team_id=...   # チーム ID
-key_id=...    # Sign in with Apple の鍵 ID
-p8=...        # その .p8 のパス
-turso db create mai
-turso db shell mai < schema.sql
-pnpm exec wrangler r2 bucket create mai-photos
-secrets="$(mktemp)"
-printf 'TURSO_URL=%s\nTURSO_TOKEN=%s\n' "$(turso db show mai --url)" "$(turso db tokens create mai)" > "$secrets"
-printf 'CHALLENGE_KEY=%s\nREFRESH_TOKEN_KEY=%s\n' "$(openssl rand -base64 32)" "$(openssl rand -base64 32)" >> "$secrets"
-printf 'APPLE_CLIENT_ID=com.marromugi.mai\nAPPLE_TEAM_ID=%s\nAPPLE_SIGN_IN_KEY_ID=%s\nAPPLE_SIGN_IN_KEY=%s\n' \
-  "$team_id" "$key_id" "$(grep -v -- ----- "$p8" | tr -d '\n')" >> "$secrets"
-pnpm exec wrangler r2 bucket create mai-fonts
-scripts/upload-fonts.sh --remote
-pnpm exec wrangler deploy --secrets-file "$secrets"
-rm "$secrets"
-```
-
-デプロイしたら、アプリの `MaiApp.server` のリリースビルドの値を Worker の URL にする。
+- [ ] 請求のやり直しの猶予(Billing Grace Period)を入れるなら、その間も書き込める
+- [ ] App Store Server Notifications を Version 2 にし、Production の URL を `https://mai-server.marrromugi-dev.workers.dev/app-store/notifications`、Sandbox の URL を `https://mai-server-staging.marrromugi-dev.workers.dev/app-store/notifications` にする。Sandbox の URL は 1 つだけなので、App Review の Sandbox の購読の通知は本番に届かない。その購読は、アプリが起動のたびに送り直す取引で本番に写る(上の「購読」の送り直し)
+- [ ] Sandbox のテスト用アカウントを作る(TestFlight と Debug の実機での購入に)

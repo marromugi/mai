@@ -25,7 +25,8 @@ export default defineConfig(async () => {
   const port = await freePort();
   process.env["MAI_TEST_SQLD_PORT"] = String(port);
   return {
-    test: { globalSetup: ["./test/sqld.ts"] },
+    // scripts/*.test.mts run on Node (node --test), not in the Workers runtime.
+    test: { include: ["test/**/*.test.ts"], globalSetup: ["./test/sqld.ts"] },
     plugins: [
       cloudflareTest({
         wrangler: { configPath: "./wrangler.jsonc" },

@@ -1,4 +1,8 @@
 name: Mai
+configs:
+  Debug: debug
+  Beta: release
+  Release: release
 options:
   minimumXcodeGenVersion: 2.44.0
   bundleIdPrefix: com.marromugi
@@ -45,6 +49,18 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: 撮った写真を文章に添えるために、カメラを使います。
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # Merged into the generated Info.plist; carries MAI_SERVER to the app.
+        INFOPLIST_FILE: App/Info.plist
+      # The Worker each configuration talks to (Server/wrangler.jsonc). Beta, archived for
+      # TestFlight, talks to production instead when the App Store installed it (Features/Root/ServerAddress.swift).
+      configs:
+        Debug:
+          MAI_SERVER: https://mai-server-staging.marrromugi-dev.workers.dev
+        Beta:
+          MAI_SERVER: https://mai-server-staging.marrromugi-dev.workers.dev
+          MAI_APP_STORE_SERVER: https://mai-server.marrromugi-dev.workers.dev
+        Release:
+          MAI_SERVER: https://mai-server.marrromugi-dev.workers.dev
     scheme:
       testTargets:
         - MaiTests
@@ -64,3 +80,17 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.marromugi.mai.tests
         GENERATE_INFOPLIST_FILE: YES
+schemes:
+  # Product > Archive with this scheme makes the build for TestFlight.
+  Mai Beta:
+    build:
+      targets:
+        Mai: all
+    run:
+      config: Beta
+    profile:
+      config: Beta
+    analyze:
+      config: Beta
+    archive:
+      config: Beta
