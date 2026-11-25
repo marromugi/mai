@@ -574,7 +574,7 @@ describe("the purchase an account is made with", () => {
     ["with no expiry", 400, () => ({ expiresDate: undefined, type: "Non-Consumable" }), false],
     ["of a product no plan is sold as", 400, () => ({ productId: "com.marromugi.mai.x" }), true],
   ])("refuses a purchase %s, making nothing", async (_, status, change, asksApple) => {
-    const apple = fakeApple();
+    const apple = fakeApple({ environments: "Production" });
     const sub = newSub();
     const account = crypto.randomUUID();
     const { answer } = await makeAccount(
@@ -620,10 +620,10 @@ describe("the purchase an account is made with", () => {
     expect(answer.status).toBe(401);
   });
 
-  it("keeps the environment of the purchase on a Worker that takes the Sandbox", async () => {
+  it("makes an account from a Sandbox purchase on the production Worker", async () => {
     const account = crypto.randomUUID();
     const { answer } = await makeAccount(
-      fakeApple({ environments: "Sandbox" }),
+      fakeApple(),
       newSub(),
       account,
       await signedTransaction(account, { environment: "Sandbox" }),

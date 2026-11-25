@@ -4,9 +4,15 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "setup:staging": "scripts/setup.sh staging",
+    "setup:prod": "scripts/setup.sh prod",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:prod": "wrangler deploy --env ''",
+    "types": "wrangler types --include-runtime=false --strict-vars=false",
+    "types:check": "wrangler types --include-runtime=false --strict-vars=false --check",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
-    "lint": "oxlint --type-aware --deny-warnings src test vitest.config.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
+    "lint": "oxlint --type-aware --deny-warnings src test scripts vitest.config.ts",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check"
   },
@@ -16,6 +22,7 @@
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.9.0",
     "@cloudflare/workers-types": "5.20261123.1",
+    "@types/node": "18.19.130",
     "fast-check": "4.10.2",
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",
