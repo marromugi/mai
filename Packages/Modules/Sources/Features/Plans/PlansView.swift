@@ -15,6 +15,7 @@ struct PlansView: View {
   @State private var notice: PlanNotice?
   @Environment(\.purchase) private var purchase
   @Environment(\.account) private var account
+  @Environment(\.writingSync) private var sync
 
   var body: some View {
     Group {
@@ -29,7 +30,15 @@ struct PlansView: View {
           PlanBought(
             offer: bought, phase: account?.phase,
             signIn: { Task { await account?.signIn() } },
-            restore: { await account?.restore(from: $0) })
+            restore: { await account?.restore(from: $0) },
+            startOver: {
+              if let sync {
+                await sync.startOver()
+              } else {
+                await account?.startOver()
+              }
+              return account?.phase == .recoveryKeyNeeded
+            })
         } else if offers.isEmpty {
           PlansUnavailable(reason: "App Store にプランが見つかりませんでした。") { attempt += 1 }
         } else {
@@ -139,12 +148,15 @@ struct PlansUnavailable: View {
 }
 
 /// Shown in place of the plans once `offer` is bought. Where there is an account to sign in to,
-/// its `phase` leads on to signing in with `signIn`, or to the recovery key with `restore`.
+/// its `phase` leads on to signing in with `signIn`, or to the recovery key with `restore`, or,
+/// when it is lost too, to starting over with `startOver` (`StartOverView`).
 struct PlanBought: View {
   let offer: PlanOffer
   var phase: AccountPhase?
   var signIn: () -> Void = {}
   var restore: (String) async -> String? = { _ in nil }
+  /// Answers whether the own key is still to be brought back after it.
+  var startOver: () async -> Bool = { true }
 
   var body: some View {
     ContentUnavailableView {
@@ -165,6 +177,9 @@ struct PlanBought: View {
           RecoveryKeyEntryView(restore: restore)
         }
         .buttonStyle(.borderedProminent)
+        NavigationLink("リカバリーキーをなくしたとき") {
+          StartOverView(startOver: startOver)
+        }
       }
     }
   }

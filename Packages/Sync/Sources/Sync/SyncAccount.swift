@@ -86,17 +86,46 @@ public struct SyncAccount: Sendable {
     }) {
       return try keep(Session(token: token, account: account, appleUser: credential.user))
     }
-    let second = try await serverCall { () async throws(ServerError) in try await server.challenge()
+    guard let session = try await startSession() else { throw .purchaseIsAnotherAccounts }
+    return session
+  }
+
+  /// Signs in with Apple to the account the Apple user has, as on a device that didn't buy the
+  /// plan, and keeps the session (#22's design, §3).
+  public func signIn() async throws(AccountError) -> Session {
+    guard let session = try await startSession() else { throw .noAccount }
+    return session
+  }
+
+  /// Starts the account of `session` over with the own key held, or one made and kept now, in
+  /// place of `check`, the account's own key check that key isn't, as when no device holds the
+  /// account's key and its recovery key is lost too: the server's writings go. The key is kept
+  /// before it is sent, so a start over sent again sends the same key, and the server answers that
+  /// it is done. `.ready` without asking the server when the key held is the account's.
+  public func startOver(_ session: Session, replacing check: Data) async throws(AccountError)
+    -> OwnKeyOutcome
+  {
+    let key: OwnKey
+    if let held = try keychain({ () throws(KeychainError) in try ownKeys.load() }) {
+      guard held.check != check else { return .ready }
+      key = held
+    } else {
+      key = OwnKey.generate()
+      try keychain { () throws(KeychainError) in try ownKeys.save(key) }
     }
-    let again = try await self.credential(for: second)
     guard
-      let started = try await serverCall({ () async throws(ServerError) in
-        try await server.startSession(challenge: second, credential: again)
+      try await serverCall({ () async throws(ServerError) in
+        try await server.startOver(replacing: check, with: key.check, token: session.token)
       })
     else {
-      throw .purchaseIsAnotherAccounts
+      throw .ownKeyChanged
     }
-    return try keep(Session(token: started.token, account: started.account, appleUser: again.user))
+    return .made(RecoveryKey(key))
+  }
+
+  /// The own key kept on the device, nil when none is.
+  public func ownKey() throws(AccountError) -> OwnKey? {
+    try keychain { () throws(KeychainError) in try ownKeys.load() }
   }
 
   /// Settles the own key against the account's own key check in `state`, the account as just read
@@ -281,6 +310,23 @@ public struct SyncAccount: Sendable {
     }
   }
 
+  /// A session of the Apple user's account, kept; nil when the user has none.
+  private func startSession() async throws(AccountError) -> Session? {
+    let challenge = try await serverCall { () async throws(ServerError) in
+      try await server.challenge()
+    }
+    let credential = try await credential(for: challenge)
+    guard
+      let started = try await serverCall({ () async throws(ServerError) in
+        try await server.startSession(challenge: challenge, credential: credential)
+      })
+    else {
+      return nil
+    }
+    return try keep(
+      Session(token: started.token, account: started.account, appleUser: credential.user))
+  }
+
   private func subscriptions(for account: UUID) async throws(AccountError)
     -> [SignedSubscription]
   {
@@ -333,6 +379,10 @@ public enum AccountError: LocalizedError {
   case noPurchase
   /// The server refused the purchase as another account's, and the Apple user has no account.
   case purchaseIsAnotherAccounts
+  /// The Apple user has no account to sign in to.
+  case noAccount
+  /// The account's own key check was no longer the one read, so nothing was started over.
+  case ownKeyChanged
   case recoveryKey(RecoveryKeyError)
   /// The recovery key is of another own key than the account's.
   case notTheAccountsKey
@@ -359,7 +409,11 @@ public enum AccountError: LocalizedError {
     case .noPurchase:
       "この App Store のアカウントには、同期のプランの購入が見つかりませんでした。"
     case .purchaseIsAnotherAccounts:
-      "このプランの購入は、別の Apple アカウントのものです。購入した Apple アカウントでサインインしてください。"
+      "この端末の App Store で買ったプランは、別の Apple アカウントの同期のアカウントのものです。プランを買ったときの Apple アカウントでサインインするか、この端末の App Store を自分のアカウントにして、プランに入り直してください。"
+    case .noAccount:
+      "この Apple アカウントには、同期のアカウントがありません。ほかの端末でプランに入ったときと同じ Apple アカウントでサインインするか、プランに入ってください。"
+    case .ownKeyChanged:
+      "ほかの端末で自分の鍵が変わったため、サーバーの文書は消していません。"
     case .recoveryKey(let error):
       error.localizedDescription
     case .notTheAccountsKey:

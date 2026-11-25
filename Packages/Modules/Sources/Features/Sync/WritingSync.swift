@@ -119,6 +119,14 @@ internal import Sync
     return nil
   }
 
+  /// Starts the account over without its own key (`AccountModel.startOver()`), then syncs the
+  /// device's writings sealed with the new key, and reads what the account uses now.
+  func startOver() async {
+    await account.startOver()
+    await syncNow()
+    await account.readState()
+  }
+
   /// Deletes the account once any sync running has ended, so none writes the sync's state after
   /// it is removed; a sync asked for meanwhile runs after it. A sync an edit set is dropped once
   /// the device is signed out, and kept when the account stays.

@@ -17,11 +17,13 @@ enum AccountPhase: Equatable {
   case recoveryKeyNeeded
 }
 
-/// The account a plan pays for, as the screens show it: signing in after a purchase, the own key,
-/// the check at launch, and signing out. Made only where there is a server to sign in to.
+/// The account a plan pays for, as the screens show it: signing in, after a purchase or on a device
+/// that didn't buy, the own key, starting over without it, the check at launch, and signing out. Made only where there is a server to sign in to.
 @Observable public final class AccountModel {
   private let account: SyncAccount
   let kept: KeptAccountID
+  /// Whether a start over was asked for whose recovery key hasn't been shown.
+  private let startedOver: StartedOver
   private(set) var phase = AccountPhase.signedOut {
     didSet {
       if phase != .signedIn {
@@ -59,6 +61,7 @@ enum AccountPhase: Equatable {
   ) {
     self.account = account
     self.kept = kept
+    startedOver = StartedOver(defaults: kept.defaults)
     self.syncState = syncState
   }
 
@@ -88,8 +91,9 @@ enum AccountPhase: Equatable {
     }
   #endif
 
-  /// Whether the plan bought for the account kept is paid for, so signing in can make or find its
-  /// account; false while a purchase waits for approval. Read again by `check()` and `refresh()`.
+  /// Whether the plan bought for the account kept is paid for, so signing in makes or finds its
+  /// account, as the 「同期」 section says; false while a purchase waits for approval, and with
+  /// none kept. Read again by `check()` and `refresh()`.
   private(set) var canSignIn = false
 
   /// At launch: reads the session, then checks it with Apple and sends the subscriptions again.
@@ -157,19 +161,35 @@ enum AccountPhase: Equatable {
     }
   }
 
-  /// Signs in for the account kept, then settles the own key.
+  /// Signs in for the account kept, while a plan bought for it is on this App Store account;
+  /// otherwise, as on a device that didn't buy the plan, to the account the Apple user has. Then
+  /// settles the own key. A purchase refused as another account's forgets the account kept, so the
+  /// plan is bought again for a new one.
   func signIn() async {
-    guard let id = kept.id, phase == .signedOut else { return }
+    guard phase == .signedOut else { return }
     phase = .working
     do {
-      let session = try await account.signIn(for: id)
-      if session.account != id {
+      let session: Session
+      if let id = kept.id {
+        do {
+          session = try await account.signIn(for: id)
+        } catch .noPurchase {
+          session = try await account.signIn()
+        }
+      } else {
+        session = try await account.signIn()
+      }
+      if session.account != kept.id {
         kept.keep(session.account)
       }
       if try await !settle(session) {
         phaseFromSession()
       }
     } catch {
+      if case .purchaseIsAnotherAccounts = error {
+        kept.forget()
+        canSignIn = false
+      }
       report(error, "Signing in")
       phaseFromSession()
     }
@@ -216,11 +236,47 @@ enum AccountPhase: Equatable {
         return "サインインしていません。もう一度サインインしてください。"
       }
       try await account.restore(from: text, session)
+      // The person holds the recovery key a start over would show.
+      startedOver.forget()
       phase = .signedIn
       return nil
     } catch {
       accountLogger.error("Restoring the own key failed: \(error)")
       return error.localizedDescription
+    }
+  }
+
+  /// Starts the account over without its own key, once the person confirmed it, as when no
+  /// device holds the key and its recovery key is lost too: the server's writings go, and the own
+  /// key held, or one made, becomes the account's, whose recovery key is shown. Only while the own
+  /// key isn't here, and not while settling or deleting the account; it counts as settling. The
+  /// device is marked before it asks, so that, whatever ends the start over, the recovery key is
+  /// shown once the key is found to be the account's. Settled again when it fails, as when the
+  /// server's answer was lost or another device changed the account's own key meanwhile.
+  func startOver() async {
+    guard phase == .recoveryKeyNeeded, !settling, !deleting, let check = state?.ownKeyCheck
+    else { return }
+    settling = true
+    var failed = false
+    do {
+      if let session = try account.session() {
+        startedOver.mark()
+        let outcome = try await account.startOver(session, replacing: check)
+        if try account.session() == session {
+          apply(outcome)
+        } else {
+          phaseFromSession()
+        }
+      } else {
+        phase = .signedOut
+      }
+    } catch {
+      report(error, "Starting over")
+      failed = true
+    }
+    settling = false
+    if failed {
+      await settleOwnKey()
     }
   }
 
@@ -321,25 +377,54 @@ enum AccountPhase: Equatable {
   private func settle(_ session: Session) async throws(AccountError) -> Bool {
     let read = try await self.read(session)
     guard try stillIn(session, keeping: read) else { return false }
-    let outcome = try await account.settleOwnKey(session, against: read.state)
+    var outcome = try await account.settleOwnKey(session, against: read.state)
     guard try account.session() == session else { return false }
+    if outcome == .ready, startedOver.isMarked, let key = try account.ownKey() {
+      // What went wrong as the start over ended no longer stands.
+      problem = nil
+      outcome = .made(RecoveryKey(key))
+    }
+    apply(outcome)
+    return true
+  }
+
+  /// Where the device stands once the own key is settled as `outcome` says.
+  private func apply(_ outcome: OwnKeyOutcome) {
     switch outcome {
     case .ready:
       phase = .signedIn
       ownKeySettled = true
     case .made(let recoveryKey):
+      startedOver.forget()
       phase = .signedIn
       ownKeySettled = true
       recoveryKeyToShow = recoveryKey
     case .recoveryKeyNeeded:
       phase = .recoveryKeyNeeded
     }
-    return true
   }
 
   private func report(_ error: any Error, _ step: String) {
     if case AccountError.cancelled = error { return }
     accountLogger.error("\(step, privacy: .public) failed: \(error)")
     problem = error.localizedDescription
+  }
+}
+
+/// Whether a start over was asked for whose recovery key hasn't been shown yet, kept across
+/// launches: a start over that reached the server may end without saying so.
+struct StartedOver {
+  static let key = "syncStartedOver"
+
+  let defaults: UserDefaults
+
+  var isMarked: Bool { defaults.bool(forKey: Self.key) }
+
+  func mark() {
+    defaults.set(true, forKey: Self.key)
+  }
+
+  func forget() {
+    defaults.removeObject(forKey: Self.key)
   }
 }

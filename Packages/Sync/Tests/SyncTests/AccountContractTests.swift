@@ -202,4 +202,58 @@ struct AccountContractTests {
     }
     #expect(try second.sessions.load() == nil)
   }
+  @Test func aDeviceThatDidntBuySignsInToTheAppleUsersAccount() async throws {
+    let (first, session, recoveryKey) = try await signedIn()
+    let second = try device(user: first.user)
+
+    let signedIn = try await second.account.signIn()
+    #expect(signedIn.account == session.account)
+    #expect(try second.sessions.load() == signedIn)
+    #expect(try await second.account.settleOwnKey(signedIn) == .recoveryKeyNeeded)
+    try await second.account.restore(from: recoveryKey.text, signedIn)
+    #expect(try await second.account.settleOwnKey(signedIn) == .ready)
+  }
+
+  @Test func anAppleUserWithNoAccountIsToldSoAndKeepsNoSession() async throws {
+    let device = try device(user: "stand-in.\(UUID().uuidString)")
+    await #expect {
+      try await device.account.signIn()
+    } throws: { error in
+      guard case .noAccount = error as? AccountError else { return false }
+      return true
+    }
+    #expect(try device.sessions.load() == nil)
+  }
+
+  /// No device holds the own key and its recovery key is lost: the account starts over from a
+  /// device that signed in without it.
+  @Test func startingOverDropsTheWritingsMakesANewKeyAndEndsTheOtherSessions() async throws {
+    let (first, session, recoveryKey) = try await signedIn()
+    let writings = WritingServer(url: try #require(url), token: session.token)
+    let writing = PlainWriting(id: UUID(), updated: .now, contents: Data("前の鍵".utf8))
+    _ = try await writings.save(recoveryKey.ownKey.seal(writing), over: nil)
+
+    let second = try device(user: first.user)
+    let signedIn = try await second.account.signIn()
+    let state = try await second.account.state(signedIn)
+    #expect(try await second.account.settleOwnKey(signedIn, against: state) == .recoveryKeyNeeded)
+    let check = try #require(state.ownKeyCheck)
+
+    let outcome = try await second.account.startOver(signedIn, replacing: check)
+    let made = try #require(try second.ownKeys.load())
+    #expect(outcome == .made(RecoveryKey(made)))
+    #expect(made != recoveryKey.ownKey)
+    #expect(try await second.account.state(signedIn).ownKeyCheck == made.check)
+    #expect(try await WritingServer(url: try #require(url), token: signedIn.token).list().isEmpty)
+    #expect(try await first.account.check() == .sessionEnded)
+
+    // Sent again, as when its answer was lost: done already, and the same key's.
+    let sealed = try made.seal(writing)
+    _ = try await WritingServer(url: try #require(url), token: signedIn.token).save(
+      sealed, over: nil)
+    #expect(
+      try await second.account.startOver(signedIn, replacing: check) == .made(RecoveryKey(made)))
+    #expect(
+      try await WritingServer(url: try #require(url), token: signedIn.token).list().count == 1)
+  }
 }
