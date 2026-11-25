@@ -14,7 +14,7 @@ open Mai.xcodeproj
 
 Xcode から実行したアプリは、同期のプランを App Store ではなく `StoreKit/Mai.storekit` から読み、購入もそこで済ませる(`Mai` スキームの StoreKit Configuration)。
 
-コードは `Packages/Modules` のローカルパッケージに置き、`App/` はアプリの入り口だけを持つ。UIKit と SwiftUI を使わない文字組みの計算(文字の大きさ、行の高さ、余白、版面など)は `Packages/Typesetting` に置き、`Packages/Modules` がそれを使う。文書の暗号化と同期、同期のアカウント(Apple でのサインイン、セッション、自分の鍵)のクライアントは `Packages/Sync` に置き、`Packages/Modules` がそれを使う。同期先のサーバー(Cloudflare Worker)は `Server/` に置く(`Server/README.md`)。
+コードは `Packages/Modules` のローカルパッケージに置き、`App/` はアプリの入り口だけを持つ。UIKit と SwiftUI を使わない文字組みの計算(文字の大きさ、行の高さ、余白、版面など)は `Packages/Typesetting` に置き、`Packages/Modules` がそれを使う。文書の暗号化と同期、同期のアカウント(Apple でのサインイン、セッション、自分の鍵)のクライアントは `Packages/Sync` に置き、`Packages/Modules` がそれを使う。同期先のサーバー(Cloudflare Worker)は `Server/` に置く(`Server/README.md`)。読み取りモードの文書を Mac で読む MCP サーバーは `Packages/Agent` に置く(下の「Mac の MCP サーバー」)。
 
 ## テスト
 
@@ -38,6 +38,32 @@ xcodebuild test -project Mai.xcodeproj -scheme Mai -only-testing:MaiTests \
 ```
 
 Dynamic Type の大きさ、フォント、画面のテストは `Packages/Modules` にあり、スナップショットテストと一緒にシミュレータで走る(次の節)。
+
+`Packages/Agent` のテストも Mac で走る(Secure Enclave は使わず、ソフトウェアの鍵で)。
+
+```sh
+swift test --package-path Packages/Agent
+```
+
+## Mac の MCP サーバー
+
+`mai-mcp`(`Packages/Agent`、#27)は、iPhone で読み取りモードがオンの間だけ、「AI に読ませない」にしていない文書を読む MCP サーバー。標準入出力で動き、`list_writings`・`read_writing`・`search_writings` の 3 つを出す。どれも読むだけ。macOS 26 以上の、Apple シリコンか T2 チップの Mac が要る(鍵を Secure Enclave で作る)。
+
+ソースから作って置き、iPhone と組み、MCP のクライアントに登録する。
+
+```sh
+swift build -c release --package-path Packages/Agent
+mkdir -p ~/.local/bin && cp Packages/Agent/.build/release/mai-mcp ~/.local/bin/
+~/.local/bin/mai-mcp pair
+claude mcp add cotoma -- ~/.local/bin/mai-mcp
+```
+
+Claude Desktop は `~/Library/Application Support/Claude/claude_desktop_config.json` に `{"mcpServers": {"cotoma": {"command": "/Users/<名前>/.local/bin/mai-mcp"}}}` を書く。
+
+- **組む**: `mai-mcp pair` が Secure Enclave に鍵を作り、ペアリングのコードを QR コードと文字で出す。iPhone の Cotoma で「設定」→「AI に読ませる」→「エージェントを承認…」から読み取るか打ち、承認のあとに出る 1 行(`<Worker の URL>#<トークン>`)を「コピー」して `mai-mcp pair` に貼る。トークンでサーバーを読め、エージェントあての写しがあればそれが新しい鍵で開けたときだけ残す。形は `Server/README.md` の「エージェントの側」。
+- **残すもの**: `~/Library/Application Support/mai-mcp/pairing.json`(`MAI_MCP_HOME` で場所を変えられる)の 1 つだけ(権限は 0600)。中身は Secure Enclave が返す鍵の形(この Mac の Secure Enclave でしか使えない)、サーバーの URL、その鍵あてに HPKE で封じたトークン。ファイルを別の Mac に写しても開けないが、同じ Mac の同じ利用者で動くプロセス(シェルを持つエージェントも)は、この鍵を Secure Enclave に渡して使えるし、`mai-mcp` を動かすこともできる。開いた文書は `mai-mcp` のプロセスのメモリにだけ置き、ファイルには書かない。
+- **組み直す**: 同じ鍵は二度承認できないので、`mai-mcp pair` はいつも新しい鍵を作る。前のペアリングは、新しい行が通るまで残る。前のペアリングの行は、前の鍵のものなので受け付けない。`mai-mcp forget` はペアリングを消す。どちらのときも、iPhone で前のエージェントを取り消す。
+- **読む**: どのツールも、まずサーバーの写しの一覧を取り、その中にあるものだけを開く。読み取りモードがオフか終わる時刻を過ぎていれば、何も読めないと答える。iPhone で取り消したエージェントには、組み直すように答える。
 
 ## モデル検査
 
