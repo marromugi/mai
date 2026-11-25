@@ -591,9 +591,9 @@ nonisolated final class MemoryWritingStore: WritingStore {
   }
 }
 
-/// Sends the writings and photos routes to `writings` and the rest to `account`, keeping every
-/// request. With `refusing`, those routes answer that status instead (402 only the saves, as for a lapsed
-/// plan), or fail as an unreachable server does when it is 0.
+/// Sends the writings, photos and read-mode routes to `writings` and the rest to `account`,
+/// keeping every request. With `refusing`, those routes answer that status instead (402 only the
+/// saves, as for a lapsed plan), or fail as an unreachable server does when it is 0.
 nonisolated final class Requests: HTTPTransport {
   private let writings: FakeWritingServer
   private let account: ScriptedWorker
@@ -639,7 +639,10 @@ nonisolated final class Requests: HTTPTransport {
     if holds {
       await withCheckedContinuation { gate in held.withLock { $0.gate = gate } }
     }
-    guard ["writings", "photos"].contains(request.url?.pathComponents.dropFirst().first) else {
+    guard
+      ["writings", "photos", "read-mode", "agents", "exclusions", "copies"].contains(
+        request.url?.pathComponents.dropFirst().first)
+    else {
       return try await account.send(request)
     }
     guard let refusing, refusing != 402 || request.httpMethod == "PUT" else {

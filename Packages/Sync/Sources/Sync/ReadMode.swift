@@ -95,6 +95,20 @@ public struct ReadMode: Sendable {
     try await server.approve(agent, signature: ownKey.signature(approving: agent))
   }
 
+  /// The line the agent is handed once approved: `<server URL>#<token>` (`Server/README.md`,
+  /// 「エージェントの側」).
+  public func handoff(_ approved: ApprovedAgent) -> String {
+    "\(server.url.absoluteString)#\(approved.token)"
+  }
+
+  /// The agents in `view` a device of the account signed, revoked ones included.
+  public func approvedAgents(in view: ReadModeView) -> Set<UUID> {
+    Set(
+      view.agents.filter { agent in
+        agent.key.map { ownKey.approved($0, signature: agent.signature) } ?? false
+      }.map(\.id))
+  }
+
   public func revoke(_ agent: UUID) async throws(ServerError) -> Bool {
     try await server.revoke(agent)
   }
