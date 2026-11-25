@@ -345,24 +345,31 @@ struct SyncAccountTests {
     let synchronizer = account.synchronizer(
       writings: writings, photos: MemoryPhotoStore(), stateDirectory: directory, keys: keys)
     #expect(try await synchronizer.sync().sent.count == 1)
+    // The sync sends read mode's copies of what it sent: it asks whether read mode is on.
+    #expect(await fake.requests.last?.url?.path() == "/read-mode")
     #expect(
       try FileManager.default.contentsOfDirectory(atPath: directory.path())
         == ["\(session.account.uuidString.lowercased()).json"])
   }
 
   /// A sync state directory holding a state file for the signed-in account and for another one.
-  private func syncStates() throws -> (directory: URL, mine: URL, myPhotos: URL, other: URL) {
+  private func syncStates() throws -> (
+    directory: URL, mine: URL, myPhotos: URL, myCopies: URL, other: URL
+  ) {
     let directory = FileManager.default.temporaryDirectory.appending(
       path: "mai-sync-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let mine = directory.appending(path: "\(session.account.uuidString.lowercased()).json")
     let myPhotos = directory.appending(
       path: "\(session.account.uuidString.lowercased()).photos.json")
+    let myCopies = directory.appending(
+      path: "\(session.account.uuidString.lowercased()).copies.json")
     let other = directory.appending(path: "\(UUID().uuidString.lowercased()).json")
     try Data("{}".utf8).write(to: mine)
     try Data("{}".utf8).write(to: myPhotos)
+    try Data("[]".utf8).write(to: myCopies)
     try Data("{}".utf8).write(to: other)
-    return (directory, mine, myPhotos, other)
+    return (directory, mine, myPhotos, myCopies, other)
   }
 
   @Test func deletingTheAccountForgetsItsSessionAndSyncState() async throws {
@@ -380,6 +387,7 @@ struct SyncAccountTests {
     #expect(try sessions.load() == nil)
     #expect(!FileManager.default.fileExists(atPath: states.mine.path()))
     #expect(!FileManager.default.fileExists(atPath: states.myPhotos.path()))
+    #expect(!FileManager.default.fileExists(atPath: states.myCopies.path()))
     #expect(FileManager.default.fileExists(atPath: states.other.path()))
   }
 

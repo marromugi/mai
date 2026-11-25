@@ -23,10 +23,37 @@ public struct PlainWriting: Sendable, Equatable {
 public struct Sealed: Sendable {
   public let id: UUID
   let bytes: Data
+  /// The key the contents are sealed with, which read mode wraps for an agent.
+  let writingKey: WritingKey
 
-  fileprivate init(id: UUID, bytes: Data) {
+  fileprivate init(id: UUID, bytes: Data, writingKey: WritingKey) {
     self.id = id
     self.bytes = bytes
+    self.writingKey = writingKey
+  }
+}
+
+/// The key one save of a writing seals its contents with, made anew for every save.
+struct WritingKey: Sendable, Equatable, Codable {
+  let rawRepresentation: Data
+
+  init(rawRepresentation: Data) {
+    precondition(rawRepresentation.count == 32, "A writing key is 32 bytes")
+    self.rawRepresentation = rawRepresentation
+  }
+
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    let raw = try container.decode(Data.self)
+    guard raw.count == 32 else {
+      throw DecodingError.dataCorruptedError(in: container, debugDescription: "not 32 bytes")
+    }
+    rawRepresentation = raw
+  }
+
+  func encode(to encoder: any Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(rawRepresentation)
   }
 }
 
@@ -74,11 +101,20 @@ extension OwnKey {
     guard bytes.count <= Layout.largest else {
       throw .tooLarge(bytes.count)
     }
-    return Sealed(id: writing.id, bytes: bytes)
+    return Sealed(
+      id: writing.id, bytes: bytes,
+      writingKey: WritingKey(rawRepresentation: writingKey.withUnsafeBytes { Data($0) }))
   }
 
   /// Opens a sealed writing, failing when it wasn't sealed with this key or was altered since.
   public func open(_ envelope: Envelope) throws(OpeningError) -> PlainWriting {
+    try openWithKey(envelope).writing
+  }
+
+  /// Opens a sealed writing, and gives the key its contents were sealed with.
+  func openWithKey(_ envelope: Envelope) throws(OpeningError) -> (
+    writing: PlainWriting, key: WritingKey
+  ) {
     let bytes = envelope.bytes
     let header = bytes.prefix(Layout.header)
     do {
@@ -90,9 +126,12 @@ extension OwnKey {
       let contents = try AES.GCM.open(
         sealedContents, using: SymmetricKey(data: writingKey), authenticating: header)
       let updated = bytes[20..<28].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
-      return PlainWriting(
-        id: envelope.id, updated: Date(timeIntervalSince1970: Double(updated) / 1000),
-        contents: contents)
+      return (
+        PlainWriting(
+          id: envelope.id, updated: Date(timeIntervalSince1970: Double(updated) / 1000),
+          contents: contents),
+        WritingKey(rawRepresentation: writingKey)
+      )
     } catch {
       throw OpeningError(id: envelope.id)
     }

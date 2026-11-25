@@ -107,6 +107,9 @@ struct SettingsForm: View {
       }
       if let account {
         AccountSection(account: account, sync: sync)
+        if account.phase == .signedIn {
+          ReadModeSection(account: account)
+        }
       }
     }
   }
