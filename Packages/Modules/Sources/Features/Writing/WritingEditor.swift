@@ -671,14 +671,20 @@ final class EditorView: UIView {
   }
 
   /// Scrolls the page by `offset`, as far as it scrolls: what the text view would have scrolled
-  /// itself, as to keep the caret in sight.
-  func scroll(by offset: CGFloat, animated: Bool) {
+  /// itself. Not animated: the page's scroll view drops an animated scroll asked of it here.
+  func scroll(by offset: CGFloat) {
     guard let scrollView, offset != 0 else { return }
     let inset = scrollView.adjustedContentInset
     let top = -inset.top
     let bottom = max(top, scrollView.contentSize.height + inset.bottom - scrollView.bounds.height)
     let y = min(max(scrollView.contentOffset.y + offset, top), bottom)
-    scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: animated)
+    scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: false)
+  }
+
+  /// Scrolls the page so `rect` of the text view is in sight, within what the page shows of it.
+  func scroll(toShow rect: CGRect) {
+    guard let scrollView else { return }
+    scrollView.scrollRectToVisible(textView.convert(rect, to: scrollView), animated: false)
   }
 }
 
@@ -735,7 +741,7 @@ final class PlaceholderTextView: UITextView {
         super.contentOffset = newValue
         return
       }
-      editor.scroll(by: newValue.y - super.contentOffset.y, animated: false)
+      editor.scroll(by: newValue.y - super.contentOffset.y)
     }
   }
 
@@ -744,7 +750,15 @@ final class PlaceholderTextView: UITextView {
       super.setContentOffset(offset, animated: animated)
       return
     }
-    editor.scroll(by: offset.y - contentOffset.y, animated: animated)
+    editor.scroll(by: offset.y - contentOffset.y)
+  }
+
+  override func scrollRectToVisible(_ rect: CGRect, animated: Bool) {
+    guard let editor, !editor.moving else {
+      super.scrollRectToVisible(rect, animated: animated)
+      return
+    }
+    editor.scroll(toShow: rect)
   }
   /// The lines the text was last set in; nil until it is first set.
   var lines: EditorLines?

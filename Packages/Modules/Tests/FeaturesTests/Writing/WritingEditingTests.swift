@@ -1216,6 +1216,50 @@ private func editorView(in page: HostedPage) -> PlaceholderTextView? {
 }
 
 @MainActor
+struct EditorViewTests {
+  /// On a body many screens long, the text view is a window tall and sits over the part of the
+  /// page shown, wherever the page is scrolled to.
+  @Test func theTextViewCoversThePartOfAPageShown() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try #require(editorView(in: page))
+    let container = try #require(editor.editor)
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    let window = try #require(editor.window)
+    #expect(container.bounds.height > window.bounds.height * 3)
+    for y in [0, container.bounds.height / 2, scroll.contentSize.height - scroll.bounds.height] {
+      scroll.contentOffset.y = y
+      page.settle()
+      #expect(editor.bounds.height == window.bounds.height)
+      let shown = editor.convert(editor.bounds, to: nil)
+      let screen = window.bounds.intersection(container.convert(container.bounds, to: nil))
+      #expect(shown.contains(screen.insetBy(dx: 1, dy: 1)))
+    }
+  }
+
+  /// The text view's own scroll to a place out of sight, as to keep the caret in sight, scrolls
+  /// the page to it: the text view doesn't scroll on its own.
+  @Test func aScrollToTheCaretScrollsThePage() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try focusedEditor(in: page)
+    let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    let window = try #require(editor.window)
+    scroll.contentOffset.y = 0
+    page.settle()
+    editor.selectedRange = NSRange(location: (editor.text as NSString).length / 2, length: 0)
+    editor.scrollRangeToVisible(editor.selectedRange)
+    page.settle()
+    #expect(scroll.contentOffset.y > 0)
+    let caret = try #require(editor.selectedTextRange)
+    let shown = scroll.convert(scroll.bounds.inset(by: scroll.adjustedContentInset), to: nil)
+    #expect(shown.contains(editor.convert(editor.caretRect(for: caret.start), to: nil)))
+  }
+}
+
+/// A writing whose body is many screens long.
+private let long = Writing(
+  title: "朝", body: Array(repeating: Writing.sampleBody, count: 12).joined(separator: "\n"))
+
+@MainActor
 struct EditorHeightTests {
   /// However the text is edited, the editor is as tall as the whole text laid out again, though it
   /// lays out again only the paragraphs an edit touches.
