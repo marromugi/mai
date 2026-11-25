@@ -49,6 +49,8 @@ public struct SyncReport: Sendable, Equatable {
   public var photosSent: Set<UUID> = []
   /// Photos taken from the server into the device's photo store, by photo ID.
   public var photosReceived: Set<UUID> = []
+  /// The read-mode copies of the writings sent.
+  public var copies = CopiesSent()
 
   public init() {}
 }
@@ -66,14 +68,16 @@ public actor Synchronizer {
   private let photoState: PhotoSyncState
   private let server: WritingServer
   private let ownKey: OwnKey
+  private let readMode: ReadMode?
   private var running: Task<SyncReport, any Error>?
 
-  /// `stateFile` keeps, for each writing, the server's revision and the device's updated time when
-  /// they last matched; it is made on the first sync. The photos on the server are kept beside it
-  /// (`PhotoSyncState.file(beside:)`).
+  /// `stateFile` keeps, for each writing, the server's revision, the device's updated time when
+  /// they last matched, and the key of that revision; it is made on the first sync. The photos on
+  /// the server are kept beside it (`PhotoSyncState.file(beside:)`). Once the saves are made,
+  /// `readMode`, reading the same `stateFile`, sends the copies of the writings sent.
   public init(
     writings: any PlainWritingStore, photos: any PlainPhotoStore, stateFile: URL,
-    server: WritingServer, ownKey: OwnKey
+    server: WritingServer, ownKey: OwnKey, readMode: ReadMode? = nil
   ) {
     self.writings = writings
     self.photos = photos
@@ -81,6 +85,7 @@ public actor Synchronizer {
     photoState = PhotoSyncState(file: PhotoSyncState.file(beside: stateFile))
     self.server = server
     self.ownKey = ownKey
+    self.readMode = readMode
   }
 
   /// Runs after any sync already running has ended.
@@ -126,6 +131,16 @@ public actor Synchronizer {
         failures[id] = error
       }
     }
+    // One sending of copies a sync, after the saves: a sync sends each writing at most once, and
+    // the server deletes the copies of a writing's earlier revision on each save it takes.
+    if let readMode {
+      do {
+        report.copies = try await readMode.sendCopies(of: report.sent)
+      } catch  where !failures.isEmpty {
+        // The writings that failed are what the person is told; the copies go with a later sync.
+        syncLogger.error("The read-mode copies weren't sent: \(error)")
+      }
+    }
     guard failures.isEmpty else {
       throw SyncFailures(report: report, failures: failures)
     }
@@ -156,7 +171,7 @@ public actor Synchronizer {
       }
       return
     }
-    guard let (received, revision) = try await read(id) else {
+    guard let (received, revision, key) = try await read(id) else {
       report.left.insert(id)
       return
     }
@@ -173,7 +188,7 @@ public actor Synchronizer {
     // The server's copy and the sync state are kept before the device's copy is sent, so a
     // failed send leaves only a new writing for the next sync to send, not a second copy.
     synced[id] = SyncState.Entry(
-      revision: revision, updated: Layout.milliseconds(of: received.updated))
+      revision: revision, updated: Layout.milliseconds(of: received.updated), writingKey: key)
     try state.save(synced)
     report.received.insert(id)
     try await settlePhotos(of: received, onServer: &onServer, reporting: &report)
@@ -188,10 +203,12 @@ public actor Synchronizer {
     onServer: inout Set<UUID>, reporting report: inout SyncReport
   ) async throws {
     try await settlePhotos(of: writing, onServer: &onServer, reporting: &report)
-    switch try await server.save(ownKey.seal(writing), over: base) {
+    let sealed = try ownKey.seal(writing)
+    switch try await server.save(sealed, over: base) {
     case .saved(let revision):
       synced[writing.id] = SyncState.Entry(
-        revision: revision, updated: Layout.milliseconds(of: writing.updated))
+        revision: revision, updated: Layout.milliseconds(of: writing.updated),
+        writingKey: sealed.writingKey)
       try state.save(synced)
       report.sent.insert(writing.id)
     case .conflict:
@@ -232,14 +249,15 @@ public actor Synchronizer {
     }
   }
 
-  /// The server's writing with `id`, opened, and its revision.
-  private func read(_ id: UUID) async throws -> (PlainWriting, Revision)? {
+  /// The server's writing with `id`, opened, its revision, and the key it was sealed with.
+  private func read(_ id: UUID) async throws -> (PlainWriting, Revision, WritingKey)? {
     guard let (envelope, revision) = try await server.read(id) else { return nil }
     guard envelope.id == id else {
       throw ServerError.unexpectedAnswer(
         "the server gave writing \(envelope.id.uuidString) for \(id.uuidString)")
     }
-    return (try ownKey.open(envelope), revision)
+    let (writing, key) = try ownKey.openWithKey(envelope)
+    return (writing, revision, key)
   }
 }
 
@@ -326,11 +344,14 @@ struct PhotoSyncState {
   }
 }
 
-/// For each writing, the server's revision and the device's updated time when they last matched.
+/// For each writing, the server's revision, the device's updated time when they last matched, and
+/// the key of that revision.
 struct SyncState {
   struct Entry: Codable, Equatable {
     let revision: Revision
     let updated: UInt64?
+    /// The key of the writing at `revision`; nil in a state kept before keys were.
+    let writingKey: WritingKey?
   }
 
   let file: URL

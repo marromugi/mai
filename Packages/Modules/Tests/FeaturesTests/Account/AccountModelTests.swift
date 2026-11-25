@@ -53,6 +53,17 @@ struct AccountModelTests {
     #expect(model.canSignIn)
   }
 
+  /// Read mode is the signed-in account's only, even with a session and a key kept.
+  @Test func readModeIsOnlyWhileSignedIn() async throws {
+    let model = try model(
+      ["PUT /account/subscription": [.status(200)]], session: session, key: OwnKey.generate())
+    #expect(model.phase == .signedOut)
+    #expect(model.readMode() == nil)
+    await model.checkAtLaunch()
+    #expect(model.phase == .signedIn)
+    #expect(model.readMode() != nil)
+  }
+
   @Test func noSessionIsSignedOutAtLaunch() async throws {
     let model = try model([:])
     await model.checkAtLaunch()

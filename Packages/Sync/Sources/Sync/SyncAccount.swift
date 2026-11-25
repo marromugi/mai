@@ -245,7 +245,16 @@ public struct SyncAccount: Sendable {
       stateFile: Self.syncStateFile(of: keys.session.account, in: stateDirectory),
       server: WritingServer(
         url: server.url, token: keys.session.token, transport: server.transport),
-      ownKey: keys.ownKey)
+      ownKey: keys.ownKey, readMode: readMode(stateDirectory: stateDirectory, keys: keys))
+  }
+
+  /// Read mode of the account, wrapping the keys the sync in `stateDirectory` keeps.
+  public func readMode(stateDirectory: URL, keys: SyncKeys) -> ReadMode {
+    ReadMode(
+      server: ReadModeServer(
+        url: server.url, token: keys.session.token, transport: server.transport),
+      ownKey: keys.ownKey,
+      stateFile: Self.syncStateFile(of: keys.session.account, in: stateDirectory))
   }
 
   /// Ends the session on the server, then on the device. Kept when the server can't be reached,
@@ -300,6 +309,7 @@ public struct SyncAccount: Sendable {
       // Left behind, a later account of the same ID and own key wouldn't send these photos.
       syncLogger.error("The photo sync state of a deleted account couldn't be removed: \(error)")
     }
+    OwedCopies(beside: stateFile).clear()
   }
 
   /// Where the sync of `account` keeps its state, in `stateDirectory`.

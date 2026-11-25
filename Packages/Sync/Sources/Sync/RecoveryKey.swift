@@ -11,20 +11,17 @@ public struct RecoveryKey: Sendable, Equatable {
     self.ownKey = ownKey
   }
 
-  /// Reads a recovery key as a person typed it: any case, with or without hyphens and spaces, and
-  /// O, I and L taken for 0, 1 and 1.
+  /// Reads a recovery key as a person typed or pasted it, as `Base32` reads.
   public init(text: String) throws(RecoveryKeyError) {
-    var digits: [UInt8] = []
-    for character in text.uppercased() where !Self.separators.contains(character) {
-      guard let digit = Self.digit(of: character) else {
-        throw .unknownCharacter(character)
+    let bytes: Data
+    do {
+      bytes = try Base32.bytes(of: text, count: Self.length)
+    } catch {
+      switch error {
+      case .unknownCharacter(let character): throw .unknownCharacter(character)
+      case .wrongLength(let count): throw .wrongLength(count)
       }
-      digits.append(digit)
     }
-    guard digits.count == Self.length else {
-      throw .wrongLength(digits.count)
-    }
-    let bytes = Self.bytes(fromDigits: digits)
     let key = bytes.prefix(32)
     guard Data(bytes.suffix(3)) == Self.check(of: key) else {
       throw .mistyped
@@ -38,60 +35,14 @@ public struct RecoveryKey: Sendable, Equatable {
 
   public var text: String {
     let raw = ownKey.rawRepresentation
-    let digits = Self.digits(of: raw + Self.check(of: raw))
-    let characters = digits.map { Self.alphabet[Int($0)] }
-    return stride(from: 0, to: characters.count, by: 4)
-      .map { String(characters[$0..<$0 + 4]) }
-      .joined(separator: "-")
+    return Base32.text(of: raw + Self.check(of: raw))
   }
 
-  private static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
-  private static let separators: Set<Character> = ["-", " ", "\n"]
   /// 35 bytes are 280 bits, exactly 56 digits of 5 bits.
-  private static let length = 56
+  private static let length = 35
 
   private static func check(of key: some DataProtocol) -> Data {
     Data(SHA256.hash(data: key).prefix(3))
-  }
-
-  private static func digit(of character: Character) -> UInt8? {
-    let read: Character =
-      switch character {
-      case "O": "0"
-      case "I", "L": "1"
-      default: character
-      }
-    return alphabet.firstIndex(of: read).map { UInt8($0) }
-  }
-
-  private static func digits(of bytes: Data) -> [UInt8] {
-    var digits: [UInt8] = []
-    var buffer = 0
-    var bits = 0
-    for byte in bytes {
-      buffer = buffer << 8 | Int(byte)
-      bits += 8
-      while bits >= 5 {
-        bits -= 5
-        digits.append(UInt8(buffer >> bits & 0x1f))
-      }
-    }
-    return digits
-  }
-
-  private static func bytes(fromDigits digits: [UInt8]) -> [UInt8] {
-    var bytes: [UInt8] = []
-    var buffer = 0
-    var bits = 0
-    for digit in digits {
-      buffer = buffer << 5 | Int(digit)
-      bits += 5
-      if bits >= 8 {
-        bits -= 8
-        bytes.append(UInt8(buffer >> bits & 0xff))
-      }
-    }
-    return bytes
   }
 }
 

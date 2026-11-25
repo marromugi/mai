@@ -353,6 +353,18 @@ enum AccountPhase: Equatable {
       writings: writings, photos: photos, stateDirectory: syncState, keys: keys)
   }
 
+  /// Read mode of the account, while signed in with its own key; nil otherwise.
+  func readMode() -> ReadMode? {
+    guard phase == .signedIn else { return nil }
+    do {
+      guard let keys = try account.syncKeys() else { return nil }
+      return account.readMode(stateDirectory: syncState, keys: keys)
+    } catch {
+      accountLogger.error("The session or the own key couldn't be read for read mode: \(error)")
+      return nil
+    }
+  }
+
   /// The account as read with `session`, and which read it was.
   private func read(_ session: Session) async throws(AccountError) -> (
     state: AccountState, number: Int

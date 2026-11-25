@@ -97,6 +97,7 @@ public struct RootView: View {
       SettingsView(fonts: fonts)
         .environment(\.account, account)
         .environment(\.writingSync, sync)
+        .environment(\.writingLibrary, library)
     }
     .alert(
       "保存できませんでした", isPresented: Binding(get: { unsaved != nil }, set: { _ in unsaved = nil }),
