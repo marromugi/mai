@@ -2,11 +2,11 @@ import SwiftUI
 internal import Typesetting
 
 /// A writing's page: its title, body, and `photos` on the type area, under a back mark, over the
-/// bottom row. The row's pencil makes the title and body editable until 「完了」, each change
-/// handed to `edit`; its 「組版を調整」 enters the typesetting mode, and a tap or 「閉じる」 leaves
-/// it; its camera takes a photo with `camera` and hands it to `photoTaken`. Where one of `others`'
-/// titles appears in the body, it links to that writing, and a tap on it calls `open` with it. The
-/// body's own links open their pages, and a web address pasted while editing becomes one.
+/// bottom row. The title and body are always editable, each change handed to `edit`. The row's
+/// 「組版を調整」 enters the typesetting mode, and a tap or 「閉じる」 leaves it; its camera takes a
+/// photo with `camera` and hands it to `photoTaken`. Where one of `others`' titles appears in the
+/// body, it links to that writing, and a tap on it calls `open` with it. The body's own links open
+/// their pages, and a web address pasted into it becomes one.
 struct WritingView: View {
   let writing: Writing
   let others: [Writing]
@@ -16,20 +16,19 @@ struct WritingView: View {
   @Binding var setting: BodySetting
   let camera: Camera
   let photoTaken: (UIImage) -> Void
-  @State private var editing = false
   @State private var typesetting = false
   @State private var takingPhoto = false
 
   var body: some View {
     WritingScreen(
       writing: writing, others: others, open: open, edit: edit, photos: photos,
-      setting: $setting, editing: $editing, typesetting: $typesetting,
+      setting: $setting, typesetting: $typesetting,
       takingPhoto: $takingPhoto, camera: camera, photoTaken: photoTaken)
   }
 }
 
-/// The writing's page, with its `photos`, being edited or not, in or out of the typesetting mode.
-/// While `editing`, the title and body are editable and each change goes to `edit`. As the title scrolls
+/// The writing's page, with its `photos`, in or out of the typesetting mode. The title and body are
+/// editable and each change goes to `edit`. As the title scrolls
 /// off the top, the header fades in to stand in for it. In the mode the page stops scrolling and lifts off the desk
 /// above the typesetting bar, the typesetting gestures over it step `setting`, and a tap or the
 /// bar's 「閉じる」 leaves the mode. The bottom row's camera sets `takingPhoto`, which covers the
@@ -42,29 +41,36 @@ struct WritingScreen: View {
   let edit: (_ change: (inout Writing) -> Void) -> Void
   let photos: [PagePhoto]
   @Binding var setting: BodySetting
-  @Binding var editing: Bool
   @Binding var typesetting: Bool
   @Binding var takingPhoto: Bool
   let camera: Camera
   let photoTaken: (UIImage) -> Void
   @State private var titleCutOff: CGFloat = 0
   /// Found once per body and set of others, not at every update: the scroll updates the screen
-  /// each frame. Not found while editing, which shows none and changes the body at each key.
-  @State private var mentions: [TitleMention] = []
+  /// each frame. While the body changes, found once it rests for `FoundMentions.rest`.
+  @State private var found: FoundMentions?
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     GeometryReader { proxy in
       ScrollView {
         WritingPage(
-          writing: writing, mentions: mentions, editing: editing, edit: edit, photos: photos,
+          writing: writing, found: found, edit: edit, photos: photos,
           width: proxy.size.width, back: { dismiss() }, titleCutOff: { titleCutOff = $0 })
       }
-      .environment(\.openURL, .opening(mentions, with: open))
-      .task(id: editing ? nil : MentionSource(body: writing.body, others: others)) {
-        mentions = writing.body.titleMentions(of: others)
+      .environment(\.openURL, .opening(found?.mentions ?? [], with: open))
+      .task(id: MentionSource(body: writing.body, others: others)) {
+        if found != nil {
+          do {
+            try await Task.sleep(for: FoundMentions.rest)
+          } catch {
+            return
+          }
+        }
+        found = FoundMentions(body: writing.body, mentions: writing.body.titleMentions(of: others))
       }
       .scrollDisabled(typesetting)
+      .scrollDismissesKeyboard(.interactively)
       .clipShape(pageShape)
       .background {
         pageShape
@@ -102,9 +108,13 @@ struct WritingScreen: View {
         // Hidden, not removed: the row sets the inset's height in and out of the mode, so the
         // scroll offset isn't clamped. The bar lies over it.
         let row = BottomRow(
-          width: proxy.size.width, cameraAvailable: camera.isAvailable, editing: $editing,
+          width: proxy.size.width, cameraAvailable: camera.isAvailable,
           takePhoto: { takingPhoto = true },
-          adjustTypesetting: { withAnimation { typesetting = true } })
+          adjustTypesetting: {
+            UIApplication.shared.sendAction(
+              #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            withAnimation { typesetting = true }
+          })
         Group {
           if typesetting {
             row.hidden()
@@ -141,13 +151,11 @@ struct WritingScreen: View {
   }
 }
 
-/// The camera and the pencil, which starts editing, at the bottom leading corner, and the
-/// underlined 「組版を調整」 at the trailing one, or 「完了」 alone while `editing`, all on the type
-/// area's margins. The camera is dimmed where there is none.
+/// The camera at the bottom leading corner and the underlined 「組版を調整」 at the trailing one,
+/// both on the type area's margins. The camera is dimmed where there is none.
 private struct BottomRow: View {
   let width: CGFloat
   let cameraAvailable: Bool
-  @Binding var editing: Bool
   let takePhoto: () -> Void
   let adjustTypesetting: () -> Void
   @EnvironmentTypeScale private var scale
@@ -164,28 +172,9 @@ private struct BottomRow: View {
       // Its 44-point tap area centred on the margin line, as the header's chevron is, unless that
       // would push it past the screen's edge.
       .padding(.leading, max(0, margin - TextButtonStyle.minimumSide / 2))
-      if !editing {
-        Button {
-          editing = true
-        } label: {
-          Image(systemName: "square.and.pencil")
-        }
-        .buttonStyle(.text)
-        .accessibilityLabel("編集")
-      }
       Spacer(minLength: 0)
-      Group {
-        if editing {
-          Button {
-            editing = false
-          } label: {
-            ButtonLabel("完了")
-          }
-        } else {
-          Button(action: adjustTypesetting) {
-            ButtonLabel("組版を調整")
-          }
-        }
+      Button(action: adjustTypesetting) {
+        ButtonLabel("組版を調整")
       }
       .buttonStyle(.text)
       .underline()
@@ -196,14 +185,12 @@ private struct BottomRow: View {
 }
 
 /// The page laid out across a screen `width` wide: the back mark, then the title, the body with
-/// its `mentions` linked, and the photos after its last paragraph, piled as one stack, on the type
-/// area. While `editing`, the title and body are editable, set as they are read, the mentions
-/// unlinked, and each change goes to `edit`. `titleCutOff` hears how much of the title has
-/// scrolled above the scroll view's top, from 0 to 1.
+/// the mentions `found` in it linked, and the photos after its last paragraph, piled as one stack,
+/// on the type area. The title and body are editable, and each change goes to `edit`.
+/// `titleCutOff` hears how much of the title has scrolled above the scroll view's top, from 0 to 1.
 struct WritingPage: View {
   let writing: Writing
-  var mentions: [TitleMention] = []
-  var editing = false
+  var found: FoundMentions?
   var edit: (_ change: (inout Writing) -> Void) -> Void = { _ in }
   let photos: [PagePhoto]
   let width: CGFloat
@@ -227,18 +214,10 @@ struct WritingPage: View {
       .padding(.leading, max(0, area.margin - max(markWidth, TextButtonStyle.minimumSide) / 2))
       .padding(.bottom, scale.space(.l))
       VStack(alignment: .leading, spacing: 0) {
-        Group {
-          if editing {
-            TextStyleEditor(
-              role: .heading, text: writing.title, placeholder: "タイトル", oneLine: true
-            ) { title, _ in
-              edit { $0.title = title }
-            }
-          } else {
-            // An untitled writing keeps its line: an ideographic space is one heading line box tall.
-            Text(verbatim: writing.title.isEmpty ? "\u{3000}" : writing.title)
-              .textStyle(.heading)
-          }
+        TextStyleEditor(
+          role: .heading, text: writing.title, placeholder: "タイトル", oneLine: true
+        ) { title, _ in
+          edit { $0.title = title }
         }
         .onGeometryChange(for: CGFloat.self) {
           let frame = $0.frame(in: .scrollView)
@@ -248,18 +227,13 @@ struct WritingPage: View {
           titleCutOff($0)
         }
         .padding(.bottom, scale.space(.m))
-        if editing {
-          TextStyleEditor(
-            role: .body, text: writing.body, links: writing.links, pastesLinks: true
-          ) { body, links in
-            edit {
-              $0.body = body
-              $0.links = links
-            }
+        TextStyleEditor(
+          role: .body, text: writing.body, links: writing.links, found: found, pastesLinks: true
+        ) { body, links in
+          edit {
+            $0.body = body
+            $0.links = links
           }
-        } else {
-          Text(body: writing.body, links: writing.links, mentions: mentions)
-            .textStyle(.body)
         }
         if !photos.isEmpty {
           PhotoStack(photos: photos, lineLength: area.lineLength)
@@ -335,6 +309,15 @@ struct WritingHeader: View {
       .lineLimit(1)
       .accessibilityAddTraits(.isHeader)
   }
+}
+
+/// The mentions of other writings' titles found in `body`.
+struct FoundMentions: Equatable {
+  let body: String
+  let mentions: [TitleMention]
+
+  /// How long the body rests unchanged before its mentions are found again.
+  static let rest = Duration.milliseconds(400)
 }
 
 /// What a body's mentions are found from.
