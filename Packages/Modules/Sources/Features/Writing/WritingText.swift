@@ -9,6 +9,12 @@ nonisolated struct WritingText: Equatable {
   /// In the body's UTF-16 offsets, as `Writing.links` keeps them.
   var links: [BodyLink]
 
+  /// Texts compared by their bytes, as `String.isSameText(as:)` compares them.
+  static func == (lhs: WritingText, rhs: WritingText) -> Bool {
+    lhs.links == rhs.links && lhs.title.isSameText(as: rhs.title)
+      && lhs.body.isSameText(as: rhs.body)
+  }
+
   /// A line break that came in with `title` from elsewhere is taken as a space: the title is one
   /// line.
   init(title: String, body: String, links: [BodyLink]) {
@@ -27,7 +33,7 @@ nonisolated struct WritingText: Equatable {
       return
     }
     let start = NSMaxRange(lineBreak)
-    let body = string.substring(from: start)
+    let body = string.substring(from: start).contiguous
     let shifted = links.compactMap { link -> BodyLink? in
       let lower = max(link.range.lowerBound, start) - start
       let upper = link.range.upperBound - start
@@ -35,7 +41,7 @@ nonisolated struct WritingText: Equatable {
       return BodyLink(range: lower..<upper, url: link.url)
     }
     self.init(
-      title: string.substring(to: lineBreak.location), body: body,
+      title: string.substring(to: lineBreak.location).contiguous, body: body,
       links: shifted.fitted(to: body))
   }
 

@@ -1214,3 +1214,37 @@ private func inkPixels(in image: UIImage, within rect: CGRect) throws -> Int {
 private func editorView(in page: HostedPage) -> PlaceholderTextView? {
   page.textViews.first as? PlaceholderTextView
 }
+
+@MainActor
+struct EditorHeightTests {
+  /// However the text is edited, the editor is as tall as the whole text laid out again, though it
+  /// lays out again only the paragraphs an edit touches.
+  @Test func theEditorKeepsTheWholeTextsHeightThroughEdits() throws {
+    let edits = Edits(writing: Writing(title: "朝", body: Writing.sampleBody))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let container = try #require(editor.editor)
+    let ends = { (editor.text as NSString).length }
+    let steps: [(NSRange, String)] = [
+      (NSRange(location: 10, length: 0), "書き足した"),
+      (NSRange(location: ends(), length: 0), "\n"),
+      (NSRange(location: ends() + 1, length: 0), "最後の行"),
+      (NSRange(location: 3, length: 0), "\n"),
+      (NSRange(location: 3, length: 1), ""),
+      (NSRange(location: 20, length: 30), "置き換えた\n二行に"),
+    ]
+    for (range, text) in steps {
+      editor.selectedRange = NSRange(location: min(range.location, ends()), length: range.length)
+      type(text, into: editor)
+      page.settle()
+      let kept = try #require(container.paragraphs)
+      fputs("KEPT \(kept.starts) \(kept.heights) \(kept.length)\n", stderr)
+      let heights = container.textHeight(within: editor.frame.width)
+      container.paragraphs = nil
+      #expect(abs(container.textHeight(within: editor.frame.width) - heights) < 0.01)
+      fputs(
+        "FULL \(container.paragraphs?.starts ?? []) \(container.paragraphs?.heights ?? [])\n",
+        stderr)
+    }
+  }
+}

@@ -73,6 +73,18 @@ struct LibraryBenchmark {
         settle(page, for: 3)
       }
       #expect(editor.text.contains("ああ"))
+      editor.selectedRange = NSRange(location: (editor.text as NSString).length, length: 0)
+      settle(page, for: 0.5)
+      try report("typing a character at the end of the long writing", runs: 9) {
+        type("い", into: editor)
+        settle(page, for: 0.3)
+      }
+      #expect(editor.text.hasSuffix("いいい"))
+      let container = try #require(editor.editor)
+      let kept = try #require(container.paragraphs?.total)
+      container.paragraphs = nil
+      let inset = editor.textContainerInset.top + editor.textContainerInset.bottom
+      #expect(abs(container.textHeight(within: editor.frame.width) - kept - inset) < 0.01)
     }
   }
 

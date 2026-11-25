@@ -67,10 +67,7 @@ struct WritingScreen: View {
             return
           }
         }
-        let mentions = await FoundMentions.find(in: writing.body, of: others)
-        // Found in a body that has changed since.
-        guard !Task.isCancelled else { return }
-        found = mentions
+        found = FoundMentions(body: writing.body, mentions: writing.body.titleMentions(of: others))
       }
       .scrollDisabled(typesetting)
       .scrollDismissesKeyboard(.interactively)
@@ -320,10 +317,8 @@ nonisolated struct FoundMentions: Equatable, Sendable {
   let body: String
   let mentions: [TitleMention]
 
-  /// The mentions of `others`' titles in `body`, found off the main actor.
-  @concurrent
-  static func find(in body: String, of others: [Writing]) async -> FoundMentions {
-    FoundMentions(body: body, mentions: body.titleMentions(of: others))
+  static func == (lhs: FoundMentions, rhs: FoundMentions) -> Bool {
+    lhs.body.isSameText(as: rhs.body) && lhs.mentions == rhs.mentions
   }
 
   /// How long the body rests unchanged before its mentions are found again.
@@ -334,6 +329,10 @@ nonisolated struct FoundMentions: Equatable, Sendable {
 private struct MentionSource: Equatable {
   let body: String
   let others: [Writing]
+
+  static func == (lhs: MentionSource, rhs: MentionSource) -> Bool {
+    lhs.body.isSameText(as: rhs.body) && lhs.others == rhs.others
+  }
 }
 
 extension OpenURLAction {

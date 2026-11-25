@@ -105,10 +105,9 @@ struct WritingTextView: UIViewRepresentable {
   let open: (URL) -> Void
   let lines: EditorLines
 
-  func makeUIView(context: Context) -> PlaceholderTextView {
-    let view = PlaceholderTextView(usingTextLayoutManager: true)
-    // The page scrolls; the editor is as tall as its text.
-    view.isScrollEnabled = false
+  func makeUIView(context: Context) -> EditorView {
+    let editor = EditorView()
+    let view = editor.textView
     view.textContainer.lineFragmentPadding = 0
     view.delegate = context.coordinator
     view.pasteDelegate = context.coordinator
@@ -116,24 +115,26 @@ struct WritingTextView: UIViewRepresentable {
       target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
     tap.delegate = context.coordinator
     view.addGestureRecognizer(tap)
-    return view
+    return editor
   }
 
-  func updateUIView(_ view: PlaceholderTextView, context: Context) {
+  func updateUIView(_ editor: EditorView, context: Context) {
+    let view = editor.textView
     context.coordinator.changed = changed
     context.coordinator.askTitle = askTitle
     view.open = open
     // Never while composing: replacing the text ends the input method's composition.
     guard view.markedTextRange == nil else { return }
-    restyle(view, context: context)
-    if let found, found.body == view.writing.body, context.coordinator.found != found {
+    restyle(editor, context: context)
+    if let found, found.body.isSameText(as: view.writing.body), context.coordinator.found != found {
       context.coordinator.found = found
       view.mark(found)
     }
   }
 
   /// Sets the text and its links again, when they or the type have changed.
-  private func restyle(_ view: PlaceholderTextView, context: Context) {
+  private func restyle(_ editor: EditorView, context: Context) {
+    let view = editor.textView
     guard view.lines != lines || view.writing != writing else { return }
     context.coordinator.found = nil
     view.lines = lines
@@ -152,6 +153,7 @@ struct WritingTextView: UIViewRepresentable {
       styled.addAttributes(.bodyLink(link.url), range: NSRange(link.range))
     }
     view.attributedText = styled
+    editor.paragraphs = nil
     var placeholderAttributes = lines.title(spacing: 0)
     placeholderAttributes[.foregroundColor] = UIColor.tertiaryLabel
     view.placeholder.attributedText = NSAttributedString(
@@ -165,7 +167,8 @@ struct WritingTextView: UIViewRepresentable {
   }
 
   /// Text still being composed when the editor goes away is kept, as if composing had ended.
-  static func dismantleUIView(_ view: PlaceholderTextView, coordinator: Coordinator) {
+  static func dismantleUIView(_ editor: EditorView, coordinator: Coordinator) {
+    let view = editor.textView
     guard view.markedTextRange != nil else { return }
     let writing = view.writing
     // After the update that removes the editor, which can't change state itself.
@@ -173,15 +176,15 @@ struct WritingTextView: UIViewRepresentable {
   }
 
   func sizeThatFits(
-    _ proposal: ProposedViewSize, uiView view: PlaceholderTextView, context: Context
+    _ proposal: ProposedViewSize, uiView editor: EditorView, context: Context
   )
     -> CGSize?
   {
     guard let width = proposal.width, width.isFinite else { return nil }
+    let view = editor.textView
     view.spaceTheTitle(within: width)
-    let fitted = view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
     // As tall as the title's and the body's lines apart, so what follows on the page stays put.
-    return CGSize(width: width, height: fitted.height - lines.placement.excess)
+    return CGSize(width: width, height: editor.textHeight(within: width) - lines.placement.excess)
   }
 
   func makeCoordinator() -> Coordinator {
@@ -308,7 +311,7 @@ struct WritingTextView: UIViewRepresentable {
         self?.restyle(range, in: view, as: before)
       }
       // A mention a link now overlaps is left out whole, as the page leaves it out.
-      if let found, found.body == view.writing.body {
+      if let found, found.body.isSameText(as: view.writing.body) {
         view.mark(found)
       }
       Self.typeInTheLinesRole(in: view)
@@ -433,6 +436,10 @@ extension PlaceholderTextView {
   /// Marks the mentions `found` in the body, as `Text(body:mentions:)` draws them, in place of those
   /// marked before, leaving out any on a link. The body must be the one they were found in.
   func mark(_ found: FoundMentions) {
+    // Underlines alone: no line's height changes.
+    let editor = self.editor
+    editor?.heightsKept = true
+    defer { editor?.heightsKept = false }
     let storage = textStorage
     let whole = NSRange(location: 0, length: storage.length)
     storage.beginEditing()
@@ -511,11 +518,234 @@ extension UITextView {
   }
 }
 
+/// The editor's view, as tall as its text. The text view in it is a window tall, kept over the part
+/// of the editor the enclosing scroll view shows and scrolled to show that part, so TextKit lays
+/// out and draws no more of the text than is on screen.
+final class EditorView: UIView {
+  let textView = PlaceholderTextView(usingTextLayoutManager: true)
+  /// What moves over the part shown, the text view in it: a text view moved itself resizes its
+  /// text container, and TextKit sets every line again.
+  private let mover = UIView()
+  private weak var scrollView: UIScrollView?
+  private var scrolled: NSKeyValueObservation?
+  private var resized: NSKeyValueObservation?
+  /// Set while the text view is moved over the part shown; any other scroll of it goes to the page.
+  private(set) var moving = false
+  /// Each paragraph's height, once the whole text has been laid out since it was set at this
+  /// width; an edit forgets the paragraphs it touches, and they alone are laid out again. TextKit
+  /// keeps the layout of no more than the lines shown, so the text's height is summed here.
+  var paragraphs: ParagraphHeights?
+  /// Set while an edit changes attributes that leave every line's height as it was.
+  var heightsKept = false
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    // The page's scroll view takes the drags, and its own scrolling stays with the page's.
+    textView.panGestureRecognizer.isEnabled = false
+    textView.scrollsToTop = false
+    textView.showsVerticalScrollIndicator = false
+    textView.showsHorizontalScrollIndicator = false
+    textView.contentInsetAdjustmentBehavior = .never
+    textView.bounces = false
+    textView.textStorage.delegate = textView
+    // Lines closer than their glyphs draw past the text view, as `Text` draws them past its frame.
+    textView.clipsToBounds = false
+    // It reaches past the editor, over what follows on the page.
+    textView.backgroundColor = .clear
+    mover.addSubview(textView)
+    addSubview(mover)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    preconditionFailure("The editor is made in code.")
+  }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    var ancestor = superview
+    while let view = ancestor, !(view is UIScrollView) {
+      ancestor = view.superview
+    }
+    scrollView = ancestor as? UIScrollView
+    scrolled = scrollView?.observe(\.contentOffset) { [weak self] _, _ in
+      MainActor.assumeIsolated { self?.setNeedsLayout() }
+    }
+    resized = scrollView?.observe(\.bounds) { [weak self] _, _ in
+      MainActor.assumeIsolated { self?.setNeedsLayout() }
+    }
+    setNeedsLayout()
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    // Always the window's height, and the width the text was measured at, which can be a part of a
+    // pixel wider than the editor: a text view resized resizes its text container too.
+    let width = textView.frame.width > 0 ? textView.frame.width : bounds.width
+    let size = CGSize(width: width, height: window?.bounds.height ?? bounds.height)
+    var top: CGFloat = 0
+    if let scrollView {
+      let shown = convert(scrollView.bounds, from: scrollView)
+      top = min(max(shown.minY, 0), max(bounds.height - size.height, 0))
+    }
+    moving = true
+    mover.frame = CGRect(origin: CGPoint(x: 0, y: top), size: size)
+    if textView.frame.size != size {
+      textView.frame = CGRect(origin: .zero, size: size)
+    }
+    textView.contentOffset = CGPoint(x: 0, y: top)
+    moving = false
+  }
+
+  /// Taken in only within the editor: the text view reaches past it when the text is shorter than
+  /// the window.
+  override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+    bounds.contains(point)
+  }
+
+  override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    self.point(inside: point, with: event) ? super.hitTest(point, with: event) : nil
+  }
+
+  /// How tall the text is set `width` wide, its insets included. Measured at the text container's
+  /// own size, so TextKit keeps the layout of the lines an edit hasn't changed: asked for another
+  /// size, as `sizeThatFits(_:)` asks, it sets every line again.
+  func textHeight(within width: CGFloat) -> CGFloat {
+    if textView.frame.width != width {
+      moving = true
+      textView.frame.size.width = width
+      mover.frame.size.width = width
+      moving = false
+      paragraphs = nil
+    }
+    let inset = textView.textContainerInset
+    return measured() + inset.top + inset.bottom
+  }
+
+  /// The text's height: each paragraph laid out once, then those an edit touched.
+  private func measured() -> CGFloat {
+    guard let layout = textView.textLayoutManager,
+      let content = layout.textContentManager as? NSTextContentStorage
+    else {
+      preconditionFailure("The editor's text view is made with TextKit 2.")
+    }
+    let document = layout.documentRange
+    func offset(_ location: any NSTextLocation) -> Int {
+      content.offset(from: document.location, to: location)
+    }
+    guard var paragraphs else {
+      var starts: [Int] = []
+      var heights: [CGFloat] = []
+      layout.enumerateTextLayoutFragments(
+        from: document.location, options: [.ensuresLayout, .ensuresExtraLineFragment]
+      ) { fragment in
+        starts.append(offset(fragment.rangeInElement.location))
+        heights.append(fragment.layoutFragmentFrame.height)
+        return true
+      }
+      guard starts.first == 0 else { return layout.usageBoundsForTextContainer.maxY }
+      let length = textView.textStorage.length
+      paragraphs = ParagraphHeights(starts: starts, heights: heights, length: length)
+      return heights.reduce(0, +)
+    }
+    for run in paragraphs.unmeasured {
+      guard let start = content.location(document.location, offsetBy: run.lowerBound) else {
+        continue
+      }
+      layout.enumerateTextLayoutFragments(
+        from: start, options: [.ensuresLayout, .ensuresExtraLineFragment]
+      ) { fragment in
+        let at = offset(fragment.rangeInElement.location)
+        guard at <= run.upperBound else { return false }
+        paragraphs.measured(fragment.layoutFragmentFrame.height, startingAt: at)
+        return true
+      }
+    }
+    self.paragraphs = paragraphs
+    guard let total = paragraphs.total else {
+      // A paragraph TextKit didn't lay out where it was kept: lay them all out again.
+      self.paragraphs = nil
+      return measured()
+    }
+    return total
+  }
+
+  /// Scrolls the page by `offset`, as far as it scrolls: what the text view would have scrolled
+  /// itself, as to keep the caret in sight.
+  func scroll(by offset: CGFloat, animated: Bool) {
+    guard let scrollView, offset != 0 else { return }
+    let inset = scrollView.adjustedContentInset
+    let top = -inset.top
+    let bottom = max(top, scrollView.contentSize.height + inset.bottom - scrollView.bounds.height)
+    let y = min(max(scrollView.contentOffset.y + offset, top), bottom)
+    scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: y), animated: animated)
+  }
+}
+
+extension EditorView {
+  /// Forgets the heights of the paragraphs an edit of `storage` touches.
+  func edited(
+    _ storage: NSTextStorage, _ edited: NSTextStorage.EditActions, range: NSRange, delta: Int
+  ) {
+    guard var paragraphs, edited.contains(.editedCharacters) || !heightsKept else { return }
+    let string = storage.string as NSString
+    paragraphs.replace(range.location..<NSMaxRange(range) - delta, with: range.length) { span in
+      var lineBreaks: [Int] = []
+      var searched = NSRange(span)
+      while true {
+        let found = string.range(of: "\n", range: searched)
+        guard found.location != NSNotFound else { return lineBreaks }
+        lineBreaks.append(found.location)
+        searched = NSRange(
+          location: found.location + 1, length: NSMaxRange(searched) - found.location - 1)
+      }
+    }
+    self.paragraphs = paragraphs
+  }
+}
+
+extension PlaceholderTextView: @preconcurrency NSTextStorageDelegate {
+  /// Forgets the text as read, and tells the editor it is in.
+  func textStorage(
+    _ storage: NSTextStorage, didProcessEditing edited: NSTextStorage.EditActions,
+    range: NSRange, changeInLength delta: Int
+  ) {
+    read = nil
+    editor?.edited(storage, edited, range: range, delta: delta)
+  }
+}
+
 /// A text view that shows `placeholder` over its first line while that line is empty, composed text
 /// included. VoiceOver offers each link and mention in it as an action that hands its address to
 /// `open`.
 final class PlaceholderTextView: UITextView {
   var open: (URL) -> Void = { _ in }
+
+  /// The editor it is in, if any. Looked up, not kept: UIKit scrolls the text view before its own
+  /// properties are set.
+  var editor: EditorView? {
+    superview?.superview as? EditorView
+  }
+
+  // A scroll the text view makes itself, as to keep the caret in sight, scrolls the page.
+  override var contentOffset: CGPoint {
+    get { super.contentOffset }
+    set {
+      guard let editor = self.editor, !editor.moving else {
+        super.contentOffset = newValue
+        return
+      }
+      editor.scroll(by: newValue.y - super.contentOffset.y, animated: false)
+    }
+  }
+
+  override func setContentOffset(_ offset: CGPoint, animated: Bool) {
+    guard let editor = self.editor, !editor.moving else {
+      super.setContentOffset(offset, animated: animated)
+      return
+    }
+    editor.scroll(by: offset.y - contentOffset.y, animated: animated)
+  }
   /// The lines the text was last set in; nil until it is first set.
   var lines: EditorLines?
   /// The space below the title, as `spaceTheTitle(within:)` last measured it.
@@ -545,10 +775,19 @@ final class PlaceholderTextView: UITextView {
     WritingTextView.Coordinator.typeInTheLinesRole(in: self)
   }
 
-  /// The title, body, and links the text holds.
+  /// The title, body, and links the text holds, read once per edit.
   var writing: WritingText {
-    WritingText(text: text, links: textLinks)
+    if textStorage.delegate !== self {
+      textStorage.delegate = self
+    }
+    if let read { return read }
+    let writing = WritingText(text: text, links: textLinks)
+    read = writing
+    return writing
   }
+
+  /// The text's title, body, and links as last read, until the text storage is next edited.
+  fileprivate var read: WritingText?
 
   /// Where the body starts: after the first line break, or past the end when there is none.
   var bodyStart: Int {

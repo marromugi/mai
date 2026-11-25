@@ -103,13 +103,14 @@ struct WritingLibraryTests {
   }
 }
 
-/// Waits until `done` holds, failing after 10 seconds.
+/// Waits until `done` holds, failing after a minute: the snapshot suites running beside these can
+/// hold the main actor for tens of seconds.
 @MainActor
 private func waitUntil(_ done: () -> Bool) async throws {
-  let deadline = ContinuousClock.now + .seconds(10)
+  let deadline = ContinuousClock.now + .seconds(60)
   while !done() {
     guard ContinuousClock.now < deadline else {
-      Issue.record("Waited 10 seconds.")
+      Issue.record("Waited a minute.")
       return
     }
     try await Task.sleep(for: .milliseconds(10))

@@ -26,6 +26,13 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
     self.updated = updated
   }
 
+  /// Texts compared by their bytes, as `String.isSameText(as:)` compares them.
+  static func == (lhs: Writing, rhs: Writing) -> Bool {
+    lhs.id == rhs.id && lhs.updated == rhs.updated && lhs.photos == rhs.photos
+      && lhs.links == rhs.links && lhs.title.isSameText(as: rhs.title)
+      && lhs.body.isSameText(as: rhs.body)
+  }
+
   private enum CodingKeys: CodingKey {
     case id, title, body, links, photos, updated
   }
@@ -85,8 +92,8 @@ nonisolated extension [Writing] {
     change(&edited)
     let before = self[index]
     guard
-      edited.title != before.title || edited.body != before.body || edited.links != before.links
-        || edited.photos != before.photos
+      !edited.title.isSameText(as: before.title) || !edited.body.isSameText(as: before.body)
+        || edited.links != before.links || edited.photos != before.photos
     else { return nil }
     edited.updated = now
     self[index] = edited
@@ -121,4 +128,26 @@ extension Writing {
     そこでカンパーニュ・ミニ（直径12センチ）として焼くことにした。呼び名はミニ。
     FLOUR, WATER+SALT（基本）。
     """
+}
+
+nonisolated extension String {
+  /// Whether `other` holds the same bytes: a text unchanged by an edit. A memory compare, where
+  /// `==` works out canonical equivalence character by character, which a long body pays for on
+  /// every keystroke.
+  func isSameText(as other: String) -> Bool {
+    guard utf8.count == other.utf8.count else { return false }
+    let compared = utf8.withContiguousStorageIfAvailable { bytes in
+      other.utf8.withContiguousStorageIfAvailable { otherBytes in
+        bytes.count == 0 || memcmp(bytes.baseAddress, otherBytes.baseAddress, bytes.count) == 0
+      }
+    }
+    return (compared ?? nil) ?? utf8.elementsEqual(other.utf8)
+  }
+
+  /// This text with its bytes in one piece, as `isSameText(as:)` compares them quickest.
+  var contiguous: String {
+    var text = self
+    text.makeContiguousUTF8()
+    return text
+  }
 }
