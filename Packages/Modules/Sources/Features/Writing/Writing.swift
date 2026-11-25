@@ -9,25 +9,29 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
   /// Stretches of `body` that link outside the app: whole characters, in order, never overlapping,
   /// as `fitted(to:)` leaves them.
   var links: [BodyLink]
+  /// The IDs of its photos in the `PhotoStore`, oldest first, shown after the body.
+  var photos: [UUID]
   var updated: Date
 
   init(
-    id: UUID = UUID(), title: String, body: String, links: [BodyLink] = [], updated: Date = .now
+    id: UUID = UUID(), title: String, body: String, links: [BodyLink] = [], photos: [UUID] = [],
+    updated: Date = .now
   ) {
     self.id = id
     self.title = title
     self.body = body
     self.links = links
+    self.photos = photos
     self.updated = updated
   }
 
   private enum CodingKeys: CodingKey {
-    case id, title, body, links, updated
+    case id, title, body, links, photos, updated
   }
 
-  /// A writing saved before links were kept has none. A link that can't be read is dropped, and
-  /// the rest are made to fit the body as `fitted(to:)` does, so the body is read whatever its
-  /// links say.
+  /// A writing saved before links or photos were kept has none. A link that can't be read is
+  /// dropped, and the rest are made to fit the body as `fitted(to:)` does, so the body is read
+  /// whatever its links say.
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     id = try container.decode(UUID.self, forKey: .id)
@@ -35,6 +39,7 @@ nonisolated struct Writing: Identifiable, Equatable, Codable, Sendable {
     body = try container.decode(String.self, forKey: .body)
     let saved = (try? container.decodeIfPresent([ReadableLink].self, forKey: .links)) ?? nil
     links = (saved ?? []).compactMap(\.link).fitted(to: body)
+    photos = try container.decodeIfPresent([UUID].self, forKey: .photos) ?? []
     updated = try container.decode(Date.self, forKey: .updated)
   }
 }
@@ -50,7 +55,8 @@ nonisolated struct ReadableLink: Decodable {
 
 nonisolated extension [Writing] {
   /// Makes `change` to the writing with `id`, updated `now`, and returns it. Nil, and nothing
-  /// changed, when none has `id` or the change leaves its title, body, and links as they were.
+  /// changed, when none has `id` or the change leaves its title, body, links, and photos as they
+  /// were.
   mutating func edit(_ id: Writing.ID, at now: Date, _ change: (inout Writing) -> Void) -> Writing?
   {
     guard let index = firstIndex(where: { $0.id == id }) else { return nil }
@@ -59,6 +65,7 @@ nonisolated extension [Writing] {
     let before = self[index]
     guard
       edited.title != before.title || edited.body != before.body || edited.links != before.links
+        || edited.photos != before.photos
     else { return nil }
     edited.updated = now
     self[index] = edited

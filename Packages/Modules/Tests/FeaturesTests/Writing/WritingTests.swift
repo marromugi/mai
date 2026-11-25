@@ -32,6 +32,9 @@ struct WritingTests {
         BodyLink(range: 0..<6, url: bread), BodyLink(range: 7..<10, url: flour),
       ],
       updated: Date(timeIntervalSinceReferenceDate: 0)),
+    Writing(
+      title: "写真", body: "二枚撮った", photos: [UUID(), UUID()],
+      updated: Date(timeIntervalSinceReferenceDate: 0)),
   ])
   func aSavedWritingIsReadBackByTheNextLaunch(_ writing: Writing) throws {
     try withEmptyStore { store throws in
@@ -41,7 +44,7 @@ struct WritingTests {
     }
   }
 
-  /// A file saved before links were kept reads as a writing with none.
+  /// A file saved before links and photos were kept reads as a writing with none.
   @Test func aWritingSavedWithoutLinksHasNone() throws {
     try withEmptyStore { store throws in
       let id = try #require(UUID(uuidString: "6F0C9A1E-0D8B-4C49-9E35-2B7E0A1D5C11"))
@@ -251,6 +254,17 @@ struct WritingTests {
         $0.links = [BodyLink(range: 0..<3, url: flour)]
       })
     #expect(edited.links == [BodyLink(range: 0..<3, url: flour)])
+    #expect(edited.updated == Date(timeIntervalSince1970: 2))
+  }
+
+  @Test func anEditThatOnlyAddsAPhotoChangesTheWriting() throws {
+    let writing = Writing(title: "朝", body: "粉の店", updated: Date(timeIntervalSince1970: 1))
+    var writings = [writing]
+    let edited = try #require(
+      writings.edit(writing.id, at: Date(timeIntervalSince1970: 2)) {
+        $0.photos.append(UUID(sample: 1))
+      })
+    #expect(edited.photos == [UUID(sample: 1)])
     #expect(edited.updated == Date(timeIntervalSince1970: 2))
   }
 
