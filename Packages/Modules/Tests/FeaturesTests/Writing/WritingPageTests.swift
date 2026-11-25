@@ -94,6 +94,29 @@ struct WritingPageTests {
     assertHeader("ものすごく長すぎて入りきらない名前ですよものすごく長すぎて", .light)
   }
 
+  /// The camera and 「組版を調整」 side by side on the leading margin.
+  @Test func bottomRow() {
+    assertBottomRow(keyboardShown: false, .light)
+  }
+
+  @Test func bottomRowInDarkMode() {
+    assertBottomRow(keyboardShown: false, .dark)
+  }
+
+  /// While the keyboard is up, the button that closes it on the trailing margin.
+  @Test func bottomRowWithTheKeyboard() {
+    assertBottomRow(keyboardShown: true, .light)
+  }
+
+  @Test func bottomRowWithTheKeyboardInDarkMode() {
+    assertBottomRow(keyboardShown: true, .dark)
+  }
+
+  /// At the largest size 「組版を調整」 shrinks to stay on one line, and the row fits the screen.
+  @Test func bottomRowWithTheKeyboardAtTheLargestSize() {
+    assertBottomRow(keyboardShown: true, .light, .accessibility5)
+  }
+
   /// The shrunk page set from the writing's body setting.
   @Test func typesettingModeWithABodySetting() throws {
     let setting = try #require(BodySetting(base: 20, lineHeight: 40, tracking: 50))
@@ -147,6 +170,33 @@ private func assertHeader(
     .frame(width: 402, height: 200, alignment: .top)
     .clipped()
     .background(Color(.systemBackground))
+    .dynamicTypeSize(size)
+    .environment(\.colorScheme, colorScheme),
+    as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
+    fileID: fileID,
+    file: file,
+    testName: testName,
+    line: line,
+    column: column)
+}
+
+/// The bottom row across a 402-wide screen.
+private func assertBottomRow(
+  keyboardShown: Bool,
+  _ colorScheme: ColorScheme,
+  _ size: DynamicTypeSize = .large,
+  fileID: StaticString = #fileID,
+  file: StaticString = #filePath,
+  testName: String = #function,
+  line: UInt = #line,
+  column: UInt = #column
+) {
+  assertSnapshot(
+    of: BottomRow(
+      width: 402, cameraAvailable: true, keyboardShown: keyboardShown, takePhoto: {},
+      adjustTypesetting: {}, closeKeyboard: {}
+    )
+    .frame(width: 402)
     .dynamicTypeSize(size)
     .environment(\.colorScheme, colorScheme),
     as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),

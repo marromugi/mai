@@ -44,6 +44,19 @@ struct WritingModeTests {
     #expect(scrollView.convert(CGPoint.zero, to: nil).y == before)
   }
 
+  /// The button that closes the keyboard shows while the keyboard is up, and goes with it.
+  @Test func theKeyboardButtonFollowsTheKeyboard() {
+    let page = HostedPage(screen(typesetting: false))
+    let without = page.image().pngData()
+    NotificationCenter.default.post(name: UIResponder.keyboardWillShowNotification, object: nil)
+    page.settle()
+    assertSnapshot(
+      of: page.image(), as: .image(precision: 1, perceptualPrecision: 0.995), named: "shown")
+    NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil)
+    page.settle()
+    #expect(page.image().pngData() == without)
+  }
+
   /// At the top the title is on the page and no header shows; scrolled to the end, the header
   /// stands in for it.
   @Test(arguments: [false, true])

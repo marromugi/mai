@@ -46,6 +46,7 @@ struct WritingScreen: View {
   let camera: Camera
   let photoTaken: (UIImage) -> Void
   @State private var titleCutOff: CGFloat = 0
+  @State private var keyboardShown = false
   /// Found once per body and set of others, not at every update: the scroll updates the screen
   /// each frame. While the body changes, found once it rests for `FoundMentions.rest`.
   @State private var found: FoundMentions?
@@ -109,11 +110,13 @@ struct WritingScreen: View {
         // scroll offset isn't clamped. The bar lies over it.
         let row = BottomRow(
           width: proxy.size.width, cameraAvailable: camera.isAvailable,
+          keyboardShown: keyboardShown,
           takePhoto: { takingPhoto = true },
           adjustTypesetting: {
             closeKeyboard()
             withAnimation { typesetting = true }
-          })
+          },
+          closeKeyboard: closeKeyboard)
         Group {
           if typesetting {
             row.hidden()
@@ -131,6 +134,8 @@ struct WritingScreen: View {
       }
     }
     .background(Color(.secondarySystemBackground), ignoresSafeAreaEdges: .all)
+    .onReceive(keyboard(UIResponder.keyboardWillShowNotification)) { _ in keyboardShown = true }
+    .onReceive(keyboard(UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
     .fullScreenCover(isPresented: $takingPhoto) {
       camera.screen(
         { photo in
@@ -141,6 +146,10 @@ struct WritingScreen: View {
     }
     .environment(\.bodySetting, setting)
     .toolbar(.hidden, for: .navigationBar)
+  }
+
+  private func keyboard(_ name: Notification.Name) -> NotificationCenter.Publisher {
+    NotificationCenter.default.publisher(for: name)
   }
 
   private func closeKeyboard() {
@@ -155,34 +164,47 @@ struct WritingScreen: View {
   }
 }
 
-/// The camera at the bottom leading corner and the underlined 「組版を調整」 at the trailing one,
-/// both on the type area's margins. The camera is dimmed where there is none.
-private struct BottomRow: View {
+/// The camera on the leading margin with the underlined 「組版を調整」 beside it, and, while
+/// `keyboardShown`, a button on the trailing margin that closes the keyboard. The camera is dimmed
+/// where there is none.
+struct BottomRow: View {
   let width: CGFloat
   let cameraAvailable: Bool
+  let keyboardShown: Bool
   let takePhoto: () -> Void
   let adjustTypesetting: () -> Void
+  let closeKeyboard: () -> Void
   @EnvironmentTypeScale private var scale
 
   var body: some View {
     let margin = scale.typeArea(width: width).margin
-    HStack(spacing: 0) {
+    // The 44-point tap areas centred on the margin lines, as the header's chevron is, unless that
+    // would push them past the screen's edge.
+    let edge = max(0, margin - TextButtonStyle.minimumSide / 2)
+    HStack(spacing: scale.space(.s)) {
       Button(action: takePhoto) {
         Image(systemName: "camera")
       }
       .buttonStyle(.text)
       .disabled(!cameraAvailable)
       .accessibilityLabel("写真を撮る")
-      // Its 44-point tap area centred on the margin line, as the header's chevron is, unless that
-      // would push it past the screen's edge.
-      .padding(.leading, max(0, margin - TextButtonStyle.minimumSide / 2))
-      Spacer(minLength: 0)
+      .padding(.leading, edge)
       Button(action: adjustTypesetting) {
         ButtonLabel("組版を調整")
       }
       .buttonStyle(.text)
       .underline()
-      .padding(.trailing, margin)
+      .lineLimit(1)
+      .minimumScaleFactor(0.5)
+      Spacer(minLength: 0)
+      if keyboardShown {
+        Button(action: closeKeyboard) {
+          Image(systemName: "keyboard.chevron.compact.down")
+        }
+        .buttonStyle(.text)
+        .accessibilityLabel("キーボードを閉じる")
+        .padding(.trailing, edge)
+      }
     }
     .background(Color(.systemBackground))
   }
