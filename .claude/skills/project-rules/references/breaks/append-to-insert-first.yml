@@ -2,4 +2,4 @@ id: append-to-insert-first
 language: Swift
 rule:
   pattern: $XS.append($X)
-fix: $XS.insert($X, at: 0)
+fix: "$XS.insert($X, at: 0)"
