@@ -80,6 +80,11 @@ struct LibraryBenchmark {
         settle(page, for: 0.3)
       }
       #expect(editor.text.hasSuffix("いいい"))
+      let container = try #require(editor.editor)
+      let kept = try #require(container.paragraphs?.total)
+      container.paragraphs = nil
+      let inset = editor.textContainerInset.top + editor.textContainerInset.bottom
+      #expect(abs(container.textHeight(within: editor.frame.width) - kept - inset) < 0.01)
     }
   }
 
