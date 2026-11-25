@@ -1281,14 +1281,12 @@ struct EditorHeightTests {
       editor.selectedRange = NSRange(location: min(range.location, ends()), length: range.length)
       type(text, into: editor)
       page.settle()
-      let kept = try #require(container.paragraphs)
-      fputs("KEPT \(kept.starts) \(kept.heights) \(kept.length)\n", stderr)
-      let heights = container.textHeight(within: editor.frame.width)
+      let wholeLayouts = container.wholeLayouts
+      let kept = container.textHeight(within: editor.frame.width)
+      // Only the paragraphs the edit touched were laid out again.
+      #expect(container.wholeLayouts == wholeLayouts)
       container.paragraphs = nil
-      #expect(abs(container.textHeight(within: editor.frame.width) - heights) < 0.01)
-      fputs(
-        "FULL \(container.paragraphs?.starts ?? []) \(container.paragraphs?.heights ?? [])\n",
-        stderr)
+      #expect(abs(container.textHeight(within: editor.frame.width) - kept) < 0.01)
     }
   }
 }

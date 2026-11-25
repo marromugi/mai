@@ -65,16 +65,14 @@ import Observation
     let before = saving
     let ids = edited
     edited = []
-    let unsavedWritings =
-      if case .success(let all) = writings { all.filter { ids.contains($0.id) } } else {
-        [Writing]()
-      }
     let store = store
     let save = Task {
       await before?.value
-      guard !unsavedWritings.isEmpty else { return }
-      let saved = await Self.save(unsavedWritings, to: store)
-      switch saved {
+      // Read now, not when the save was asked for: what a sync took in meanwhile is saved.
+      guard case .success(let all) = writings else { return }
+      let toSave = all.filter { ids.contains($0.id) }
+      guard !toSave.isEmpty else { return }
+      switch await Self.save(toSave, to: store) {
       case .success(let rows):
         replace(rows)
       case .failure(let error):
@@ -84,6 +82,15 @@ import Observation
     }
     saving = save
     await save.value
+    if saving == save { saving = nil }
+  }
+
+  /// Returns once no save is running, those asked for while waiting included.
+  private func savesSettled() async {
+    while let running = saving {
+      await running.value
+      if saving == running { saving = nil }
+    }
   }
 
   /// Saves `writings` to `store` off the main actor and answers their rows.
@@ -113,10 +120,13 @@ import Observation
     }
   }
 
-  /// Saves `writing` from a sync in place of the one with its ID, after `copy`, the device's edit
+  /// Saves `writing` from a sync in place of the one with its ID, once the saves running land, after `copy`, the device's edit
   /// kept as a new writing, when there is one. Saves neither when the one with its ID changed
   /// since the sync read it: `seen` is its updated time then, nil when there was none.
-  func takeIn(_ writing: Writing, keeping copy: Writing? = nil, seen: Date?) throws {
+  func takeIn(_ writing: Writing, keeping copy: Writing? = nil, seen: Date?) async throws {
+    // After every save running, so none lands over what is taken in. Nothing waits between the
+    // check below and the writes.
+    await savesSettled()
     var all = try forSync()
     guard all.first(where: { $0.id == writing.id })?.updated == seen else {
       throw EditedDuringSync(id: writing.id)

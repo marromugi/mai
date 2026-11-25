@@ -90,6 +90,28 @@ struct WritingLibraryTests {
     #expect(try store.all().map(\.body) == ["本文と追記"])
   }
 
+  /// A writing a sync takes in while a save of the device's edit is still being written is saved
+  /// after it, so the store and the list hold what the sync took in.
+  @Test func aWritingTakenInDuringASaveIsSavedAfterIt() async throws {
+    let writing = Writing(title: "朝", body: "本文", updated: Date(timeIntervalSince1970: 1))
+    let store = CountingStore([writing], delay: 0.3)
+    let library = WritingLibrary(store: store, rest: .seconds(60))
+    library.load(seedingWhenEmpty: [])
+    library.edit(writing.id, at: Date(timeIntervalSince1970: 2)) { $0.body = "端末の追記" }
+    let saving = Task { await library.saveNow() }
+    // Once the save has started writing.
+    try await waitUntil { store.started > 0 }
+
+    let fromServer = Writing(
+      id: writing.id, title: "夜", body: "別の端末の本文", updated: Date(timeIntervalSince1970: 3))
+    try await library.takeIn(fromServer, seen: Date(timeIntervalSince1970: 2))
+    await saving.value
+    await library.saveNow()
+
+    #expect(try store.all() == [fromServer])
+    #expect(try library.rows?.get() == [WritingRow(fromServer)])
+  }
+
   /// The store is written off the main actor.
   @Test func savingIsOffTheMainThread() async throws {
     let writing = Writing(title: "朝", body: "本文")
@@ -122,14 +144,19 @@ private func waitUntil(_ done: () -> Bool) async throws {
 nonisolated private final class CountingStore: WritingStore {
   struct Refused: Error {}
 
-  private let state: Mutex<(kept: [Writing.ID: Writing], onMain: [Bool], refusing: Bool)>
+  private let state:
+    Mutex<(kept: [Writing.ID: Writing], onMain: [Bool], refusing: Bool, started: Int)>
+  /// How long each save takes before it writes, in seconds.
+  private let delay: TimeInterval
 
-  init(_ writings: [Writing], refusing: Bool = false) {
+  init(_ writings: [Writing], refusing: Bool = false, delay: TimeInterval = 0) {
     state = Mutex(
-      (Dictionary(uniqueKeysWithValues: writings.map { ($0.id, $0) }), [], refusing))
+      (Dictionary(uniqueKeysWithValues: writings.map { ($0.id, $0) }), [], refusing, 0))
+    self.delay = delay
   }
 
   var saves: Int { state.withLock { $0.onMain.count } }
+  var started: Int { state.withLock { $0.started } }
   var savedOnMain: [Bool] { state.withLock { $0.onMain } }
 
   var refusing: Bool {
@@ -142,6 +169,8 @@ nonisolated private final class CountingStore: WritingStore {
   }
 
   func save(_ writing: Writing) throws {
+    state.withLock { $0.started += 1 }
+    Thread.sleep(forTimeInterval: delay)
     try state.withLock {
       guard !$0.refusing else { throw Refused() }
       $0.onMain.append(Thread.isMainThread)

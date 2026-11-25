@@ -4,14 +4,14 @@ import Typesetting
 
 struct ParagraphHeightsTests {
   @Test func aTextEndingInALineBreakHasAnEmptyLastParagraph() {
-    let heights = ParagraphHeights(lineBreaks: lineBreaks(in: "ab\ncd\n"), length: 6)
+    let heights = typed("ab\ncd\n")
     #expect(heights.starts == [0, 3, 6])
     #expect(heights.total == nil)
     #expect(heights.unmeasured == [0..<6])
   }
 
   @Test func theTotalIsEveryParagraphsOnceEachIsMeasured() {
-    var heights = ParagraphHeights(lineBreaks: lineBreaks(in: "ab\ncd"), length: 5)
+    var heights = typed("ab\ncd")
     heights.measured(20, startingAt: 0)
     #expect(heights.total == nil)
     #expect(heights.unmeasured == [3..<5])
@@ -87,6 +87,13 @@ struct ParagraphHeightsTests {
       #expect(heights.total != nil)
     }
   }
+}
+
+/// `text` put into an empty text, its paragraphs not yet measured.
+private func typed(_ text: String) -> ParagraphHeights {
+  var heights = ParagraphHeights(starts: [0], heights: [0], length: 0)
+  heights.replace(0..<0, with: text.utf16.count) { lineBreaks(in: text, within: $0) }
+  return heights
 }
 
 /// `text`'s paragraphs, each as tall as its start.

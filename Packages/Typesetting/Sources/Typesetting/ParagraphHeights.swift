@@ -21,13 +21,6 @@ public struct ParagraphHeights: Equatable, Sendable {
     self.length = length
   }
 
-  /// The paragraphs of a text `length` long with line breaks at `lineBreaks`, none measured.
-  public init(lineBreaks: [Int], length: Int) {
-    starts = [0] + lineBreaks.map { $0 + 1 }
-    heights = Array(repeating: nil, count: starts.count)
-    self.length = length
-  }
-
   /// The text's height: every paragraph's, once each is measured.
   public var total: CGFloat? {
     var sum: CGFloat = 0

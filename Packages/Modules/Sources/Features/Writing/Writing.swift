@@ -138,7 +138,9 @@ nonisolated extension String {
     guard utf8.count == other.utf8.count else { return false }
     let compared = utf8.withContiguousStorageIfAvailable { bytes in
       other.utf8.withContiguousStorageIfAvailable { otherBytes in
-        bytes.count == 0 || memcmp(bytes.baseAddress, otherBytes.baseAddress, bytes.count) == 0
+        // The same bytes, as an unchanged text shares them, at once.
+        bytes.baseAddress == otherBytes.baseAddress || bytes.count == 0
+          || memcmp(bytes.baseAddress, otherBytes.baseAddress, bytes.count) == 0
       }
     }
     return (compared ?? nil) ?? utf8.elementsEqual(other.utf8)

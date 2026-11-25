@@ -87,9 +87,6 @@ public struct RootView: View {
       guard launchChecked else { return }
       Task { await sync?.syncNow() }
     }
-    .onChange(of: path) {
-      Task { await library.saveNow() }
-    }
     .sheet(isPresented: $showingSettings) {
       SettingsView(fonts: fonts)
         .environment(\.account, account)
@@ -162,6 +159,10 @@ private struct OpenWriting: View {
           setting: $setting,
           camera: .device,
           photoTaken: photoTaken)
+      }
+      // The page closing saves what was typed on it.
+      .onDisappear {
+        Task { await library.saveNow() }
       }
     }
   }

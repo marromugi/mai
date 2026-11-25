@@ -537,6 +537,8 @@ final class EditorView: UIView {
   var paragraphs: ParagraphHeights?
   /// Set while an edit changes attributes that leave every line's height as it was.
   var heightsKept = false
+  /// How many times the whole text has been laid out.
+  private(set) var wholeLayouts = 0
 
   override init(frame: CGRect) {
     super.init(frame: frame)
@@ -634,6 +636,7 @@ final class EditorView: UIView {
       content.offset(from: document.location, to: location)
     }
     guard var paragraphs else {
+      wholeLayouts += 1
       var starts: [Int] = []
       var heights: [CGFloat] = []
       layout.enumerateTextLayoutFragments(
