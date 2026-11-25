@@ -137,7 +137,7 @@ public enum SealingError: LocalizedError, Equatable {
     case .tooLarge(let count):
       "暗号化した文書が \(count) バイトになり、サーバーに置ける \(Layout.largest) バイトを超えました。"
     case .photoTooLarge(let count, let largest):
-      "暗号化した写真が \(count) バイトになり、サーバーに置ける \(largest) バイトを超えました。"
+      "暗号化した写真が \(count) バイトになり、サーバーに置ける \(largest) バイトを超えました。この写真のある文書は、ほかの端末に送れません。"
     }
   }
 }

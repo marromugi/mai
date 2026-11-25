@@ -201,16 +201,23 @@ public actor Synchronizer {
 
   /// Brings each photo `writing` points at that isn't known to be on the server to both sides:
   /// sent when the device has it, taken from the server when the device hasn't. A photo neither
-  /// side has yet is left for the next sync.
+  /// side has yet, or whose part the server is still taking (409 but not readable), is left for
+  /// the next sync.
   private func settlePhotos(
     of writing: PlainWriting, onServer: inout Set<UUID>, reporting report: inout SyncReport
   ) async throws {
     for id in writings.photos(of: writing) where !onServer.contains(id) {
       if let photo = try await photos.read(id) {
         let sealed = try ownKey.seal(photo)
+        var stored = true
         // The thumbnail first, as a device taking the photo in asks for it first.
-        _ = try await server.send(sealed.thumbnail)
-        _ = try await server.send(sealed.photo)
+        for part in [sealed.thumbnail, sealed.photo] {
+          guard try await server.send(part) == .alreadyThere else { continue }
+          // A 409 is also an upload the server holds but may yet release; only one it gives back
+          // is there.
+          if try await server.readPhoto(id, part.part) == nil { stored = false }
+        }
+        guard stored else { continue }
         report.photosSent.insert(id)
       } else {
         guard let thumbnail = try await server.readPhoto(id, .thumbnail),

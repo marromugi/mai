@@ -28,7 +28,7 @@ nonisolated struct PhotoStore: Sendable {
   }
 
   /// Writes `photo` and `thumbnail`, both JPEG, as the photo with `id`: there with both files, or
-  /// not at all.
+  /// not at all. A write of the same ID cut off before is cleared first.
   func write(photo: Data, thumbnail: Data, as id: UUID) throws(UnkeptPhoto) {
     let partial = directory.appending(
       path: ".\(id.uuidString).partial", directoryHint: .isDirectory)
@@ -36,6 +36,11 @@ nonisolated struct PhotoStore: Sendable {
     do {
       try FileManager.default.createDirectory(
         at: directory, withIntermediateDirectories: true, attributes: protection)
+      do {
+        try FileManager.default.removeItem(at: partial)
+      } catch CocoaError.fileNoSuchFile {
+        // None was cut off.
+      }
       try FileManager.default.createDirectory(
         at: partial, withIntermediateDirectories: false, attributes: protection)
     } catch {
@@ -90,11 +95,6 @@ nonisolated struct PhotoStore: Sendable {
     } catch CocoaError.fileReadNoSuchFile {
       return nil
     }
-  }
-
-  /// Whether the device has the photo with `id`.
-  func has(_ id: UUID) -> Bool {
-    FileManager.default.fileExists(atPath: folder(of: id).path(percentEncoded: false))
   }
 
   func folder(of id: UUID) -> URL {

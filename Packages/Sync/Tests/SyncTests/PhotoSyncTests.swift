@@ -130,6 +130,31 @@ struct PhotoSyncTests {
     #expect(report.photosSent == [photo.id])
   }
 
+  /// A 409 for a part the server can't give back is an upload it may still release (a Worker
+  /// stopped mid-upload): the photo is sent again at the next sync, and its writing isn't held.
+  @Test func aPhotoTheServerIsStillTakingIsSentAgainLater() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(
+      path: "mai-sync-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+    let writings = MemoryWritingStore()
+    let photos = MemoryPhotoStore()
+    let photo = photo()
+    try photos.keep(photo)
+    let written = writing(pointingAt: [photo.id])
+    try writings.save(written)
+    let synchronizer = { (transport: any HTTPTransport) in
+      Synchronizer(
+        writings: writings, photos: photos, stateFile: directory.appending(path: "state.json"),
+        server: server(transport: transport), ownKey: ownKey)
+    }
+
+    let held = try await synchronizer(RefusingPhotos(fake, status: 409, limit: nil)).sync()
+    #expect(held.sent == [written.id])
+    #expect(held.photosSent.isEmpty)
+
+    #expect(try await synchronizer(fake).sync().photosSent == [photo.id])
+    #expect(try await server().readPhoto(photo.id, .photo) != nil)
+  }
+
   /// A plan's photo limits (429) are the account's: the sync stops, and the writing isn't sent.
   @Test(arguments: [PlanLimit.photos, .photoStorage])
   func aPhotoRefusedForAPlansLimitStopsTheSync(_ limit: PlanLimit) async throws {
