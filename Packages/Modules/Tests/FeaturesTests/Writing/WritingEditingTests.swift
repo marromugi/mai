@@ -1338,3 +1338,142 @@ struct EditorHeightTests {
     #expect(abs(container.textHeight(within: narrower) - atNarrower) < 0.01)
   }
 }
+
+@MainActor
+struct CaretTests {
+  /// The caret is drawn in the text's own colour, which follows light and dark.
+  @Test func theCaretIsTheTextsColour() throws {
+    let page = HostedPage(screen(edits: Edits()))
+    let editor = try #require(editorView(in: page))
+    for style in [UIUserInterfaceStyle.light, .dark] {
+      let traits = UITraitCollection(userInterfaceStyle: style)
+      #expect(
+        editor.tintColor.resolvedColor(with: traits) == UIColor.label.resolvedColor(with: traits))
+    }
+  }
+
+  /// In the title and in the body, on a wrapped line and on an empty one, the caret runs from the
+  /// ascender to the descender of the line's type.
+  @Test func theCaretIsAsTallAsTheTypeOnItsLine() throws {
+    let wrapped = String(repeating: "長い行が折り返す。", count: 6)
+    let edits = Edits(writing: Writing(title: "朝Ag", body: "本文Ag\n\n" + wrapped))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let length = (editor.text as NSString).length
+    for offset in 0...length {
+      let caret = try caretRect(at: offset, in: editor)
+      let font = try font(offset < editor.bodyStart ? .heading : .body, in: editor)
+      #expect(abs(caret.height - (font.ascender - font.descender)) < 0.01, "\(offset)")
+    }
+    #expect(try caretRect(at: 3, in: editor).height > caretRect(at: 4, in: editor).height)
+  }
+
+  /// On every line of a wrapped title and a wrapped body, the caret stands on the line of a
+  /// character beside it: the one before it, or at a wrap, the one after.
+  @Test func theCaretIsOnTheLineOfACharacterBesideIt() throws {
+    let wrapped = String(repeating: "長い行が折り返す。", count: 6)
+    let edits = Edits(writing: Writing(title: wrapped, body: wrapped + "\n" + wrapped))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let text = editor.text as NSString
+    func character(at offset: Int) throws -> CGRect {
+      let start = try #require(editor.position(from: editor.beginningOfDocument, offset: offset))
+      let end = try #require(editor.position(from: start, offset: 1))
+      return editor.firstRect(for: try #require(editor.textRange(from: start, to: end)))
+    }
+    for offset in 1..<text.length where text.character(at: offset - 1) != 0x0A {
+      let caret = try caretRect(at: offset, in: editor)
+      let beside = [try character(at: offset - 1), try character(at: offset)]
+      #expect(beside.contains { $0.minY <= caret.midY && caret.midY <= $0.maxY }, "\(offset)")
+    }
+  }
+
+  /// Where no character is beside it — an empty writing, the line after a last line break — the
+  /// caret is where it is once a character is typed there.
+  @Test(arguments: [Writing(title: "", body: ""), Writing(title: "朝", body: "本文\n")])
+  func anEmptyLinesCaretStaysAsACharacterIsTyped(_ writing: Writing) throws {
+    let page = HostedPage(screen(edits: Edits(writing: writing)))
+    let editor = try focusedEditor(in: page)
+    let end = (editor.text as NSString).length
+    editor.selectedRange = NSRange(location: end, length: 0)
+    let empty = try caretRect(at: end, in: editor)
+    type("A", into: editor)
+    page.settle()
+    let typed = try caretRect(at: end, in: editor)
+    #expect(abs(empty.minY - typed.minY) < 0.01)
+    #expect(abs(empty.height - typed.height) < 0.01)
+  }
+
+  /// The line Return opens after the title, still empty, has its caret where the body's first
+  /// character goes.
+  @Test func theCaretAfterReturnAtTheTitlesEndStaysAsACharacterIsTyped() throws {
+    let page = HostedPage(screen(edits: Edits(writing: Writing(title: "朝", body: ""))))
+    let editor = try focusedEditor(in: page)
+    editor.selectedRange = NSRange(location: 1, length: 0)
+    type("\n", into: editor)
+    page.settle()
+    let empty = try caretRect(at: 2, in: editor)
+    type("本", into: editor)
+    page.settle()
+    let typed = try caretRect(at: 2, in: editor)
+    #expect(abs(empty.minY - typed.minY) < 0.01)
+    #expect(abs(empty.height - typed.height) < 0.01)
+    #expect(abs(empty.height - (try font(.body, in: editor)).lineHeightOfType) < 0.01)
+  }
+
+  /// A selection's handles are as tall as the caret at each of its ends; its highlight is UIKit's.
+  @Test(arguments: ["本文の一行目\n二行目", "مرحبا بالعالم\nسطر ثان"])
+  func theSelectionsEndsAreAsTallAsTheCaretThere(_ body: String) throws {
+    let edits = Edits(writing: Writing(title: "朝の机", body: body))
+    let page = HostedPage(screen(edits: edits))
+    let editor = try focusedEditor(in: page)
+    let start = try #require(editor.position(from: editor.beginningOfDocument, offset: 1))
+    let end = try #require(editor.position(from: editor.beginningOfDocument, offset: 8))
+    let range = try #require(editor.textRange(from: start, to: end))
+    let rects = editor.selectionRects(for: range)
+    let starts = rects.filter(\.containsStart)
+    let ends = rects.filter(\.containsEnd)
+    try #require(starts.count == 1 && ends.count == 1)
+    let startCaret = editor.caretRect(for: start)
+    let endCaret = editor.caretRect(for: end)
+    #expect(starts[0].rect.minY == startCaret.minY && starts[0].rect.height == startCaret.height)
+    #expect(ends[0].rect.minY == endCaret.minY && ends[0].rect.height == endCaret.height)
+    // UIKit centres the caret on the place between two characters.
+    for (end, caret) in [(starts[0], startCaret), (ends[0], endCaret)] {
+      #expect(abs(end.rect.minX - caret.midX) < 0.01 && end.rect.width == 0)
+    }
+    // As UIKit writes its own ends, right-to-left text included.
+    #expect(starts[0].writingDirection == .leftToRight)
+    #expect(ends[0].writingDirection == .leftToRight)
+    let highlight = rects.filter { !$0.containsStart && !$0.containsEnd }.map(\.rect)
+    #expect(try #require(highlight.map(\.minY).min()) < startCaret.minY)
+    #expect(try #require(highlight.map(\.maxY).max()) > endCaret.maxY)
+  }
+
+  /// An empty range is UIKit's: one place, holding both its ends.
+  @Test func anEmptyRangeIsUIKits() throws {
+    let page = HostedPage(screen(edits: Edits()))
+    let editor = try focusedEditor(in: page)
+    let place = try #require(editor.position(from: editor.beginningOfDocument, offset: 3))
+    let rects = editor.selectionRects(for: try #require(editor.textRange(from: place, to: place)))
+    #expect(rects.count == 1)
+    #expect(rects.allSatisfy { $0.containsStart && $0.containsEnd })
+  }
+}
+
+@MainActor
+private func caretRect(at offset: Int, in view: UITextView) throws -> CGRect {
+  view.caretRect(for: try #require(view.position(from: view.beginningOfDocument, offset: offset)))
+}
+
+extension UIFont {
+  /// From the ascender to the descender.
+  fileprivate var lineHeightOfType: CGFloat { ascender - descender }
+}
+
+@MainActor
+private func font(_ role: TextRole, in view: PlaceholderTextView) throws -> UIFont {
+  let lines = try #require(view.lines)
+  let attributes = role == .heading ? view.titleAttributes : lines.body
+  return try #require(attributes[.font] as? UIFont)
+}
