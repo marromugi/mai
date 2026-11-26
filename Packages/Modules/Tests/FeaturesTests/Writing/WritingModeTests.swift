@@ -11,8 +11,7 @@ struct WritingModeTests {
   @Test(arguments: [false, true])
   func scrollingStopsOnlyInTheMode(_ typesetting: Bool) throws {
     let page = HostedPage(screen(typesetting: typesetting))
-    // The page's own, not the editors', which never scroll.
-    let scrollViews = page.scrollViews.filter { !($0 is UITextView) }
+    let scrollViews = page.scrollViews
     try #require(!scrollViews.isEmpty)
     #expect(scrollViews.allSatisfy { $0.isScrollEnabled != typesetting })
   }
@@ -47,7 +46,7 @@ struct WritingModeTests {
   /// What the page keeps the caret and the text's end within stops above the bottom fade.
   @Test func thePageShowsItsTextAboveTheBottomFade() throws {
     let page = HostedPage(screen(typesetting: false))
-    let scrollView = try #require(page.scrollViews.first { !($0 is UITextView) })
+    let scrollView = try #require(page.scrollViews.first)
     // The fade lies on the page's bottom edge, at the bottom row's top.
     let above = scrollView.bounds.inset(by: scrollView.safeAreaInsets)
     let shown = scrollView.bounds.inset(by: scrollView.adjustedContentInset)

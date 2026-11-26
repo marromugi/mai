@@ -4,6 +4,7 @@ import Testing
 
 @testable import Features
 
+@MainActor
 struct WritingPhotoStackTests {
   @Test func aPhotoAfterTheBody() {
     assertPage([.portrait], .light)
@@ -40,15 +41,15 @@ struct WritingPhotoStackTests {
   @Test func theStackDrawsTheNewestThree() throws {
     let older: [UIImage] = [.landscape, .landscape]
     let newest: [UIImage] = [.portrait, .landscape, .dusk]
-    let all = try #require(pageImage((older + newest).map(PagePhoto.init))?.pngData())
-    #expect(all == pageImage(newest.map(PagePhoto.init))?.pngData())
+    let all = try #require(endOfPage((older + newest).map(PagePhoto.init)).pngData())
+    #expect(all == (try endOfPage(newest.map(PagePhoto.init)).pngData()))
   }
 
   /// Each print is the photo's thumbnail, not the photo itself.
   @Test func thePrintsAreTheThumbnails() throws {
     let thumbnailOnly = PagePhoto(id: UUID(), thumbnail: .portrait, photo: .landscape)
-    let drawn = try #require(pageImage([thumbnailOnly])?.pngData())
-    #expect(drawn == pageImage([PagePhoto(.portrait)])?.pngData())
+    let drawn = try #require(endOfPage([thumbnailOnly]).pngData())
+    #expect(drawn == (try endOfPage([PagePhoto(.portrait)]).pngData()))
   }
 
   /// The photos handed to the writing's view reach its page.
@@ -66,27 +67,34 @@ struct WritingPhotoStackTests {
   }
 }
 
-private func page(
-  _ photos: [PagePhoto], _ colorScheme: ColorScheme, _ size: DynamicTypeSize
-) -> some View {
-  WritingPage(
-    writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: photos, width: 402,
-    back: {}, titleCutOff: { _ in }
-  )
-  .fixedSize(horizontal: false, vertical: true)
-  .frame(width: 402)
-  .background(Color(.systemBackground))
-  .dynamicTypeSize(size)
-  .environment(\.colorScheme, colorScheme)
+/// The end of the page, where the photos are, on a 402 × 874 screen.
+@MainActor
+private func endOfPage(
+  _ photos: [PagePhoto], _ colorScheme: ColorScheme = .light, _ size: DynamicTypeSize = .large
+) throws -> UIImage {
+  let page = HostedPage(
+    WritingPage(
+      writing: Writing(title: "間合いの調整", body: Writing.sampleBody), photos: photos, width: 402,
+      back: {}, titleCutOff: { _ in }
+    )
+    .ignoresSafeArea(.container, edges: .top)
+    .background(Color(.systemBackground))
+    .dynamicTypeSize(size)
+    .environment(\.colorScheme, colorScheme))
+  let scroll = try #require(page.scrollViews.first)
+  // TextKit sets the text's height from the lines it has laid out: the end moves as it lays out
+  // the lines near it.
+  for _ in 0..<3 {
+    scroll.contentOffset.y = max(
+      -scroll.adjustedContentInset.top,
+      scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height)
+    page.settle()
+  }
+  return page.image()
 }
 
-private func pageImage(_ photos: [PagePhoto]) -> UIImage? {
-  let renderer = ImageRenderer(content: page(photos, .light, .large))
-  renderer.scale = 1
-  return renderer.uiImage
-}
-
-/// The whole page, 402 wide, as tall as its content.
+/// The end of the page, where the photos are, on a 402 × 874 screen.
+@MainActor
 private func assertPage(
   _ photos: [UIImage],
   _ colorScheme: ColorScheme,
@@ -97,12 +105,16 @@ private func assertPage(
   line: UInt = #line,
   column: UInt = #column
 ) {
-  assertSnapshot(
-    of: page(photos.map(PagePhoto.init), colorScheme, size),
-    as: .image(precision: 1, perceptualPrecision: 0.995, layout: .sizeThatFits),
-    fileID: fileID,
-    file: file,
-    testName: testName,
-    line: line,
-    column: column)
+  do {
+    assertSnapshot(
+      of: try endOfPage(photos.map(PagePhoto.init), colorScheme, size),
+      as: .image(precision: 1, perceptualPrecision: 0.995),
+      fileID: fileID,
+      file: file,
+      testName: testName,
+      line: line,
+      column: column)
+  } catch {
+    Issue.record(error)
+  }
 }

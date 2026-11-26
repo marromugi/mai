@@ -51,14 +51,17 @@ struct WritingScreen: View {
   /// each frame. While the body changes, found once it rests for `FoundMentions.rest`.
   @State private var found: FoundMentions?
   @Environment(\.dismiss) private var dismiss
+  @EnvironmentTypeScale private var scale
 
   var body: some View {
     GeometryReader { proxy in
-      ScrollView {
-        WritingPage(
-          writing: writing, found: found, edit: edit, photos: photos,
-          width: proxy.size.width, back: { dismiss() }, titleCutOff: { titleCutOff = $0 })
-      }
+      WritingPage(
+        writing: writing, found: found, edit: edit, photos: photos,
+        width: proxy.size.width, scrolls: !typesetting, bottomMargin: EdgeFade.height(scale),
+        back: { dismiss() }, titleCutOff: { titleCutOff = $0 }
+      )
+      // Scrolls under the status bar, as the page's insets let it.
+      .ignoresSafeArea(.container, edges: .top)
       .environment(\.openURL, .opening(found?.mentions ?? [], with: open))
       .task(id: MentionSource(body: writing.body, others: others)) {
         if found != nil {
@@ -70,9 +73,11 @@ struct WritingScreen: View {
         }
         found = FoundMentions(body: writing.body, mentions: writing.body.titleMentions(of: others))
       }
-      .scrollDisabled(typesetting)
-      .scrollDismissesKeyboard(.interactively)
-      .modifier(BottomEdgeFade(shown: !typesetting))
+      .overlay(alignment: .bottom) {
+        if !typesetting {
+          EdgeFade(edge: .bottom)
+        }
+      }
       .clipShape(pageShape)
       .background {
         pageShape
@@ -211,23 +216,36 @@ struct BottomRow: View {
   }
 }
 
-/// The page laid out across a screen `width` wide: the back mark, then the title, the body with
-/// the mentions `found` in it linked, and the photos after its last paragraph, piled as one stack,
-/// on the type area. The title and body are one editor, and each change goes to `edit`.
-/// `titleCutOff` hears how much of the title has scrolled above the scroll view's top, from 0 to 1.
+/// The page laid out across a screen `width` wide, scrolling while `scrolls`: the back mark, then
+/// the title, the body with the mentions `found` in it linked, and the photos after its last
+/// paragraph, piled as one stack, on the type area, with `bottomMargin` left below them at the
+/// page's end. The title and body are one editor, and each change goes to `edit`. `titleCutOff`
+/// hears how much of the title has scrolled above the page's top, from 0 to 1.
 struct WritingPage: View {
   let writing: Writing
   var found: FoundMentions?
   var edit: (_ change: (inout Writing) -> Void) -> Void = { _ in }
   let photos: [PagePhoto]
   let width: CGFloat
+  var scrolls = true
+  var bottomMargin: CGFloat = 0
   let back: () -> Void
   let titleCutOff: (CGFloat) -> Void
   @EnvironmentTypeScale private var scale
 
   var body: some View {
     let area = scale.typeArea(width: width)
-    VStack(alignment: .leading, spacing: 0) {
+    let text = WritingText(title: writing.title, body: writing.body, links: writing.links)
+    WritingEditor(
+      writing: text, found: found, scrolls: scrolls, bottomMargin: bottomMargin,
+      titleCutOff: titleCutOff
+    ) { text in
+      edit {
+        $0.title = text.title
+        $0.body = text.body
+        $0.links = text.links
+      }
+    } top: {
       let markWidth = 15 * scale.scale
       Button(action: back) {
         BackMark()
@@ -240,34 +258,14 @@ struct WritingPage: View {
       // Centred on the margin line, unless that would push it past the screen's edge.
       .padding(.leading, max(0, area.margin - max(markWidth, TextButtonStyle.minimumSide) / 2))
       .padding(.bottom, scale.space(.l))
-      VStack(alignment: .leading, spacing: 0) {
-        let text = WritingText(title: writing.title, body: writing.body, links: writing.links)
-        WritingEditor(writing: text, found: found) { text in
-          edit {
-            $0.title = text.title
-            $0.body = text.body
-            $0.links = text.links
-          }
-        }
-        .background(alignment: .topLeading) {
-          // The title's lines as the editor sets them, to measure how far they have scrolled off.
-          Text(verbatim: text.title.isEmpty ? "タイトル" : text.title)
-            .textStyle(.heading)
-            .hidden()
-            .accessibilityHidden(true)
-            .onGeometryChange(for: CGFloat.self) {
-              let frame = $0.frame(in: .scrollView)
-              guard frame.height > 0 else { return 0 }
-              return min(max(-frame.minY / frame.height, 0), 1)
-            } action: {
-              titleCutOff($0)
-            }
-        }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    } bottom: {
+      VStack(spacing: 0) {
         if !photos.isEmpty {
           PhotoStack(photos: photos, lineLength: area.lineLength)
         }
       }
-      .frame(width: area.lineLength, alignment: .leading)
+      .frame(width: area.lineLength)
       .padding(.horizontal, area.margin)
       .padding(.bottom, scale.space(.xl))
     }
@@ -351,23 +349,6 @@ struct EdgeFade: View {
 
   static func height(_ scale: TypeScale) -> CGFloat {
     scale.space(.l)
-  }
-}
-
-/// An `EdgeFade` over the scroll view's bottom edge while `shown`, with a content margin as tall
-/// either way, so the end of the content and the caret stop above it and the scroll offset holds.
-private struct BottomEdgeFade: ViewModifier {
-  let shown: Bool
-  @EnvironmentTypeScale private var scale
-
-  func body(content: Content) -> some View {
-    content
-      .contentMargins(.bottom, EdgeFade.height(scale), for: .scrollContent)
-      .overlay(alignment: .bottom) {
-        if shown {
-          EdgeFade(edge: .bottom)
-        }
-      }
   }
 }
 

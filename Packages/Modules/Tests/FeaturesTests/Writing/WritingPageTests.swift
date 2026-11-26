@@ -5,6 +5,7 @@ import Typesetting
 
 @testable import Features
 
+@MainActor
 struct WritingPageTests {
   @Test func page() {
     assertPage(.large, .light)
@@ -43,8 +44,8 @@ struct WritingPageTests {
   }
 
   @Test(arguments: [DynamicTypeSize.large, .accessibility5])
-  func untitledPageKeepsTheTitleLine(_ size: DynamicTypeSize) {
-    #expect(pageHeight(title: "", size: size) == pageHeight(title: "朝", size: size))
+  func untitledPageKeepsTheTitleLine(_ size: DynamicTypeSize) throws {
+    #expect(try pageHeight(title: "", size: size) == pageHeight(title: "朝", size: size))
   }
 
   /// A larger base, a looser line height, and wider tracking from the environment.
@@ -147,14 +148,16 @@ private let pageWithALinkAndAMention = Writing(
     BodyLink(range: 3..<8, url: URL(string: "https://example.com/bread") ?? URL(filePath: "/"))
   ])
 
-private func pageHeight(title: String, size: DynamicTypeSize) -> CGFloat {
-  let page = WritingPage(
-    writing: Writing(title: title, body: "本文"), photos: [], width: 402, back: {},
-    titleCutOff: { _ in }
-  )
-  .dynamicTypeSize(size)
-  return UIHostingController(rootView: page)
-    .sizeThatFits(in: CGSize(width: 402, height: 8000)).height
+/// How tall the page's content is, 402 wide.
+@MainActor
+private func pageHeight(title: String, size: DynamicTypeSize) throws -> CGFloat {
+  let page = HostedPage(
+    WritingPage(
+      writing: Writing(title: title, body: "本文"), photos: [], width: 402, back: {},
+      titleCutOff: { _ in }
+    )
+    .dynamicTypeSize(size))
+  return try #require(page.scrollViews.first).contentSize.height
 }
 
 /// The header over the body it fades, at the top of a 402-wide screen.
