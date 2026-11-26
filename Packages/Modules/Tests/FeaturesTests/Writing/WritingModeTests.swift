@@ -22,8 +22,8 @@ struct WritingModeTests {
         edit: { _ in },
         photos: [],
         setting: .constant(.standard), camera: .standIn(taking: nil), photoTaken: { _ in }))
-    let scrollView = try #require(page.scrollViews.first)
-    #expect(scrollView.isScrollEnabled)
+    let editor = try #require(page.scrollViews.first as? PlaceholderTextView)
+    #expect(editor.takes(editor.panGestureRecognizer, at: .zero))
   }
 
   /// Scrolled to the page's end, entering and leaving the mode leaves the text where it was.

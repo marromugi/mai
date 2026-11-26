@@ -1324,6 +1324,47 @@ extension EditorViewTests {
     }
   }
 
+  /// Selecting all, or moving both ends of a selection, leaves the page where it is; moving one
+  /// end brings that end into sight.
+  @Test func aSelectionScrollsThePageToTheEndThatMoved() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try focusedEditor(in: page)
+    let scroll: UIScrollView = editor
+    let length = (editor.text as NSString).length
+    let shown = { scroll.bounds.inset(by: scroll.adjustedContentInset).insetBy(dx: 0, dy: -1) }
+    editor.selectedRange = NSRange(location: 3, length: 0)
+    page.settle()
+    let top = scroll.contentOffset.y
+    editor.selectAll(nil)
+    page.settle()
+    #expect(scroll.contentOffset.y == top)
+    // The start moved to the end: the start comes into sight.
+    editor.selectedRange = NSRange(location: length - 5, length: 5)
+    page.settle()
+    editor.selectedRange = NSRange(location: length / 2, length: length - length / 2)
+    page.settle()
+    let start = try #require(editor.position(from: editor.beginningOfDocument, offset: length / 2))
+    #expect(shown().contains(editor.caretRect(for: start)))
+  }
+
+  /// As the page gets shorter, as under the keyboard, a caret it would cover is brought clear.
+  @Test func aShorterPageKeepsTheCaretInSight() throws {
+    let edits = Edits(writing: long)
+    let page = HostedPage(screen(edits: edits).padding(.bottom, 0))
+    let editor = try focusedEditor(in: page)
+    let scroll: UIScrollView = editor
+    let shown = { scroll.bounds.inset(by: scroll.adjustedContentInset).insetBy(dx: 0, dy: -1) }
+    let low = CGPoint(x: editor.textContainerInset.left + 1, y: shown().maxY - 30)
+    let position = try #require(editor.closestPosition(to: low))
+    editor.selectedTextRange = editor.textRange(from: position, to: position)
+    page.settle()
+    page.show(screen(edits: edits).padding(.bottom, 320))
+    #expect(editorView(in: page) === editor)
+    let caret = editor.caretRect(for: editor.selectedTextRange?.end ?? position)
+    #expect(scroll.bounds.height < 600)
+    #expect(shown().contains(caret))
+  }
+
   /// Scrolled to its end, a writing of 100,000 characters shows its last line above the bottom of
   /// the page: what the page shows there is the text's end.
   @Test func aVeryLongWritingScrollsToItsEnd() throws {

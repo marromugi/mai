@@ -474,7 +474,6 @@ extension PlaceholderTextView {
     storage.enumerateAttribute(.mention, in: whole) { value, range, _ in
       if let url = value as? URL { marked[range] = url }
     }
-    guard marked != wanted else { return }
     storage.beginEditing()
     for (range, url) in marked where wanted[range] != url {
       storage.removeAttribute(.mention, range: range)
@@ -685,20 +684,37 @@ final class PlaceholderTextView: UITextView {
     return recognizer.view !== self || !hosted.contains { !$0.isHidden && $0.frame.contains(point) }
   }
 
+  /// Whether a drag scrolls the page. Not `isScrollEnabled`, which scrolls a text view to its top.
+  var scrolls = true
+
   /// Set while the editor sets the text's attributes itself: the caret stays where it is, and
   /// TextKit, laying out again, places it by an estimate until it has.
   var restyling = false
 
-  /// Whether a drag scrolls the page. Not `isScrollEnabled`, which scrolls a text view to its top.
-  var scrolls = true
+  /// The selection as `showTheCaret()` last saw it.
+  private var shownSelection: NSRange?
 
   /// Scrolls by as little as keeps the caret's line within what the page shows clear of its
-  /// insets, as the fade at its bottom: UIKit keeps it only within the text view's bounds.
+  /// insets, as the fade at its bottom: UIKit keeps it only within the text view's bounds. With a
+  /// selection, the end that moved; when both moved, as on Select All, the page stays.
   func showTheCaret() {
     guard isFirstResponder, !restyling, let range = selectedTextRange else { return }
+    let selection = selectedRange
+    let before = shownSelection
+    shownSelection = selection
+    let position: UITextPosition
+    if selection.length == 0 || before == nil {
+      position = range.end
+    } else if before?.location == selection.location {
+      position = range.end
+    } else if before.map(NSMaxRange) == NSMaxRange(selection) {
+      position = range.start
+    } else {
+      return
+    }
     // A caret far from what is laid out is placed by an estimate; laid out there, it moves.
     for _ in 0..<3 {
-      let caret = caretRect(for: range.end)
+      let caret = caretRect(for: position)
       let shown = bounds.inset(by: adjustedContentInset)
       var y = contentOffset.y
       if caret.maxY > shown.maxY {
@@ -706,8 +722,6 @@ final class PlaceholderTextView: UITextView {
       } else if caret.minY < shown.minY {
         y -= shown.minY - caret.minY
       }
-      let end = contentSize.height + adjustedContentInset.bottom - bounds.height
-      y = max(min(y, end), -adjustedContentInset.top)
       guard y != contentOffset.y else { return }
       contentOffset.y = y
       layoutIfNeeded()
