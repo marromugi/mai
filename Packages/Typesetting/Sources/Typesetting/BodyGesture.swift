@@ -2,11 +2,12 @@ import CoreGraphics
 
 /// One value of a body setting that a typesetting gesture or a settings stepper moves.
 public enum BodyAdjustment: CaseIterable, Sendable {
+  /// The base moves in half points.
   case base, lineHeight, tracking
 
   public var range: ClosedRange<Int> {
     switch self {
-    case .base: BodySetting.bases
+    case .base: BodySetting.baseHalfPoints
     case .lineHeight: BodySetting.lineHeights
     case .tracking: BodySetting.trackings
     }
@@ -26,7 +27,7 @@ public enum BodyAdjustment: CaseIterable, Sendable {
   /// How far the fingers move, in points, for one step.
   public var pointsPerStep: CGFloat {
     switch self {
-    case .base: 20
+    case .base: 10
     case .lineHeight: 32
     case .tracking: 10
     }
@@ -36,7 +37,7 @@ public enum BodyAdjustment: CaseIterable, Sendable {
 extension BodySetting {
   public subscript(adjustment: BodyAdjustment) -> Int {
     switch adjustment {
-    case .base: base
+    case .base: baseHalfPoints
     case .lineHeight: lineHeight
     case .tracking: tracking
     }
@@ -63,9 +64,11 @@ extension BodySetting {
       range.upperBound)
     let moved =
       switch adjustment {
-      case .base: BodySetting(base: value, lineHeight: lineHeight, tracking: tracking)
-      case .lineHeight: BodySetting(base: base, lineHeight: value, tracking: tracking)
-      case .tracking: BodySetting(base: base, lineHeight: lineHeight, tracking: value)
+      case .base: BodySetting(baseHalfPoints: value, lineHeight: lineHeight, tracking: tracking)
+      case .lineHeight:
+        BodySetting(baseHalfPoints: baseHalfPoints, lineHeight: value, tracking: tracking)
+      case .tracking:
+        BodySetting(baseHalfPoints: baseHalfPoints, lineHeight: lineHeight, tracking: value)
       }
     guard let moved else {
       preconditionFailure("\(adjustment) \(value) is off its step: the range's ends are on it.")
