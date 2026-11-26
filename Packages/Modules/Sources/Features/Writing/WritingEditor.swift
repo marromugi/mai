@@ -780,13 +780,10 @@ final class PlaceholderTextView: UITextView {
     editor.scroll(by: offset.y - contentOffset.y)
   }
 
-  /// In an editor, its own pan never starts, so a drag on the text scrolls the page. Not by turning
-  /// the pan off: UIKit turns it back on.
+  /// Its own pan never starts, so a drag on the text scrolls the page. Not by turning the pan off:
+  /// UIKit turns it back on.
   override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
-    guard recognizer === panGestureRecognizer, editor != nil else {
-      return super.gestureRecognizerShouldBegin(recognizer)
-    }
-    return false
+    recognizer === panGestureRecognizer ? false : super.gestureRecognizerShouldBegin(recognizer)
   }
 
   override func scrollRectToVisible(_ rect: CGRect, animated: Bool) {

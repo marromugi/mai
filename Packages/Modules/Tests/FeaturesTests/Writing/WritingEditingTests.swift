@@ -1281,18 +1281,21 @@ extension EditorViewTests {
   }
 
   /// A drag on the text is the page's, wherever the page is scrolled to and whether or not the text
-  /// has the caret: the text view's own pan doesn't start.
+  /// has the caret: the text view's own pan doesn't start, and its other gestures still do.
   @Test func aDragOnTheTextScrollsThePage() throws {
     let page = HostedPage(screen(edits: Edits(writing: long)))
     let editor = try #require(editorView(in: page))
     let scroll = try #require(page.scrollViews.first { !($0 is UITextView) })
+    let tap = UITapGestureRecognizer()
+    editor.addGestureRecognizer(tap)
+    defer { editor.removeGestureRecognizer(tap) }
     for focused in [false, true] {
       if focused { _ = try focusedEditor(in: page) }
       for y in [0, scroll.contentSize.height / 2, scroll.contentSize.height - scroll.bounds.height] {
         scroll.contentOffset.y = y
         page.settle()
         #expect(!editor.gestureRecognizerShouldBegin(editor.panGestureRecognizer))
-        #expect(scroll.gestureRecognizerShouldBegin(scroll.panGestureRecognizer))
+        #expect(editor.gestureRecognizerShouldBegin(tap))
       }
     }
   }
