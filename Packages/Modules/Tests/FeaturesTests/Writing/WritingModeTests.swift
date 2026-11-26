@@ -44,6 +44,16 @@ struct WritingModeTests {
     #expect(scrollView.convert(CGPoint.zero, to: nil).y == before)
   }
 
+  /// What the page keeps the caret and the text's end within stops above the bottom fade.
+  @Test func thePageShowsItsTextAboveTheBottomFade() throws {
+    let page = HostedPage(screen(typesetting: false))
+    let scrollView = try #require(page.scrollViews.first { !($0 is UITextView) })
+    // The fade lies on the page's bottom edge, at the bottom row's top.
+    let above = scrollView.bounds.inset(by: scrollView.safeAreaInsets)
+    let shown = scrollView.bounds.inset(by: scrollView.adjustedContentInset)
+    #expect(above.maxY - shown.maxY >= EdgeFade.height(TypeScale.standard))
+  }
+
   /// The button that closes the keyboard shows while the keyboard is up, and goes with it.
   @Test func theKeyboardButtonFollowsTheKeyboard() {
     let page = HostedPage(screen(typesetting: false))
