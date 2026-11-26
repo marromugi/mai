@@ -54,7 +54,7 @@ struct BodyGestureTests {
   }
 
   @Test(arguments: [
-    (BodyAdjustment.base, 10 as CGFloat, 33),
+    (BodyAdjustment.base, 20 as CGFloat, 33),
     (.lineHeight, 32, 32),
     (.tracking, 10, 10),
   ])
@@ -67,11 +67,10 @@ struct BodyGestureTests {
     #expect(run.setting[adjustment] == oneUp)
   }
 
-  /// From 12pt to 24pt takes about as far a drag as it did at 1pt a step: 12 steps of 20pt.
-  @Test func theBaseStepsHalfAPointAndSpansTheSameDrag() {
+  /// From 12pt to 24pt takes twice the drag it did at 1pt a step: 24 steps of 20pt.
+  @Test func theBaseStepsHalfAPointAndSpansTwiceTheDrag() {
     #expect(standard.moving(.base, by: 1).base == standard.base + 0.5)
-    #expect(
-      CGFloat(BodyAdjustment.base.steps) * BodyAdjustment.base.pointsPerStep == 12 * 20 as CGFloat)
+    #expect(CGFloat(BodyAdjustment.base.steps) * BodyAdjustment.base.pointsPerStep == 480)
   }
 
   @Test(arguments: BodyAdjustment.allCases)
@@ -231,12 +230,12 @@ struct BodyGestureTests {
   }
 
   @Test func aDragUpRaisesTheBaseFromWhereTheFingerTouchedDown() {
-    guard var drag = BodyDrag(translation: CGPoint(x: 0, y: -10), from: standard) else {
+    guard var drag = BodyDrag(translation: CGPoint(x: 0, y: -20), from: standard) else {
       Issue.record("A drag up starts no drag.")
       return
     }
     #expect(drag.setting.base == 16.5)
-    drag.move(translation: CGPoint(x: 80, y: 60))
+    drag.move(translation: CGPoint(x: 80, y: 120))
     #expect(drag.setting.base == 13)
   }
 

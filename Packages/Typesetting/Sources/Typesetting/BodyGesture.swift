@@ -27,7 +27,7 @@ public enum BodyAdjustment: CaseIterable, Sendable {
   /// How far the fingers move, in points, for one step.
   public var pointsPerStep: CGFloat {
     switch self {
-    case .base: 10
+    case .base: 20
     case .lineHeight: 32
     case .tracking: 10
     }
