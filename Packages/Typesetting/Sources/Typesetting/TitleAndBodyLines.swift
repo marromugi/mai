@@ -3,7 +3,7 @@ import CoreGraphics
 /// Where one text view moves a title line and the body lines `gap` below it, so each lands where
 /// its own `Text` would. Each line goes `titleOffset` or `bodyOffset` below where the text view
 /// would put it, and the text view sets lines on whole pixels of itself: so the body starts on one
-/// there and the view is moved by the rest of the body's offset, `viewOffset`; the title is moved
+/// there and the text is moved by the rest of the body's offset, `viewOffset`; the title is moved
 /// down from there by `titleInset`, within a pixel of its offset.
 public struct TitleAndBodyLines: Equatable, Sendable {
   public let titleOffset: CGFloat

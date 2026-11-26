@@ -1203,6 +1203,23 @@ private func typedRole(in view: UITextView) throws -> TextRole {
   return try role(ofSize: font.pointSize)
 }
 
+/// The body settings two views last saw.
+@MainActor
+private final class SeenSettings {
+  var top: BodySetting?
+  var bottom: BodySetting?
+}
+
+/// Hands the body setting it sees to `saw`.
+private struct SettingProbe: View {
+  let saw: (BodySetting) -> Void
+  @Environment(\.bodySetting) private var setting
+
+  var body: some View {
+    Color.clear.frame(height: 10).onAppear { saw(setting) }
+  }
+}
+
 /// What `titleCutOff` heard last.
 @MainActor
 private final class CutOff {
@@ -1236,6 +1253,8 @@ struct EditorViewTests {
     let editor = try #require(editorView(in: page))
     #expect(page.scrollViews.map { $0 as UIScrollView } == [editor])
     #expect(editor.isScrollEnabled)
+    #expect(editor.alwaysBounceVertical)
+    #expect(editor.keyboardDismissMode == .interactive)
     #expect(editor.bounds.width == 402)
     let above = try #require(editor.hosted.first)
     let below = try #require(editor.hosted.last)
@@ -1247,6 +1266,40 @@ struct EditorViewTests {
 }
 
 extension EditorViewTests {
+  /// A tap on the back mark is the back mark's: the text view's own gestures don't start over it,
+  /// but for its pan, so a drag there scrolls the page. Over the text they all start.
+  @Test func theTextViewsGesturesLeaveTheBackMarkAlone() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try #require(editorView(in: page))
+    let above = try #require(editor.hosted.first)
+    let tap = UITapGestureRecognizer()
+    editor.addGestureRecognizer(tap)
+    defer { editor.removeGestureRecognizer(tap) }
+    let onTheMark = CGPoint(x: above.frame.midX, y: above.frame.midY)
+    let onTheText = editor.caretRect(for: editor.endOfDocument).origin
+    #expect(!editor.takes(tap, at: onTheMark))
+    #expect(editor.takes(editor.panGestureRecognizer, at: onTheMark))
+    #expect(editor.takes(tap, at: onTheText))
+    above.isHidden = true
+    #expect(editor.takes(tap, at: onTheMark))
+  }
+
+  /// What is above and below the text is drawn with the page's environment: its type and body
+  /// setting, though a hosting controller of its own holds it.
+  @Test func whatIsAboveAndBelowTheTextHasThePagesEnvironment() throws {
+    let seen = SeenSettings()
+    let large = try #require(BodySetting(base: 24, lineHeight: 44, tracking: 200))
+    let page = HostedPage(
+      WritingEditor(
+        writing: WritingText(title: "朝", body: "本文", links: []), changed: { _ in },
+        top: { SettingProbe { seen.top = $0 } }, bottom: { SettingProbe { seen.bottom = $0 } }
+      )
+      .environment(\.bodySetting, large))
+    page.settle()
+    #expect(seen.top == large)
+    #expect(seen.bottom == large)
+  }
+
   /// Scrolled to its end, a writing of 100,000 characters shows its last line above the bottom of
   /// the page: what the page shows there is the text's end.
   @Test func aVeryLongWritingScrollsToItsEnd() throws {

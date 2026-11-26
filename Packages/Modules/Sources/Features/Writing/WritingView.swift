@@ -51,13 +51,12 @@ struct WritingScreen: View {
   /// each frame. While the body changes, found once it rests for `FoundMentions.rest`.
   @State private var found: FoundMentions?
   @Environment(\.dismiss) private var dismiss
-  @EnvironmentTypeScale private var scale
 
   var body: some View {
     GeometryReader { proxy in
       WritingPage(
         writing: writing, found: found, edit: edit, photos: photos,
-        width: proxy.size.width, scrolls: !typesetting, bottomMargin: EdgeFade.height(scale),
+        width: proxy.size.width, scrolls: !typesetting,
         back: { dismiss() }, titleCutOff: { titleCutOff = $0 }
       )
       // Scrolls under the status bar, as the page's insets let it.
@@ -218,8 +217,8 @@ struct BottomRow: View {
 
 /// The page laid out across a screen `width` wide, scrolling while `scrolls`: the back mark, then
 /// the title, the body with the mentions `found` in it linked, and the photos after its last
-/// paragraph, piled as one stack, on the type area, with `bottomMargin` left below them at the
-/// page's end. The title and body are one editor, and each change goes to `edit`. `titleCutOff`
+/// paragraph, piled as one stack, on the type area, with room for the bottom fade below them at the
+/// page's end, where the caret stops too. The title and body are one editor, and each change goes to `edit`. `titleCutOff`
 /// hears how much of the title has scrolled above the page's top, from 0 to 1.
 struct WritingPage: View {
   let writing: Writing
@@ -228,7 +227,6 @@ struct WritingPage: View {
   let photos: [PagePhoto]
   let width: CGFloat
   var scrolls = true
-  var bottomMargin: CGFloat = 0
   let back: () -> Void
   let titleCutOff: (CGFloat) -> Void
   @EnvironmentTypeScale private var scale
@@ -237,7 +235,7 @@ struct WritingPage: View {
     let area = scale.typeArea(width: width)
     let text = WritingText(title: writing.title, body: writing.body, links: writing.links)
     WritingEditor(
-      writing: text, found: found, scrolls: scrolls, bottomMargin: bottomMargin,
+      writing: text, found: found, scrolls: scrolls, bottomMargin: EdgeFade.height(scale),
       titleCutOff: titleCutOff
     ) { text in
       edit {
@@ -266,7 +264,6 @@ struct WritingPage: View {
         }
       }
       .frame(width: area.lineLength)
-      .padding(.horizontal, area.margin)
       .padding(.bottom, scale.space(.xl))
     }
   }

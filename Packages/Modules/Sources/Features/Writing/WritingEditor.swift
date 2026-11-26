@@ -655,28 +655,16 @@ final class PlaceholderTextView: UITextView {
     laidOut()
   }
 
-  /// The top of what the page shows, as its insets last had it.
-  private var shownTop: CGFloat?
-
-  /// A page resting at its top stays there as its insets change, as when the safe area arrives
-  /// after the page is first laid out.
-  override func adjustedContentInsetDidChange() {
-    let atTop = shownTop.map { contentOffset.y == -$0 } ?? true
-    super.adjustedContentInsetDidChange()
-    shownTop = adjustedContentInset.top
-    if atTop {
-      contentOffset.y = -adjustedContentInset.top
-    }
+  override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+    takes(recognizer, at: recognizer.location(in: self))
+      && super.gestureRecognizerShouldBegin(recognizer)
   }
 
-  /// Its own gestures, but for its pan, start nowhere over a hosted view: a tap there is the
-  /// view's, and doesn't put the caret in.
-  override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
-    if recognizer !== panGestureRecognizer, recognizer.view === self {
-      let point = recognizer.location(in: self)
-      if hosted.contains(where: { !$0.isHidden && $0.frame.contains(point) }) { return false }
-    }
-    return super.gestureRecognizerShouldBegin(recognizer)
+  /// Whether `recognizer` may start at `point`: its own gestures, but for its pan, start nowhere
+  /// over a hosted view, so a tap there is the view's and doesn't put the caret in.
+  func takes(_ recognizer: UIGestureRecognizer, at point: CGPoint) -> Bool {
+    recognizer === panGestureRecognizer || recognizer.view !== self
+      || !hosted.contains { !$0.isHidden && $0.frame.contains(point) }
   }
 
   /// The lines the text was last set in; nil until it is first set.
