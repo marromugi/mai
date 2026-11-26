@@ -6,12 +6,13 @@ import UIKit
 /// `top` above the text and `bottom` below it, across the page's width; while not `scrolls`, it
 /// stays where it is. `bottomMargin` is left below `bottom` at the page's end, and the caret is
 /// kept above it. `titleCutOff` hears how much of the title has scrolled above the page's top, from
-/// 0 to 1. The first line is the title, set as `textStyle(.heading)` sets it, with 「タイトル」 in
-/// the tertiary colour while it is empty; the lines after it are the body, set as `Text(body:)`
-/// sets it, `scale.space(.m)` below the title, as the page set them apart. Whatever the edit — a
-/// line deleted, a line break typed or taken out — the first line is the title. `changed` hears the
-/// title, body and links after each edit, except while text is being composed (marked) by an input
-/// method: it hears them once composing ends, or when the editor goes away mid-composition.
+/// 0 to 1, and `scroller` scrolls the page from outside it. The first line is the title, set as
+/// `textStyle(.heading)` sets it, with 「タイトル」 in the tertiary colour while it is empty; the
+/// lines after it are the body, set as `Text(body:)` sets it, `scale.space(.m)` below the title,
+/// as the page set them apart. Whatever the edit — a line deleted, a line break typed or taken out —
+/// the first line is the title. `changed` hears the title, body and links after each edit, except
+/// while text is being composed (marked) by an input method: it hears them once composing ends, or
+/// when the editor goes away mid-composition.
 ///
 /// The body's links are drawn as `Text(body:links:)` draws them; the title takes none. The mentions
 /// `found` in the body are drawn as `Text(body:mentions:)` draws them, those on a link left out. A
@@ -26,6 +27,7 @@ struct WritingEditor<Top: View, Bottom: View>: View {
   var scrolls = true
   var bottomMargin: CGFloat = 0
   var titleCutOff: (CGFloat) -> Void = { _ in }
+  var scroller: PageScroller?
   let changed: (WritingText) -> Void
   @ViewBuilder let top: Top
   @ViewBuilder let bottom: Bottom
@@ -42,7 +44,7 @@ struct WritingEditor<Top: View, Bottom: View>: View {
     WritingTextView(
       writing: writing, found: found, askTitle: { asking = $0 }, changed: changed,
       open: { openURL($0) }, lines: lines, scrolls: scrolls, bottomMargin: bottomMargin,
-      titleCutOff: titleCutOff, top: AnyView(top.environment(\.self, environment)),
+      titleCutOff: titleCutOff, scroller: scroller, top: AnyView(top.environment(\.self, environment)),
       bottom: AnyView(bottom.environment(\.self, environment))
     )
     .sheet(item: $asking) { request in
@@ -118,6 +120,7 @@ struct WritingTextView: UIViewControllerRepresentable {
   let scrolls: Bool
   let bottomMargin: CGFloat
   let titleCutOff: (CGFloat) -> Void
+  let scroller: PageScroller?
   let top: AnyView
   let bottom: AnyView
 
@@ -148,6 +151,7 @@ struct WritingTextView: UIViewControllerRepresentable {
     view.open = open
     page.show(top: top, bottom: bottom)
     page.titleCutOff = titleCutOff
+    scroller?.view = view
     page.bottomMargin = bottomMargin
     view.scrolls = scrolls
     // Never while composing: replacing the text ends the input method's composition.
@@ -536,6 +540,19 @@ extension UITextView {
       links.append(BodyLink(range: range.location..<range.location + range.length, url: url))
     }
     return links.fitted(to: text)
+  }
+}
+
+/// Scrolls the page of the `WritingEditor` it is given.
+final class PageScroller {
+  fileprivate weak var view: UIScrollView?
+
+  /// Scrolls the page to its top, with animation as a tap on the status bar does unless not
+  /// `animated`.
+  func scrollToTop(animated: Bool = true) {
+    guard let view else { return }
+    view.setContentOffset(
+      CGPoint(x: view.contentOffset.x, y: -view.adjustedContentInset.top), animated: animated)
   }
 }
 

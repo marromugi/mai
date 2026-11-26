@@ -177,7 +177,7 @@ private func assertHeader(
       Text(body: Writing.sampleBody)
         .textStyle(.body)
         .padding(.horizontal, margin)
-      WritingHeader(title: title, width: 402, close: {})
+      WritingHeader(title: title, width: 402, close: {}, toTop: {})
     }
     .frame(width: 402, height: 200, alignment: .top)
     .clipped()
