@@ -1401,6 +1401,8 @@ extension EditorViewTests {
     page.settle()
     #expect(cutOff.last == 1)
     let top = -scroll.adjustedContentInset.top
+    // Under the status bar's safe area, so the page's top isn't offset 0.
+    try #require(top < 0)
     // Without animation: the tests' window has no scene to run one.
     scroller.scrollToTop(animated: false)
     page.settle()
