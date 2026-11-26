@@ -71,6 +71,7 @@ struct WritingScreen: View {
       }
       .scrollDisabled(typesetting)
       .scrollDismissesKeyboard(.interactively)
+      .modifier(BottomEdgeFade(shown: !typesetting))
       .clipShape(pageShape)
       .background {
         pageShape
@@ -273,12 +274,7 @@ struct WritingHeader: View {
         max(0, scale.typeArea(width: width).margin - TextButtonStyle.minimumSide / 2)
       )
       .background(Color(.systemBackground), ignoresSafeAreaEdges: .top)
-      LinearGradient(
-        colors: [Color(.systemBackground), Color(.systemBackground).opacity(0)],
-        startPoint: .top, endPoint: .bottom
-      )
-      .frame(height: scale.space(.l))
-      .allowsHitTesting(false)
+      EdgeFade(edge: .top)
     }
   }
 
@@ -309,6 +305,43 @@ struct WritingHeader: View {
       .font(Font(scale.font(.title, in: families).withSize(size)))
       .lineLimit(1)
       .accessibilityAddTraits(.isHeader)
+  }
+}
+
+/// The page's background fading out away from `edge`, for the body to pass under at that edge of
+/// the screen. It takes no touches.
+struct EdgeFade: View {
+  let edge: VerticalEdge
+  @EnvironmentTypeScale private var scale
+
+  var body: some View {
+    LinearGradient(
+      colors: [Color(.systemBackground), Color(.systemBackground).opacity(0)],
+      startPoint: edge == .top ? .top : .bottom, endPoint: edge == .top ? .bottom : .top
+    )
+    .frame(height: Self.height(scale))
+    .allowsHitTesting(false)
+  }
+
+  static func height(_ scale: TypeScale) -> CGFloat {
+    scale.space(.l)
+  }
+}
+
+/// An `EdgeFade` over the scroll view's bottom edge while `shown`, with a content margin as tall
+/// either way, so the end of the content and the caret stop above it and the scroll offset holds.
+private struct BottomEdgeFade: ViewModifier {
+  let shown: Bool
+  @EnvironmentTypeScale private var scale
+
+  func body(content: Content) -> some View {
+    content
+      .contentMargins(.bottom, EdgeFade.height(scale), for: .scrollContent)
+      .overlay(alignment: .bottom) {
+        if shown {
+          EdgeFade(edge: .bottom)
+        }
+      }
   }
 }
 
