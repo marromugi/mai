@@ -544,8 +544,6 @@ final class EditorView: UIView {
 
   override init(frame: CGRect) {
     super.init(frame: frame)
-    // The page's scroll view takes the drags, and its own scrolling stays with the page's.
-    textView.panGestureRecognizer.isEnabled = false
     textView.scrollsToTop = false
     textView.showsVerticalScrollIndicator = false
     textView.showsHorizontalScrollIndicator = false
@@ -780,6 +778,15 @@ final class PlaceholderTextView: UITextView {
       return
     }
     editor.scroll(by: offset.y - contentOffset.y)
+  }
+
+  /// In an editor, its own pan never starts, so a drag on the text scrolls the page. Not by turning
+  /// the pan off: UIKit turns it back on.
+  override func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+    guard recognizer === panGestureRecognizer, editor != nil else {
+      return super.gestureRecognizerShouldBegin(recognizer)
+    }
+    return false
   }
 
   override func scrollRectToVisible(_ rect: CGRect, animated: Bool) {
