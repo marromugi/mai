@@ -11,9 +11,8 @@ struct WritingModeTests {
   @Test(arguments: [false, true])
   func scrollingStopsOnlyInTheMode(_ typesetting: Bool) throws {
     let page = HostedPage(screen(typesetting: typesetting))
-    let scrollViews = page.scrollViews
-    try #require(!scrollViews.isEmpty)
-    #expect(scrollViews.allSatisfy { $0.isScrollEnabled != typesetting })
+    let editor = try #require(page.scrollViews.first as? PlaceholderTextView)
+    #expect(editor.takes(editor.panGestureRecognizer, at: .zero) != typesetting)
   }
 
   @Test func aWritingOpensOutOfTheMode() throws {
@@ -39,6 +38,7 @@ struct WritingModeTests {
     scrollView.setContentOffset(CGPoint(x: 0, y: end), animated: false)
     let before = scrollView.convert(CGPoint.zero, to: nil).y
     page.show(screen(typesetting: true, setting: large))
+    #expect(scrollView.convert(CGPoint.zero, to: nil).y == before)
     page.show(screen(typesetting: false, setting: large))
     #expect(scrollView.convert(CGPoint.zero, to: nil).y == before)
   }

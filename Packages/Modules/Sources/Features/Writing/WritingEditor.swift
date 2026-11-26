@@ -149,9 +149,7 @@ struct WritingTextView: UIViewControllerRepresentable {
     page.show(top: top, bottom: bottom)
     page.titleCutOff = titleCutOff
     page.bottomMargin = bottomMargin
-    if view.isScrollEnabled != scrolls {
-      view.isScrollEnabled = scrolls
-    }
+    view.scrolls = scrolls
     // Never while composing: replacing the text ends the input method's composition.
     guard view.markedTextRange == nil else { return }
     restyle(view, context: context)
@@ -164,6 +162,8 @@ struct WritingTextView: UIViewControllerRepresentable {
   /// Sets the text and its links again, when they or the type have changed.
   private func restyle(_ view: PlaceholderTextView, context: Context) {
     guard view.lines != lines || view.writing != writing else { return }
+    view.restyling = true
+    defer { view.restyling = false }
     context.coordinator.found = nil
     view.lines = lines
     // For one line, until the page measures the title on the type area.
@@ -359,6 +359,7 @@ struct WritingTextView: UIViewControllerRepresentable {
 
     func textViewDidChangeSelection(_ view: UITextView) {
       guard let view = view as? PlaceholderTextView else { return }
+      view.showTheCaret()
       Self.typeInTheLinesRole(in: view)
     }
 
@@ -451,6 +452,8 @@ extension PlaceholderTextView {
   /// Marks the mentions `found` in the body, as `Text(body:mentions:)` draws them, in place of those
   /// marked before, leaving out any on a link. The body must be the one they were found in.
   func mark(_ found: FoundMentions) {
+    restyling = true
+    defer { restyling = false }
     let storage = textStorage
     let whole = NSRange(location: 0, length: storage.length)
     storage.beginEditing()
@@ -546,6 +549,8 @@ final class WritingPageController: UIViewController {
   /// The heights `top` and `bottom` take across `width`, once measured.
   private var measured: (width: CGFloat, top: CGFloat, bottom: CGFloat)?
   private var cutOff: CGFloat?
+  /// The text view's height at its last layout.
+  private var height: CGFloat = 0
 
   override func loadView() {
     view = textView
@@ -603,6 +608,11 @@ final class WritingPageController: UIViewController {
     if textView.contentInset.bottom != bottomMargin {
       textView.contentInset.bottom = bottomMargin
     }
+    if textView.bounds.height < height {
+      // Shorter, as under the keyboard.
+      textView.showTheCaret()
+    }
+    height = textView.bounds.height
     top.view.frame = CGRect(x: 0, y: 0, width: width, height: measured.top)
     bottom.view.frame = CGRect(
       x: 0, y: textView.contentSize.height - measured.bottom, width: width,
@@ -660,11 +670,40 @@ final class PlaceholderTextView: UITextView {
       && super.gestureRecognizerShouldBegin(recognizer)
   }
 
-  /// Whether `recognizer` may start at `point`: its own gestures, but for its pan, start nowhere
-  /// over a hosted view, so a tap there is the view's and doesn't put the caret in.
+  /// Whether `recognizer` may start at `point`: its pan while it `scrolls`, and its other gestures
+  /// nowhere over a hosted view, so a tap there is the view's and doesn't put the caret in.
   func takes(_ recognizer: UIGestureRecognizer, at point: CGPoint) -> Bool {
-    recognizer === panGestureRecognizer || recognizer.view !== self
-      || !hosted.contains { !$0.isHidden && $0.frame.contains(point) }
+    if recognizer === panGestureRecognizer { return scrolls }
+    return recognizer.view !== self || !hosted.contains { !$0.isHidden && $0.frame.contains(point) }
+  }
+
+  /// Set while the editor sets the text's attributes itself: the caret stays where it is, and
+  /// TextKit, laying out again, places it by an estimate until it has.
+  var restyling = false
+
+  /// Whether a drag scrolls the page. Not `isScrollEnabled`, which scrolls a text view to its top.
+  var scrolls = true
+
+  /// Scrolls by as little as keeps the caret's line within what the page shows clear of its
+  /// insets, as the fade at its bottom: UIKit keeps it only within the text view's bounds.
+  func showTheCaret() {
+    guard isFirstResponder, !restyling, let range = selectedTextRange else { return }
+    // A caret far from what is laid out is placed by an estimate; laid out there, it moves.
+    for _ in 0..<3 {
+      let caret = caretRect(for: range.end)
+      let shown = bounds.inset(by: adjustedContentInset)
+      var y = contentOffset.y
+      if caret.maxY > shown.maxY {
+        y += caret.maxY - shown.maxY
+      } else if caret.minY < shown.minY {
+        y -= shown.minY - caret.minY
+      }
+      let end = contentSize.height + adjustedContentInset.bottom - bounds.height
+      y = max(min(y, end), -adjustedContentInset.top)
+      guard y != contentOffset.y else { return }
+      contentOffset.y = y
+      layoutIfNeeded()
+    }
   }
 
   /// The lines the text was last set in; nil until it is first set.

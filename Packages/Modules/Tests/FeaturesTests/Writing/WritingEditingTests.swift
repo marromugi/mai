@@ -1300,6 +1300,30 @@ extension EditorViewTests {
     #expect(seen.bottom == large)
   }
 
+  /// The caret moved out of sight, or into the fade at the page's bottom, brings the page to it,
+  /// clear of the fade.
+  @Test func thePageFollowsTheCaretClearOfTheFade() throws {
+    let page = HostedPage(screen(edits: Edits(writing: long)))
+    let editor = try focusedEditor(in: page)
+    let scroll: UIScrollView = editor
+    // Within a pixel: the page's offset lands on one.
+    let shown = { scroll.bounds.inset(by: scroll.adjustedContentInset).insetBy(dx: 0, dy: -1) }
+    try #require(scroll.adjustedContentInset.bottom > 0)
+    // Into the fade: a line whose top is above where the page's clear part ends.
+    let inTheFade = CGPoint(x: editor.textContainerInset.left + 1, y: shown().maxY + 4)
+    let position = try #require(editor.closestPosition(to: inTheFade))
+    editor.selectedTextRange = editor.textRange(from: position, to: position)
+    page.settle()
+    let caret = { editor.caretRect(for: editor.selectedTextRange?.end ?? position) }
+    #expect(shown().contains(caret()))
+    // Far out of sight, both ways.
+    for location in [(editor.text as NSString).length, 0] {
+      editor.selectedRange = NSRange(location: location, length: 0)
+      page.settle()
+      #expect(shown().contains(caret()))
+    }
+  }
+
   /// Scrolled to its end, a writing of 100,000 characters shows its last line above the bottom of
   /// the page: what the page shows there is the text's end.
   @Test func aVeryLongWritingScrollsToItsEnd() throws {
