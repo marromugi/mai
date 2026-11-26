@@ -91,11 +91,12 @@ struct WritingScreen: View {
         if titleCutOff > 0 {
           WritingHeader(
             title: writing.title, width: proxy.size.width, close: { dismiss() },
-            toTop: { scroller.scrollToTop() })
-            .opacity(titleCutOff)
-            // Taken in only once whole, so a faint bar neither closes the page nor holds a drag.
-            .allowsHitTesting(titleCutOff == 1)
-            .accessibilityHidden(titleCutOff < 1)
+            toTop: { scroller.scrollToTop() }
+          )
+          .opacity(titleCutOff)
+          // Taken in only once whole, so a faint bar neither closes the page nor holds a drag.
+          .allowsHitTesting(titleCutOff == 1)
+          .accessibilityHidden(titleCutOff < 1)
         }
       }
       .accessibilityHidden(typesetting)

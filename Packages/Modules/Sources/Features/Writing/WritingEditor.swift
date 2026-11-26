@@ -44,7 +44,8 @@ struct WritingEditor<Top: View, Bottom: View>: View {
     WritingTextView(
       writing: writing, found: found, askTitle: { asking = $0 }, changed: changed,
       open: { openURL($0) }, lines: lines, scrolls: scrolls, bottomMargin: bottomMargin,
-      titleCutOff: titleCutOff, scroller: scroller, top: AnyView(top.environment(\.self, environment)),
+      titleCutOff: titleCutOff, scroller: scroller,
+      top: AnyView(top.environment(\.self, environment)),
       bottom: AnyView(bottom.environment(\.self, environment))
     )
     .sheet(item: $asking) { request in
