@@ -67,8 +67,8 @@ struct TextStyleTests {
   }
 
   /// Three lines of body characters fill three lines exactly, and one more character takes a fourth.
-  @Test(arguments: [(16, -50), (16, 0), (16, 100), (16, 200), (20, 200), (12, -50)])
-  func trackedBodyBreaksWhereTheTypeAreaSays(_ base: Int, _ tracking: Int) throws {
+  @Test(arguments: [(16, -50), (16, 0), (16, 100), (16, 200), (20, 200), (12, -50), (16.5, 0)])
+  func trackedBodyBreaksWhereTheTypeAreaSays(_ base: CGFloat, _ tracking: Int) throws {
     let body = try #require(BodySetting(base: base, lineHeight: 28, tracking: tracking))
     let scale = TypeScale(factor: 1, body: body)
     let area = scale.typeArea(width: 402)
@@ -86,7 +86,7 @@ struct TextStyleTests {
   /// Each line is full: n - 1 あ and ネ, then `first` and n - 1 あ. Where `first` can't start a line,
   /// ネ goes down with it and the text takes a third line.
   @Test(arguments: [(16, 0), (18, 100), (12, -50), (24, 200)])
-  func bodyLinesNeverStartWithWhatKinsokuForbids(_ base: Int, _ tracking: Int) throws {
+  func bodyLinesNeverStartWithWhatKinsokuForbids(_ base: CGFloat, _ tracking: Int) throws {
     let body = try #require(BodySetting(base: base, lineHeight: 28, tracking: tracking))
     let scale = TypeScale(factor: 1, body: body)
     let n = scale.typeArea(width: 402).columns

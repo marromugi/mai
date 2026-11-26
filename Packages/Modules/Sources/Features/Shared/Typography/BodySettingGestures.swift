@@ -185,7 +185,7 @@ struct BodySettingGesturesPreview: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("base \(setting.base)  行送り \(setting.lineHeight)  字間 \(setting.tracking)")
+      Text("base \(setting.base.formatted())  行送り \(setting.lineHeight)  字間 \(setting.tracking)")
         .textStyle(.meta)
       Text(body: "縦にピンチで行間、横にピンチで字間、上下にドラッグで文字の大きさが変わる。")
         .textStyle(.body)

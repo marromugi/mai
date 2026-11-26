@@ -20,7 +20,7 @@ public struct TypeScale: Equatable, Sendable {
   }
 
   /// What every length is multiplied by: the Dynamic Type factor times the body setting's base.
-  public var scale: CGFloat { factor * CGFloat(body.base) / 16 }
+  public var scale: CGFloat { factor * body.base / 16 }
 
   public func size(_ role: TextRole) -> CGFloat {
     Self.standardSize(role) * scale

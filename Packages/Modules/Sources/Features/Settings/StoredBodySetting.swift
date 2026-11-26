@@ -1,8 +1,9 @@
+import CoreGraphics
 internal import Typesetting
 
 /// The body setting a writing is set in until its own is adjusted, as `@AppStorage` keeps it under
-/// `key`: base, line height, and tracking, separated by spaces. A stored value that isn't a valid
-/// setting reads as nothing stored.
+/// `key`: base in points ("16" or "16.5"), line height, and tracking, separated by spaces. A stored
+/// value that isn't a valid setting, or isn't written that way, reads as nothing stored.
 struct StoredBodySetting: RawRepresentable, Equatable {
   static let key = "defaultBodySetting"
   /// What is read with nothing stored.
@@ -15,13 +16,19 @@ struct StoredBodySetting: RawRepresentable, Equatable {
   }
 
   init?(rawValue: String) {
-    let values = rawValue.split(separator: " ", omittingEmptySubsequences: false).map { Int($0) }
-    guard values.count == 3, let base = values[0], let lineHeight = values[1],
-      let tracking = values[2],
-      let setting = BodySetting(base: base, lineHeight: lineHeight, tracking: tracking)
+    let fields = rawValue.split(separator: " ", omittingEmptySubsequences: false)
+    guard fields.count == 3, let base = Double(fields[0]), let lineHeight = Int(fields[1]),
+      let tracking = Int(fields[2]),
+      let setting = BodySetting(base: CGFloat(base), lineHeight: lineHeight, tracking: tracking),
+      Self.text(base: setting) == fields[0]
     else { return nil }
     self.setting = setting
   }
 
-  var rawValue: String { "\(setting.base) \(setting.lineHeight) \(setting.tracking)" }
+  var rawValue: String { "\(Self.text(base: setting)) \(setting.lineHeight) \(setting.tracking)" }
+
+  private static func text(base setting: BodySetting) -> String {
+    let halfPoints = setting.baseHalfPoints
+    return halfPoints.isMultiple(of: 2) ? "\(halfPoints / 2)" : "\(halfPoints / 2).5"
+  }
 }

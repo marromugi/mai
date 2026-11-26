@@ -8,41 +8,50 @@ struct BodySettingTests {
     #expect((standard.base, standard.lineHeight, standard.tracking) == (16, 28, 0))
   }
 
-  @Test(arguments: [
-    (12, 16, -50),
-    (24, 44, 200),
-    (16, 28, 0),
-  ])
-  func acceptsValuesInRangeAndOnStep(_ base: Int, _ lineHeight: Int, _ tracking: Int) {
+  @Test(
+    arguments: [
+      (12, 16, -50),
+      (24, 44, 200),
+      (16, 28, 0),
+      (16.5, 28, 0),
+      (23.5, 28, 0),
+    ] as [(CGFloat, Int, Int)])
+  func acceptsValuesInRangeAndOnStep(_ base: CGFloat, _ lineHeight: Int, _ tracking: Int) {
     #expect(BodySetting(base: base, lineHeight: lineHeight, tracking: tracking) != nil)
   }
 
-  @Test(arguments: [
-    (11, 28, 0),
-    (25, 28, 0),
-    (16, 12, 0),
-    (16, 48, 0),
-    (16, 30, 0),
-    (16, 28, -60),
-    (16, 28, 210),
-    (16, 28, 15),
-  ])
-  func rejectsValuesOutOfRangeOrOffStep(_ base: Int, _ lineHeight: Int, _ tracking: Int) {
+  @Test(
+    arguments: [
+      (11, 28, 0),
+      (25, 28, 0),
+      (16, 12, 0),
+      (16, 48, 0),
+      (16, 30, 0),
+      (16, 28, -60),
+      (16, 28, 210),
+      (16, 28, 15),
+      (11.5, 28, 0),
+      (24.5, 28, 0),
+      (16.25, 28, 0),
+      (.nan, 28, 0),
+      (.infinity, 28, 0),
+    ] as [(CGFloat, Int, Int)])
+  func rejectsValuesOutOfRangeOrOffStep(_ base: CGFloat, _ lineHeight: Int, _ tracking: Int) {
     #expect(BodySetting(base: base, lineHeight: lineHeight, tracking: tracking) == nil)
   }
 
-  private func scale(base: Int = 16, lineHeight: Int = 28, tracking: Int = 0) -> TypeScale {
+  private func scale(base: CGFloat = 16, lineHeight: Int = 28, tracking: Int = 0) -> TypeScale {
     guard let body = BodySetting(base: base, lineHeight: lineHeight, tracking: tracking) else {
       preconditionFailure("The test's body setting is out of range.")
     }
     return TypeScale(factor: 1, body: body)
   }
 
-  @Test(arguments: [12, 20, 24])
-  func baseScalesEveryLengthTogether(_ base: Int) {
+  @Test(arguments: [12, 16.5, 20, 24] as [CGFloat])
+  func baseScalesEveryLengthTogether(_ base: CGFloat) {
     let scaled = scale(base: base)
     let standard = TypeScale.standard
-    let ratio = CGFloat(base) / 16
+    let ratio = base / 16
     var ratios: [CGFloat] = [scaled.ruleOverhang / standard.ruleOverhang]
     for role in TextRole.allCases {
       ratios.append(scaled.size(role) / standard.size(role))
@@ -52,6 +61,13 @@ struct BodySettingTests {
       ratios.append(scaled.space(spacing) / standard.space(spacing))
     }
     #expect(ratios.allSatisfy { abs($0 - ratio) < 0.000_001 })
+  }
+
+  @Test func baseIsReadInPointsAndStepsInHalfPoints() throws {
+    let body = try #require(BodySetting(base: 16.5, lineHeight: 28, tracking: 0))
+    #expect(body.base == 16.5)
+    #expect(body.baseHalfPoints == 33)
+    #expect(TypeScale(factor: 1, body: body).scale == 16.5 / 16)
   }
 
   @Test func baseMultipliesTheDynamicTypeFactor() {
