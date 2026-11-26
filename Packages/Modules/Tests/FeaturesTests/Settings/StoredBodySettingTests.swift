@@ -1,3 +1,4 @@
+import CoreGraphics
 import Testing
 import Typesetting
 
@@ -20,6 +21,12 @@ struct StoredBodySettingTests {
     #expect(StoredBodySetting(rawValue: "16.5 28 0")?.setting == half)
     #expect(StoredBodySetting(rawValue: "16 28 0")?.setting.base == 16)
     #expect(StoredBodySetting(rawValue: "24 44 200")?.setting.base == 24)
+  }
+
+  /// Every base an earlier version could write, in whole points.
+  @Test(arguments: 12...24)
+  func readsAWholePointBaseAsThatSize(_ points: Int) {
+    #expect(StoredBodySetting(rawValue: "\(points) 28 0")?.setting.base == CGFloat(points))
   }
 
   @Test(arguments: [
