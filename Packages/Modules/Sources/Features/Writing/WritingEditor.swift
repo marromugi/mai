@@ -456,15 +456,8 @@ extension PlaceholderTextView {
     defer { restyling = false }
     let storage = textStorage
     let whole = NSRange(location: 0, length: storage.length)
-    storage.beginEditing()
-    storage.enumerateAttribute(.mention, in: whole) { value, range, _ in
-      guard value != nil else { return }
-      storage.removeAttribute(.mention, range: range)
-      storage.enumerateAttribute(.bodyLink, in: range) { link, part, _ in
-        if link == nil { storage.removeAttribute(.underlineStyle, range: part) }
-      }
-    }
     let linked = textLinks.map { NSRange($0.range) }
+    var wanted: [NSRange: URL] = [:]
     for mention in found.mentions {
       // Converted in the body they were found in: an index into another string, even one equal
       // to it, may stand for another place.
@@ -473,11 +466,26 @@ extension PlaceholderTextView {
       guard NSMaxRange(range) <= storage.length,
         !linked.contains(where: { NSIntersectionRange($0, range).length > 0 })
       else { continue }
+      wanted[range] = mention.writing.link
+    }
+    // Only what differs from what is marked: a change to the text's attributes lays its lines out
+    // again, and TextKit places the rest of a long text anew by an estimate.
+    var marked: [NSRange: URL] = [:]
+    storage.enumerateAttribute(.mention, in: whole) { value, range, _ in
+      if let url = value as? URL { marked[range] = url }
+    }
+    guard marked != wanted else { return }
+    storage.beginEditing()
+    for (range, url) in marked where wanted[range] != url {
+      storage.removeAttribute(.mention, range: range)
+      storage.enumerateAttribute(.bodyLink, in: range) { link, part, _ in
+        if link == nil { storage.removeAttribute(.underlineStyle, range: part) }
+      }
+    }
+    for (range, url) in wanted where marked[range] != url {
       storage.addAttributes(
-        [
-          .mention: mention.writing.link,
-          .underlineStyle: NSUnderlineStyle([.single, .patternDot]).rawValue,
-        ], range: range)
+        [.mention: url, .underlineStyle: NSUnderlineStyle([.single, .patternDot]).rawValue],
+        range: range)
     }
     storage.endEditing()
   }

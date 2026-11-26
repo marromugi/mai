@@ -1367,6 +1367,38 @@ extension EditorViewTests {
     page.settle()
     #expect(abs(caret().midY - before.midY) < 2)
   }
+
+  /// Marking the mentions found again after an edit changes only those that differ, near the
+  /// edit: a change to the attributes of the whole text lays it all out again.
+  @Test func markingMentionsAgainTouchesOnlyWhatChanged() async throws {
+    let edits = Edits(writing: veryLong)
+    let page = HostedPage(mentioning(edits))
+    let editor = try focusedEditor(in: page)
+    try await page.settle(within: mentionsFound) {
+      editor.textStorage.attribute(.mention, at: editor.bodyStart + 1, effectiveRange: nil) != nil
+        || !editor.linkedText.isEmpty
+    }
+    try #require(!editor.linkedText.isEmpty)
+    let middle = (editor.text as NSString).length / 2
+    editor.selectedRange = NSRange(location: middle, length: 0)
+    // A new mention, so the mentions marked change.
+    type(nightDesk.title, into: editor)
+    page.show(mentioning(edits))
+    var touched: [NSRange] = []
+    let watching = NotificationCenter.default.addObserver(
+      forName: NSTextStorage.didProcessEditingNotification, object: editor.textStorage, queue: nil
+    ) { _ in
+      MainActor.assumeIsolated { touched.append(editor.textStorage.editedRange) }
+    }
+    defer { NotificationCenter.default.removeObserver(watching) }
+    let marked = { editor.textStorage.attribute(.mention, at: middle + 1, effectiveRange: nil) != nil }
+    try await page.settle(within: mentionsFound, until: marked)
+    try #require(marked())
+    let spread = touched.reduce(into: (min: Int.max, max: 0)) {
+      $0 = (Swift.min($0.min, $1.location), Swift.max($0.max, NSMaxRange($1)))
+    }
+    #expect(spread.max - spread.min < 1_000)
+  }
 }
 
 /// A writing whose body is many screens long.
