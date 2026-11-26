@@ -1385,6 +1385,31 @@ extension EditorViewTests {
     #expect(editor.convert(below.frame, to: nil).minY >= end.maxY)
   }
 
+  /// From deep in a writing of 100,000 characters, the page's scroller brings the page back to its
+  /// top, with the title whole again.
+  @Test func theScrollerBringsALongPageBackToItsTop() throws {
+    let scroller = PageScroller()
+    let cutOff = CutOff()
+    let page = HostedPage(
+      WritingPage(
+        writing: veryLong, photos: [], width: 402, scroller: scroller, back: {},
+        titleCutOff: { cutOff.last = $0 }
+      )
+      .ignoresSafeArea(.container, edges: .top))
+    let scroll: UIScrollView = try #require(editorView(in: page))
+    scroll.contentOffset.y = 30_000
+    page.settle()
+    #expect(cutOff.last == 1)
+    let top = -scroll.adjustedContentInset.top
+    // Under the status bar's safe area, so the page's top isn't offset 0.
+    try #require(top < 0)
+    // Without animation: the tests' window has no scene to run one.
+    scroller.scrollToTop(animated: false)
+    page.settle()
+    #expect(scroll.contentOffset.y == top)
+    #expect(cutOff.last == 0)
+  }
+
   /// Deep in a writing of 100,000 characters, the caret's line stays where it is on the screen as
   /// a character is typed and the page finds the mentions in it again.
   @Test func typingDeepInAVeryLongWritingKeepsTheCaretsLineInPlace() async throws {

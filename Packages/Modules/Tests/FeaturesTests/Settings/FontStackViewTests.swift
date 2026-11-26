@@ -96,7 +96,7 @@ struct FontStackViewTests {
   /// The header's title is set in the stack's bold: Inter for the Latin.
   @Test func theHeaderTitleIsSetInTheStack() {
     assertSnapshot(
-      of: WritingHeader(title: "Morning Pages と朝の光", width: 402, close: {})
+      of: WritingHeader(title: "Morning Pages と朝の光", width: 402, close: {}, toTop: {})
         .frame(width: 402)
         .background(Color(.systemBackground))
         .environment(\.fontFamilies, [.inter, .notoSansJP])

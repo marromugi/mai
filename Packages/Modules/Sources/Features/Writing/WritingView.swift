@@ -28,12 +28,12 @@ struct WritingView: View {
 }
 
 /// The writing's page, with its `photos`, in or out of the typesetting mode. The title and body are
-/// editable and each change goes to `edit`. As the title scrolls
-/// off the top, the header fades in to stand in for it. In the mode the page stops scrolling and lifts off the desk
-/// above the typesetting bar, the typesetting gestures over it step `setting`, and a tap or the
-/// bar's 「閉じる」 leaves the mode. The bottom row's camera sets `takingPhoto`, which covers the
-/// page with `camera`'s screen until it takes a photo or is cancelled. A tap on a mention of one of
-/// `others` in the body calls `open` with it.
+/// editable and each change goes to `edit`. As the title scrolls off the top, the header fades in
+/// to stand in for it, and a tap on it scrolls the page back to its top. In the mode the page stops
+/// scrolling and lifts off the desk above the typesetting bar, the typesetting gestures over it step
+/// `setting`, and a tap or the bar's 「閉じる」 leaves the mode. The bottom row's camera sets
+/// `takingPhoto`, which covers the page with `camera`'s screen until it takes a photo or is
+/// cancelled. A tap on a mention of one of `others` in the body calls `open` with it.
 struct WritingScreen: View {
   let writing: Writing
   let others: [Writing]
@@ -46,6 +46,7 @@ struct WritingScreen: View {
   let camera: Camera
   let photoTaken: (UIImage) -> Void
   @State private var titleCutOff: CGFloat = 0
+  @State private var scroller = PageScroller()
   @State private var keyboardShown = false
   /// Found once per body and set of others, not at every update: the scroll updates the screen
   /// each frame. While the body changes, found once it rests for `FoundMentions.rest`.
@@ -56,7 +57,7 @@ struct WritingScreen: View {
     GeometryReader { proxy in
       WritingPage(
         writing: writing, found: found, edit: edit, photos: photos,
-        width: proxy.size.width, scrolls: !typesetting,
+        width: proxy.size.width, scrolls: !typesetting, scroller: scroller,
         back: { dismiss() }, titleCutOff: { titleCutOff = $0 }
       )
       // Scrolls under the status bar, as the page's insets let it.
@@ -88,11 +89,14 @@ struct WritingScreen: View {
         // Faded by the scroll, not animated: an animation running as the mode starts moves the
         // page.
         if titleCutOff > 0 {
-          WritingHeader(title: writing.title, width: proxy.size.width, close: { dismiss() })
-            .opacity(titleCutOff)
-            // Taken in only once whole, so a faint bar neither closes the page nor holds a drag.
-            .allowsHitTesting(titleCutOff == 1)
-            .accessibilityHidden(titleCutOff < 1)
+          WritingHeader(
+            title: writing.title, width: proxy.size.width, close: { dismiss() },
+            toTop: { scroller.scrollToTop() }
+          )
+          .opacity(titleCutOff)
+          // Taken in only once whole, so a faint bar neither closes the page nor holds a drag.
+          .allowsHitTesting(titleCutOff == 1)
+          .accessibilityHidden(titleCutOff < 1)
         }
       }
       .accessibilityHidden(typesetting)
@@ -219,7 +223,8 @@ struct BottomRow: View {
 /// the title, the body with the mentions `found` in it linked, and the photos after its last
 /// paragraph, piled as one stack, on the type area, with room for the bottom fade below them at the
 /// page's end, where the caret stops too. The title and body are one editor, and each change goes to `edit`. `titleCutOff`
-/// hears how much of the title has scrolled above the page's top, from 0 to 1.
+/// hears how much of the title has scrolled above the page's top, from 0 to 1. `scroller` scrolls
+/// the page from outside it.
 struct WritingPage: View {
   let writing: Writing
   var found: FoundMentions?
@@ -227,6 +232,7 @@ struct WritingPage: View {
   let photos: [PagePhoto]
   let width: CGFloat
   var scrolls = true
+  var scroller: PageScroller?
   let back: () -> Void
   let titleCutOff: (CGFloat) -> Void
   @EnvironmentTypeScale private var scale
@@ -236,7 +242,7 @@ struct WritingPage: View {
     let text = WritingText(title: writing.title, body: writing.body, links: writing.links)
     WritingEditor(
       writing: text, found: found, scrolls: scrolls, bottomMargin: EdgeFade.height(scale),
-      titleCutOff: titleCutOff
+      titleCutOff: titleCutOff, scroller: scroller
     ) { text in
       edit {
         $0.title = text.title
@@ -272,10 +278,13 @@ struct WritingPage: View {
 /// The bar at the top once the title scrolls off: a close chevron on the margin and the title
 /// centred on one line, stepped down the size series to fit, over a fade the body passes under. The
 /// title grows with neither Dynamic Type nor the body setting past its size at the standard scale.
+/// The chevron calls `close`; a tap anywhere else on the bar, or VoiceOver's 「一番上へ」 on the
+/// title, calls `toTop`.
 struct WritingHeader: View {
   let title: String
   let width: CGFloat
   let close: () -> Void
+  let toTop: () -> Void
   @EnvironmentTypeScale private var scale
   @Environment(\.fontFamilies) private var families
 
@@ -294,6 +303,8 @@ struct WritingHeader: View {
         .horizontal,
         max(0, scale.typeArea(width: width).margin - TextButtonStyle.minimumSide / 2)
       )
+      .contentShape(.rect)
+      .onTapGesture(perform: toTop)
       .background(Color(.systemBackground), ignoresSafeAreaEdges: .top)
       EdgeFade(edge: .top)
     }
@@ -326,6 +337,7 @@ struct WritingHeader: View {
       .font(Font(scale.font(.title, in: families).withSize(size)))
       .lineLimit(1)
       .accessibilityAddTraits(.isHeader)
+      .accessibilityAction(named: "一番上へ", toTop)
   }
 }
 
